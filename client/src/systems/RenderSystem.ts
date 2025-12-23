@@ -942,7 +942,7 @@ export class RenderSystem {
     }
 
     // === CONTROLS HINT (Pill background) ===
-    const controlsText = 'W/LMB: Boost  •  SPACE: Eject Mass';
+    const controlsText = 'WASD/Arrows: Move  •  LMB/Shift: Boost  •  SPACE: Eject';
     this.ctx.font = '10px Inter, system-ui, sans-serif';
     const textWidth = this.ctx.measureText(controlsText).width;
     const pillW = textWidth + 24;

@@ -15,6 +15,11 @@ export class InputSystem {
   private ejectChargeTime: number = 0;
   private aimDirection: Vec2 = new Vec2(1, 0);
 
+  // Keyboard directional input
+  private keyDirection: Vec2 = new Vec2();
+  private keysHeld: Set<string> = new Set();
+  private useKeyboardAim: boolean = false;
+
   constructor(canvas: HTMLCanvasElement) {
     this.canvas = canvas;
     this.setupListeners();
@@ -24,6 +29,8 @@ export class InputSystem {
     this.isMouseBoostHeld = false;
     this.isKeyBoostHeld = false;
     this.isEjectHeld = false;
+    this.keysHeld.clear();
+    this.keyDirection.set(0, 0);
   }
 
   private setupListeners(): void {
@@ -62,8 +69,23 @@ export class InputSystem {
           e.preventDefault();
           this.isEjectHeld = true;
           break;
-        case 'KeyW':
+        case 'ShiftLeft':
+        case 'ShiftRight':
           this.isKeyBoostHeld = true;
+          break;
+        // WASD directional keys
+        case 'KeyW':
+        case 'KeyA':
+        case 'KeyS':
+        case 'KeyD':
+        // Arrow keys
+        case 'ArrowUp':
+        case 'ArrowDown':
+        case 'ArrowLeft':
+        case 'ArrowRight':
+          this.keysHeld.add(e.code);
+          this.updateKeyDirection();
+          this.useKeyboardAim = true;
           break;
       }
     });
@@ -73,11 +95,53 @@ export class InputSystem {
         case 'Space':
           this.isEjectHeld = false;
           break;
-        case 'KeyW':
+        case 'ShiftLeft':
+        case 'ShiftRight':
           this.isKeyBoostHeld = false;
+          break;
+        case 'KeyW':
+        case 'KeyA':
+        case 'KeyS':
+        case 'KeyD':
+        case 'ArrowUp':
+        case 'ArrowDown':
+        case 'ArrowLeft':
+        case 'ArrowRight':
+          this.keysHeld.delete(e.code);
+          this.updateKeyDirection();
           break;
       }
     });
+
+    // Switch back to mouse aim when mouse moves significantly
+    this.canvas.addEventListener('mousemove', (e) => {
+      const dx = e.movementX;
+      const dy = e.movementY;
+      if (Math.abs(dx) > 3 || Math.abs(dy) > 3) {
+        this.useKeyboardAim = false;
+      }
+    });
+  }
+
+  private updateKeyDirection(): void {
+    let x = 0;
+    let y = 0;
+
+    // WASD
+    if (this.keysHeld.has('KeyW') || this.keysHeld.has('ArrowUp')) y -= 1;
+    if (this.keysHeld.has('KeyS') || this.keysHeld.has('ArrowDown')) y += 1;
+    if (this.keysHeld.has('KeyA') || this.keysHeld.has('ArrowLeft')) x -= 1;
+    if (this.keysHeld.has('KeyD') || this.keysHeld.has('ArrowRight')) x += 1;
+
+    // Normalize diagonal movement
+    const len = Math.sqrt(x * x + y * y);
+    if (len > 0) {
+      this.keyDirection.set(x / len, y / len);
+      this.isKeyBoostHeld = true; // Auto-boost when using directional keys
+    } else {
+      this.keyDirection.set(0, 0);
+      this.isKeyBoostHeld = false;
+    }
   }
 
   private get isBoostHeld(): boolean {
@@ -88,17 +152,22 @@ export class InputSystem {
     const localPlayer = world.getLocalPlayer();
     if (!localPlayer) return;
 
-    // Calculate aim direction from mouse position
-    const centerX = this.canvas.width / 2;
-    const centerY = this.canvas.height / 2;
+    // Calculate aim direction based on input mode
+    if (this.useKeyboardAim && this.keyDirection.lengthSq() > 0) {
+      // Use keyboard direction
+      this.aimDirection.copy(this.keyDirection);
+    } else {
+      // Use mouse direction
+      const centerX = this.canvas.width / 2;
+      const centerY = this.canvas.height / 2;
 
-    // Mouse position relative to screen center (where player is rendered)
-    const dx = this.mousePos.x - centerX;
-    const dy = this.mousePos.y - centerY;
-    const len = Math.sqrt(dx * dx + dy * dy);
+      const dx = this.mousePos.x - centerX;
+      const dy = this.mousePos.y - centerY;
+      const len = Math.sqrt(dx * dx + dy * dy);
 
-    if (len > 0) {
-      this.aimDirection.set(dx / len, dy / len);
+      if (len > 0) {
+        this.aimDirection.set(dx / len, dy / len);
+      }
     }
 
     // Track eject charging
