@@ -363,8 +363,12 @@ export class RenderSystem {
       const color = world.getPlayerColor(player.colorIndex);
       const isLocal = player.id === world.localPlayerId;
 
-      // Render boost flame for local player
-      if (isLocal && localPlayerBoosting) {
+      // Render boost flame based on velocity
+      // For local player: show when boosting input is active
+      // For other players: infer from velocity (speed > 50 indicates likely boosting)
+      const speed = player.velocity.length();
+      const showFlame = isLocal ? localPlayerBoosting : speed > 50;
+      if (showFlame) {
         this.renderBoostFlame(player.position, player.velocity, radius);
       }
 
