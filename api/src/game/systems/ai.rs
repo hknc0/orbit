@@ -248,6 +248,13 @@ fn execute_behavior(ai: &mut AiState, bot_id: PlayerId, state: &GameState, dt: f
         _ => return,
     };
 
+    // CRITICAL: Universal core avoidance - check ALL gravity wells, not just nearest
+    // This takes priority over any other behavior
+    if check_core_danger(ai, bot, state) {
+        // We're in danger - already set thrust/boost, skip normal behavior
+        return;
+    }
+
     match ai.behavior {
         AiBehavior::Orbit => execute_orbit(ai, bot, state),
         AiBehavior::Chase => execute_chase(ai, bot, state),
@@ -260,6 +267,27 @@ fn execute_behavior(ai: &mut AiState, bot_id: PlayerId, state: &GameState, dt: f
     update_firing(ai, bot, state, dt);
 }
 
+/// Check if bot is dangerously close to any gravity well core
+/// Returns true if in danger (and sets emergency escape thrust)
+fn check_core_danger(ai: &mut AiState, bot: &Player, state: &GameState) -> bool {
+    // Check each gravity well for danger
+    for well in &state.arena.gravity_wells {
+        let to_well = well.position - bot.position;
+        let distance = to_well.length();
+
+        // Danger zone is 2.5x core radius - gives margin for strong gravity
+        let danger_zone = well.core_radius * 2.5;
+
+        if distance < danger_zone && distance > 0.1 {
+            // Emergency escape! Flee directly away from the core
+            ai.thrust_direction = -to_well.normalize();
+            ai.wants_boost = true;
+            return true;
+        }
+    }
+    false
+}
+
 fn execute_orbit(ai: &mut AiState, bot: &Player, state: &GameState) {
     // Find nearest gravity well to orbit around
     let nearest_well = state.arena.gravity_wells.iter()
@@ -269,10 +297,25 @@ fn execute_orbit(ai: &mut AiState, bot: &Player, state: &GameState) {
             dist_a.partial_cmp(&dist_b).unwrap_or(std::cmp::Ordering::Equal)
         });
 
-    let well_pos = nearest_well.map(|w| w.position).unwrap_or(Vec2::ZERO);
+    let (well_pos, core_radius) = nearest_well
+        .map(|w| (w.position, w.core_radius))
+        .unwrap_or((Vec2::ZERO, 50.0));
     let to_well = well_pos - bot.position;
     let current_radius = to_well.length();
-    let target_radius = ai.personality.preferred_radius;
+
+    // CRITICAL: Check if dangerously close to core - emergency escape!
+    // Start escaping when within 2x core radius (gives margin for gravity pull)
+    let danger_zone = core_radius * 2.5;
+    if current_radius < danger_zone {
+        // Emergency: flee directly away from the well core
+        ai.thrust_direction = -to_well.normalize();
+        ai.wants_boost = true;
+        return;
+    }
+
+    // Target radius must be safely outside the danger zone
+    let min_safe_radius = core_radius * 3.0;
+    let target_radius = ai.personality.preferred_radius.max(min_safe_radius);
 
     // Get perpendicular direction for orbit around the well (not origin)
     let tangent = to_well.perpendicular().normalize();
