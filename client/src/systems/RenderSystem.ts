@@ -39,7 +39,7 @@ export class RenderSystem {
   private currentZoom: number = 1.0;
   private targetZoom: number = 1.0;
   private readonly ZOOM_SMOOTHING = 0.05;
-  private readonly ZOOM_MIN = 0.65; // Max zoom out at high speed
+  private readonly ZOOM_MIN = 0.45; // Max zoom out at high speed
   private readonly ZOOM_MAX = 1.0;  // Normal zoom at rest
   private readonly SPEED_FOR_MAX_ZOOM_OUT = 250; // Speed at which max zoom out is reached
 
