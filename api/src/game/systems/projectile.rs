@@ -213,10 +213,11 @@ mod tests {
     use crate::game::state::Player;
     use uuid::Uuid;
 
-    fn create_test_state() -> GameState {
+    fn create_test_state() -> (GameState, Uuid) {
         let mut state = GameState::new();
-        state.players.push(Player {
-            id: Uuid::new_v4(),
+        let player_id = Uuid::new_v4();
+        let player = Player {
+            id: player_id,
             name: "Test".to_string(),
             position: Vec2::new(300.0, 0.0),
             velocity: Vec2::ZERO,
@@ -229,8 +230,9 @@ mod tests {
             is_bot: false,
             color_index: 0,
             respawn_timer: 0.0,
-        });
-        state
+        };
+        state.add_player(player);
+        (state, player_id)
     }
 
     #[test]
@@ -302,8 +304,7 @@ mod tests {
 
     #[test]
     fn test_fire_input_starts_charging() {
-        let mut state = create_test_state();
-        let player_id = state.players[0].id;
+        let (mut state, player_id) = create_test_state();
         let mut charge_manager = ChargeManager::new();
 
         let input = PlayerInput {
@@ -320,8 +321,7 @@ mod tests {
 
     #[test]
     fn test_fire_release_creates_projectile() {
-        let mut state = create_test_state();
-        let player_id = state.players[0].id;
+        let (mut state, player_id) = create_test_state();
         let mut charge_manager = ChargeManager::new();
 
         // Start charging
@@ -352,9 +352,8 @@ mod tests {
 
     #[test]
     fn test_quick_tap_fires_small_fast_projectile() {
-        let mut state = create_test_state();
-        let player_id = state.players[0].id;
-        let initial_mass = state.players[0].mass;
+        let (mut state, player_id) = create_test_state();
+        let initial_mass = state.get_player(player_id).unwrap().mass;
         let mut charge_manager = ChargeManager::new();
 
         // Brief charge (quick tap)
@@ -379,14 +378,13 @@ mod tests {
         assert_eq!(state.projectiles.len(), 1);
 
         // Player should have lost MIN_MASS
-        assert!(state.players[0].mass < initial_mass);
+        assert!(state.get_player(player_id).unwrap().mass < initial_mass);
     }
 
     #[test]
     fn test_firing_deducts_mass() {
-        let mut state = create_test_state();
-        let player_id = state.players[0].id;
-        let initial_mass = state.players[0].mass;
+        let (mut state, player_id) = create_test_state();
+        let initial_mass = state.get_player(player_id).unwrap().mass;
         let mut charge_manager = ChargeManager::new();
 
         // Charge
@@ -407,13 +405,12 @@ mod tests {
 
         process_input(&mut state, player_id, &input, &mut charge_manager, 0.1);
 
-        assert!(state.players[0].mass < initial_mass);
+        assert!(state.get_player(player_id).unwrap().mass < initial_mass);
     }
 
     #[test]
     fn test_fire_direct() {
-        let mut state = create_test_state();
-        let player_id = state.players[0].id;
+        let (mut state, player_id) = create_test_state();
 
         let event = fire_direct(&mut state, player_id, Vec2::new(1.0, 0.0), 0.5);
 
@@ -423,9 +420,8 @@ mod tests {
 
     #[test]
     fn test_dead_player_cannot_fire() {
-        let mut state = create_test_state();
-        let player_id = state.players[0].id;
-        state.players[0].alive = false;
+        let (mut state, player_id) = create_test_state();
+        state.get_player_mut(player_id).unwrap().alive = false;
 
         let event = fire_direct(&mut state, player_id, Vec2::new(1.0, 0.0), 1.0);
 
@@ -434,21 +430,19 @@ mod tests {
 
     #[test]
     fn test_recoil_applied() {
-        let mut state = create_test_state();
-        let player_id = state.players[0].id;
-        state.players[0].velocity = Vec2::ZERO;
+        let (mut state, player_id) = create_test_state();
+        state.get_player_mut(player_id).unwrap().velocity = Vec2::ZERO;
 
         fire_direct(&mut state, player_id, Vec2::new(1.0, 0.0), 0.5);
 
         // Player should have negative x velocity (recoil)
-        assert!(state.players[0].velocity.x < 0.0);
+        assert!(state.get_player(player_id).unwrap().velocity.x < 0.0);
     }
 
     #[test]
     fn test_projectile_inherits_player_velocity() {
-        let mut state = create_test_state();
-        let player_id = state.players[0].id;
-        state.players[0].velocity = Vec2::new(50.0, 0.0);
+        let (mut state, player_id) = create_test_state();
+        state.get_player_mut(player_id).unwrap().velocity = Vec2::new(50.0, 0.0);
 
         fire_direct(&mut state, player_id, Vec2::new(0.0, 1.0), 0.5);
 

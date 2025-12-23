@@ -52,16 +52,18 @@ fn check_player_boundaries(state: &mut GameState, dt: f32) -> Vec<ArenaEvent> {
     let safe_radius = state.arena.current_safe_radius();
     let wells = state.arena.gravity_wells.clone();
 
-    for player in &mut state.players {
+    for player in state.players.values_mut() {
         if !player.alive {
             continue;
         }
 
         // Check against all gravity well cores (instant death zones)
+        // Use squared distance to avoid sqrt()
         let mut in_core = false;
         for well in &wells {
-            let distance_to_well = (player.position - well.position).length();
-            if distance_to_well < well.core_radius {
+            let dist_sq = player.position.distance_sq_to(well.position);
+            let core_radius_sq = well.core_radius * well.core_radius;
+            if dist_sq < core_radius_sq {
                 in_core = true;
                 break;
             }
@@ -163,12 +165,17 @@ pub fn random_spawn_position() -> crate::util::vec2::Vec2 {
 
 /// Calculate a random spawn position with arena scale
 pub fn random_spawn_position_scaled(scale: f32) -> crate::util::vec2::Vec2 {
-    use crate::game::constants::spawn::{ZONE_MAX, ZONE_MIN};
+    use crate::game::constants::arena::OUTER_RADIUS;
     use rand::Rng;
 
     let mut rng = rand::thread_rng();
+
+    // Spawn across a wider range (20% to 80% of outer radius)
+    let min_radius = OUTER_RADIUS * 0.2 * scale;
+    let max_radius = OUTER_RADIUS * 0.8 * scale;
+
     let angle = rng.gen_range(0.0..std::f32::consts::TAU);
-    let radius = rng.gen_range(ZONE_MIN * scale..ZONE_MAX * scale);
+    let radius = rng.gen_range(min_radius..max_radius);
 
     crate::util::vec2::Vec2::from_angle(angle) * radius
 }
@@ -273,16 +280,23 @@ pub fn spawn_velocity(position: crate::util::vec2::Vec2) -> crate::util::vec2::V
     tangent * INITIAL_VELOCITY
 }
 
-/// Calculate spawn positions for multiple players evenly distributed
+/// Calculate spawn positions for multiple players randomly distributed across the arena
 pub fn spawn_positions(count: usize) -> Vec<crate::util::vec2::Vec2> {
-    use crate::game::constants::spawn::{ZONE_MAX, ZONE_MIN};
+    use crate::game::constants::arena::OUTER_RADIUS;
+    use rand::Rng;
 
-    let angle_step = std::f32::consts::TAU / count as f32;
-    let radius = (ZONE_MIN + ZONE_MAX) / 2.0;
+    let mut rng = rand::thread_rng();
+
+    // Spawn across a wider range of the arena (20% to 80% of outer radius)
+    let min_radius = OUTER_RADIUS * 0.2;
+    let max_radius = OUTER_RADIUS * 0.8;
 
     (0..count)
-        .map(|i| {
-            let angle = angle_step * i as f32;
+        .map(|_| {
+            // Random angle
+            let angle = rng.gen_range(0.0..std::f32::consts::TAU);
+            // Random radius across the arena
+            let radius = rng.gen_range(min_radius..max_radius);
             crate::util::vec2::Vec2::from_angle(angle) * radius
         })
         .collect()
@@ -294,11 +308,12 @@ mod tests {
     use crate::game::state::{Arena, Player};
     use crate::util::vec2::Vec2;
 
-    fn create_test_state() -> GameState {
+    fn create_test_state() -> (GameState, uuid::Uuid) {
         let mut state = GameState::new();
         state.match_state.phase = MatchPhase::Playing;
-        state.players.push(Player {
-            id: uuid::Uuid::new_v4(),
+        let player_id = uuid::Uuid::new_v4();
+        let player = Player {
+            id: player_id,
             name: "Test".to_string(),
             position: Vec2::new(300.0, 0.0),
             velocity: Vec2::ZERO,
@@ -311,8 +326,9 @@ mod tests {
             is_bot: false,
             color_index: 0,
             respawn_timer: 0.0,
-        });
-        state
+        };
+        state.add_player(player);
+        (state, player_id)
     }
 
     #[test]
@@ -357,12 +373,12 @@ mod tests {
 
     #[test]
     fn test_core_kills_player() {
-        let mut state = create_test_state();
-        state.players[0].position = Vec2::new(25.0, 0.0); // Inside core
+        let (mut state, player_id) = create_test_state();
+        state.get_player_mut(player_id).unwrap().position = Vec2::new(25.0, 0.0); // Inside core
 
         let events = update(&mut state, 0.1);
 
-        assert!(!state.players[0].alive);
+        assert!(!state.get_player(player_id).unwrap().alive);
         assert!(events
             .iter()
             .any(|e| matches!(e, ArenaEvent::PlayerEnteredCore { .. })));
@@ -370,13 +386,13 @@ mod tests {
 
     #[test]
     fn test_outside_drains_mass() {
-        let mut state = create_test_state();
-        state.players[0].position = Vec2::new(1000.0, 0.0); // Outside arena
+        let (mut state, player_id) = create_test_state();
+        state.get_player_mut(player_id).unwrap().position = Vec2::new(1000.0, 0.0); // Outside arena
 
-        let initial_mass = state.players[0].mass;
+        let initial_mass = state.get_player(player_id).unwrap().mass;
         let events = update(&mut state, 0.1);
 
-        assert!(state.players[0].mass < initial_mass);
+        assert!(state.get_player(player_id).unwrap().mass < initial_mass);
         assert!(events
             .iter()
             .any(|e| matches!(e, ArenaEvent::PlayerOutsideArena { .. })));
@@ -384,7 +400,7 @@ mod tests {
 
     #[test]
     fn test_collapse_disabled_for_eternal_mode() {
-        let mut state = create_test_state();
+        let (mut state, _) = create_test_state();
         state.arena.time_until_collapse = 0.1; // Would trigger collapse if enabled
 
         // Update many times
@@ -399,7 +415,7 @@ mod tests {
 
     #[test]
     fn test_not_updating_outside_playing_phase() {
-        let mut state = create_test_state();
+        let (mut state, _) = create_test_state();
         state.match_state.phase = MatchPhase::Waiting;
         state.arena.time_until_collapse = 0.1;
 
@@ -417,14 +433,18 @@ mod tests {
 
     #[test]
     fn test_spawn_positions_distributed() {
-        let positions = spawn_positions(4);
+        use crate::game::constants::arena::OUTER_RADIUS;
 
-        // Check that positions are roughly evenly distributed
-        for i in 0..4 {
-            let next = (i + 1) % 4;
-            let angle_diff = (positions[i].angle() - positions[next].angle()).abs();
-            // Should be approximately 90 degrees (π/2)
-            assert!(angle_diff > 1.0 || angle_diff < 0.1);
+        let positions = spawn_positions(10);
+
+        // Check that positions are within expected radius range (20% to 80% of outer)
+        let min_radius = OUTER_RADIUS * 0.2;
+        let max_radius = OUTER_RADIUS * 0.8;
+
+        for pos in positions {
+            let dist = pos.length();
+            assert!(dist >= min_radius * 0.9, "Position too close to center: {}", dist);
+            assert!(dist <= max_radius * 1.1, "Position too far from center: {}", dist);
         }
     }
 
@@ -441,17 +461,22 @@ mod tests {
 
     #[test]
     fn test_random_spawn_in_zone() {
+        use crate::game::constants::arena::OUTER_RADIUS;
+
+        let min_radius = OUTER_RADIUS * 0.2;
+        let max_radius = OUTER_RADIUS * 0.8;
+
         for _ in 0..100 {
             let pos = random_spawn_position();
             let dist = pos.length();
-            assert!(dist >= crate::game::constants::spawn::ZONE_MIN);
-            assert!(dist <= crate::game::constants::spawn::ZONE_MAX);
+            assert!(dist >= min_radius * 0.9, "Position too close: {}", dist);
+            assert!(dist <= max_radius * 1.1, "Position too far: {}", dist);
         }
     }
 
     #[test]
     fn test_arena_radii_shrink() {
-        let mut state = create_test_state();
+        let (mut state, _) = create_test_state();
         let initial_escape = state.arena.escape_radius;
 
         state.arena.collapse_phase = 4;

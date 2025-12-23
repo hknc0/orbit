@@ -122,7 +122,7 @@ impl GameSnapshot {
             countdown: state.match_state.countdown_time,
             players: state
                 .players
-                .iter()
+                .values()
                 .map(PlayerSnapshot::from_player)
                 .collect(),
             projectiles: state

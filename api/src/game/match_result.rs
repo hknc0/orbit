@@ -27,7 +27,7 @@ pub struct PlayerRanking {
 pub fn determine_result(state: &GameState) -> MatchResult {
     let mut rankings: Vec<PlayerRanking> = state
         .players
-        .iter()
+        .values()
         .map(|p| PlayerRanking {
             player_id: p.id,
             name: p.name.clone(),
@@ -90,7 +90,7 @@ pub fn check_match_end(state: &GameState) -> Option<MatchEndReason> {
     }
 
     // All humans dead (bots win)
-    if alive_human_count == 0 && !state.players.iter().all(|p| p.is_bot) {
+    if alive_human_count == 0 && !state.players.values().all(|p| p.is_bot) {
         return Some(MatchEndReason::AllHumansDead);
     }
 
