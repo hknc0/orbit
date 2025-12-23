@@ -1432,13 +1432,19 @@ export class RenderSystem {
       );
 
       if (localPlayer.alive) {
-        // Alive: Bright LIME GREEN indicator (contrasts with orange heatmap)
+        // Alive: Use player's chosen color
         // Pulsing effect for extra visibility
         const pulse = 0.7 + 0.3 * Math.sin(Date.now() / 200);
         const pulseSize = 1 + 0.15 * Math.sin(Date.now() / 300);
+        const playerColor = world.getPlayerColor(localPlayer.colorIndex);
 
-        // Outer pulsing glow - lime green
-        this.ctx.fillStyle = `rgba(0, 255, 100, ${0.15 * pulse})`;
+        // Parse hex color to RGB for glow
+        const r = parseInt(playerColor.slice(1, 3), 16);
+        const g = parseInt(playerColor.slice(3, 5), 16);
+        const b = parseInt(playerColor.slice(5, 7), 16);
+
+        // Outer pulsing glow - player color
+        this.ctx.fillStyle = `rgba(${r}, ${g}, ${b}, ${0.15 * pulse})`;
         this.ctx.beginPath();
         this.ctx.arc(pos.x, pos.y, 16 * pulseSize, 0, Math.PI * 2);
         this.ctx.fill();
@@ -1457,8 +1463,8 @@ export class RenderSystem {
         this.ctx.arc(pos.x, pos.y, 8, 0, Math.PI * 2);
         this.ctx.stroke();
 
-        // Bright lime green fill
-        this.ctx.fillStyle = '#00ff64';
+        // Player color fill
+        this.ctx.fillStyle = playerColor;
         this.ctx.beginPath();
         this.ctx.arc(pos.x, pos.y, 6, 0, Math.PI * 2);
         this.ctx.fill();
