@@ -794,6 +794,7 @@ export class RenderSystem {
       this.ctx.font = '10px monospace';
       this.ctx.textAlign = 'right';
       this.ctx.fillText(`${minutes}:${seconds.toString().padStart(2, '0')}`, Math.round(panelX + panelW - 14), Math.round(panelY + 18));
+
     }
 
     // === BOTTOM LEFT - Session Stats (Compact) ===
@@ -982,6 +983,87 @@ export class RenderSystem {
     this.ctx.fillStyle = '#64748b';
     this.ctx.textAlign = 'center';
     this.ctx.fillText(controlsText, Math.round(canvas.width / 2), pillY + 15);
+
+    // === EDGE INDICATORS FOR NEAREST GRAVITY WELLS ===
+    if (localPlayer && localPlayer.alive && world.arena.gravityWells.length > 0) {
+      const wells = world.arena.gravityWells;
+      const edgeMargin = 40;
+      const indicatorSize = 8;
+
+      // Calculate distances, filter to off-screen wells, then take top 3
+      const screenMargin = 60;
+      const wellData = wells.map((well) => {
+        const dx = well.position.x - localPlayer.position.x;
+        const dy = well.position.y - localPlayer.position.y;
+        const dist = Math.sqrt(dx * dx + dy * dy);
+        const angle = Math.atan2(dy, dx);
+        // Check if well is visible on screen
+        const wellScreenX = canvas.width / 2 + dx * this.currentZoom;
+        const wellScreenY = canvas.height / 2 + dy * this.currentZoom;
+        const isOnScreen = wellScreenX > screenMargin && wellScreenX < canvas.width - screenMargin &&
+                           wellScreenY > screenMargin && wellScreenY < canvas.height - screenMargin;
+        return { well, dist, angle, isOnScreen };
+      })
+      .filter(w => !w.isOnScreen) // Only off-screen wells
+      .sort((a, b) => a.dist - b.dist)
+      .slice(0, 3); // Top 3 nearest off-screen wells
+
+      wellData.forEach((w) => {
+        // Color based on distance
+        let color = '#4ade80'; // green - close
+        let alpha = 0.9;
+        if (w.dist > 500) { color = '#fbbf24'; alpha = 0.8; } // yellow
+        if (w.dist > 1000) { color = '#ef4444'; alpha = 0.6; } // red - far
+
+        // Position indicator at screen edge in the direction of the well
+        const screenCenterX = canvas.width / 2;
+        const screenCenterY = canvas.height / 2;
+
+        // Calculate where the line from center in direction of well intersects screen edge
+        const cos = Math.cos(w.angle);
+        const sin = Math.sin(w.angle);
+
+        // Find intersection with screen edges
+        const maxX = (canvas.width / 2) - edgeMargin;
+        const maxY = (canvas.height / 2) - edgeMargin;
+
+        let t = Infinity;
+        if (cos !== 0) t = Math.min(t, Math.abs(maxX / cos));
+        if (sin !== 0) t = Math.min(t, Math.abs(maxY / sin));
+
+        const indicatorX = screenCenterX + cos * t;
+        const indicatorY = screenCenterY + sin * t;
+
+        // Draw arrow indicator
+        this.ctx.save();
+        this.ctx.globalAlpha = alpha;
+        this.ctx.translate(indicatorX, indicatorY);
+        this.ctx.rotate(w.angle);
+
+        // Arrow shape
+        this.ctx.fillStyle = color;
+        this.ctx.beginPath();
+        this.ctx.moveTo(indicatorSize, 0);
+        this.ctx.lineTo(-indicatorSize * 0.6, -indicatorSize * 0.6);
+        this.ctx.lineTo(-indicatorSize * 0.3, 0);
+        this.ctx.lineTo(-indicatorSize * 0.6, indicatorSize * 0.6);
+        this.ctx.closePath();
+        this.ctx.fill();
+
+        this.ctx.restore();
+
+        // Distance label near indicator
+        this.ctx.fillStyle = color;
+        this.ctx.globalAlpha = alpha;
+        this.ctx.font = 'bold 9px monospace';
+        this.ctx.textAlign = 'center';
+        const labelOffset = 14;
+        const labelX = indicatorX - Math.cos(w.angle) * labelOffset;
+        const labelY = indicatorY - Math.sin(w.angle) * labelOffset + 3;
+        this.ctx.fillText(`${Math.floor(w.dist)}`, labelX, labelY);
+        this.ctx.globalAlpha = 1;
+      });
+    }
 
     // === MINIMAP ===
     this.renderMinimap(world, canvas, padding);
