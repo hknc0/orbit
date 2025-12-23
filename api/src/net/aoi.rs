@@ -58,49 +58,59 @@ impl AOIManager {
         let mut filtered_players = Vec::with_capacity(self.config.max_entities);
         let mut filtered_projectiles = Vec::with_capacity(self.config.max_entities);
 
-        // First, find the player themselves and top players
+        // CRITICAL: First, find and add the local player BEFORE processing others
+        // This ensures they're never excluded by the max_entities cap
         let mut player_found = false;
+        for player in &full_snapshot.players {
+            if player.id == player_id {
+                filtered_players.push(player.clone());
+                player_found = true;
+                break;
+            }
+        }
+
+        // Get top N players by score (for leaderboard visibility)
         let mut players_by_score: Vec<&PlayerSnapshot> = full_snapshot.players.iter().collect();
         players_by_score.sort_by(|a, b| b.kills.cmp(&a.kills));
 
-        // Get top N player IDs
         let top_player_ids: Vec<PlayerId> = players_by_score
             .iter()
             .take(self.config.always_include_top_n)
             .map(|p| p.id)
             .collect();
 
-        // Filter players
+        // Add top players (skip self, already added)
         for player in &full_snapshot.players {
-            // Always include self
             if player.id == player_id {
-                filtered_players.push(player.clone());
-                player_found = true;
-                continue;
+                continue; // Already added
             }
-
-            // Always include top players
             if top_player_ids.contains(&player.id) {
                 filtered_players.push(player.clone());
+            }
+        }
+
+        // Add nearby players up to max_entities cap
+        for player in &full_snapshot.players {
+            // Skip already added players
+            if player.id == player_id || top_player_ids.contains(&player.id) {
                 continue;
             }
 
-            // Check distance for other players
+            // Check distance
             let distance = (player.position - player_position).length();
             if distance <= self.config.extended_radius {
-                // Include if within extended radius
                 filtered_players.push(player.clone());
             }
 
-            // Cap at max entities
+            // Cap at max entities (but self and top players are already in)
             if filtered_players.len() >= self.config.max_entities {
                 break;
             }
         }
 
-        // If player not found (shouldn't happen), use full player list
+        // Fallback should never happen now, but keep for safety
         if !player_found {
-            // Fallback - just return a capped version
+            // Player not in snapshot - include all players (capped)
             filtered_players = full_snapshot.players
                 .iter()
                 .take(self.config.max_entities)
@@ -434,5 +444,101 @@ mod tests {
 
         // All gravity wells should be preserved
         assert_eq!(filtered.gravity_wells.len(), 2);
+    }
+
+    #[test]
+    fn test_aoi_self_always_included_even_at_end_of_list() {
+        // Test that the local player is ALWAYS included even when they appear
+        // late in the players list and max_entities cap is reached early.
+        // This was a bug where HashMap iteration order could cause the local
+        // player to be missed if they happened to be processed after the cap.
+        let max_entities = 5;
+        let config = AOIConfig {
+            full_detail_radius: 10000.0,  // Include all by distance
+            extended_radius: 10000.0,
+            max_entities,                  // Tight cap
+            always_include_top_n: 0,       // No top player priority
+        };
+        let aoi = AOIManager::new(config);
+
+        let player_id = Uuid::new_v4();
+        let player_pos = Vec2::new(0.0, 0.0);
+
+        // Create 50 players, put our player at the END of the list
+        let mut snapshot = create_test_snapshot(50);
+        // Put the local player as the LAST player in the list
+        snapshot.players[49].id = player_id;
+        snapshot.players[49].position = player_pos;
+
+        let filtered = aoi.filter_for_player(player_id, player_pos, &snapshot);
+
+        // Local player MUST be included regardless of their position in the list
+        assert!(
+            filtered.players.iter().any(|p| p.id == player_id),
+            "Local player must always be included, even when at end of player list"
+        );
+    }
+
+    #[test]
+    fn test_aoi_self_included_with_many_top_players() {
+        // Ensure local player is included even when top players fill most slots
+        let max_entities = 10;
+        let config = AOIConfig {
+            full_detail_radius: 10000.0,
+            extended_radius: 10000.0,
+            max_entities,
+            always_include_top_n: 8,  // Reserve 8 slots for top players
+        };
+        let aoi = AOIManager::new(config);
+
+        let player_id = Uuid::new_v4();
+        let player_pos = Vec2::new(0.0, 0.0);
+
+        // Create 20 players with various kill counts
+        let mut snapshot = create_test_snapshot(20);
+        // Our player has 0 kills (not a top player) and is at end of list
+        snapshot.players[19].id = player_id;
+        snapshot.players[19].position = player_pos;
+        snapshot.players[19].kills = 0;
+
+        // Give other players higher kill counts
+        for i in 0..10 {
+            snapshot.players[i].kills = 100 - i as u32;
+        }
+
+        let filtered = aoi.filter_for_player(player_id, player_pos, &snapshot);
+
+        // Local player MUST be in the filtered list
+        assert!(
+            filtered.players.iter().any(|p| p.id == player_id),
+            "Local player must be included even when not a top scorer"
+        );
+    }
+
+    #[test]
+    fn test_aoi_no_duplicate_players() {
+        // Ensure players aren't added multiple times (self, top, nearby)
+        let config = AOIConfig {
+            full_detail_radius: 10000.0,
+            extended_radius: 10000.0,
+            max_entities: 100,
+            always_include_top_n: 5,
+        };
+        let aoi = AOIManager::new(config);
+
+        let player_id = Uuid::new_v4();
+        let player_pos = Vec2::new(0.0, 0.0);
+
+        // Create snapshot where local player is also a top scorer
+        let mut snapshot = create_test_snapshot(10);
+        snapshot.players[0].id = player_id;
+        snapshot.players[0].position = player_pos;
+        snapshot.players[0].kills = 1000;  // Make them top scorer
+
+        let filtered = aoi.filter_for_player(player_id, player_pos, &snapshot);
+
+        // Count occurrences of local player
+        let self_count = filtered.players.iter().filter(|p| p.id == player_id).count();
+        assert_eq!(self_count, 1, "Local player should appear exactly once, not duplicated");
     }
 }
