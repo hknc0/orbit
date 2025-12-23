@@ -39,116 +39,101 @@ export class RenderSystem {
   // Track previous speeds to detect acceleration (for other players' boost flames)
   private previousSpeeds: Map<string, number> = new Map();
 
-  // Trail for local player
-  private localPlayerTrail: TrailPoint[] = [];
-  private readonly TRAIL_MAX_LENGTH = 50;
-  private readonly TRAIL_POINT_LIFETIME = 500; // ms
-  private lastTrailPosition: { x: number; y: number } | null = null;
-  private readonly TRAIL_MIN_DISTANCE = 5; // minimum distance between trail points
+  // Trails for all players
+  private playerTrails: Map<string, TrailPoint[]> = new Map();
+  private lastTrailPositions: Map<string, { x: number; y: number }> = new Map();
+  private readonly TRAIL_MAX_LENGTH = 30;
+  private readonly TRAIL_POINT_LIFETIME = 400; // ms
+  private readonly TRAIL_MIN_DISTANCE = 8; // minimum distance between trail points
 
   constructor(ctx: CanvasRenderingContext2D) {
     this.ctx = ctx;
   }
 
-  private updateLocalPlayerTrail(world: World): void {
-    const localPlayer = world.getLocalPlayer();
+  private updatePlayerTrails(world: World): void {
     const now = Date.now();
+    const players = world.getPlayers();
 
-    // Remove old trail points
-    this.localPlayerTrail = this.localPlayerTrail.filter(
-      (point) => now - point.timestamp < this.TRAIL_POINT_LIFETIME
-    );
+    // Update trails for all alive players
+    for (const player of players.values()) {
+      if (!player.alive) {
+        this.playerTrails.delete(player.id);
+        this.lastTrailPositions.delete(player.id);
+        continue;
+      }
 
-    // Clear trail if player is dead or doesn't exist
-    if (!localPlayer || !localPlayer.alive) {
-      this.localPlayerTrail = [];
-      this.lastTrailPosition = null;
-      return;
+      let trail = this.playerTrails.get(player.id);
+      if (!trail) {
+        trail = [];
+        this.playerTrails.set(player.id, trail);
+      }
+
+      // Remove old trail points
+      while (trail.length > 0 && now - trail[0].timestamp > this.TRAIL_POINT_LIFETIME) {
+        trail.shift();
+      }
+
+      // Add new trail point if moved enough distance
+      const pos = player.position;
+      const lastPos = this.lastTrailPositions.get(player.id);
+
+      if (lastPos) {
+        const dx = pos.x - lastPos.x;
+        const dy = pos.y - lastPos.y;
+        const dist = Math.sqrt(dx * dx + dy * dy);
+
+        if (dist >= this.TRAIL_MIN_DISTANCE) {
+          trail.push({ x: pos.x, y: pos.y, timestamp: now });
+          this.lastTrailPositions.set(player.id, { x: pos.x, y: pos.y });
+
+          while (trail.length > this.TRAIL_MAX_LENGTH) {
+            trail.shift();
+          }
+        }
+      } else {
+        this.lastTrailPositions.set(player.id, { x: pos.x, y: pos.y });
+      }
     }
 
-    // Add new trail point if moved enough distance
-    const pos = localPlayer.position;
-    if (this.lastTrailPosition) {
-      const dx = pos.x - this.lastTrailPosition.x;
-      const dy = pos.y - this.lastTrailPosition.y;
-      const dist = Math.sqrt(dx * dx + dy * dy);
-
-      if (dist >= this.TRAIL_MIN_DISTANCE) {
-        this.localPlayerTrail.push({
-          x: pos.x,
-          y: pos.y,
-          timestamp: now,
-        });
-        this.lastTrailPosition = { x: pos.x, y: pos.y };
-
-        // Limit trail length
-        if (this.localPlayerTrail.length > this.TRAIL_MAX_LENGTH) {
-          this.localPlayerTrail.shift();
+    // Lazy cleanup of trails for players who left
+    if (this.playerTrails.size > players.size + 5) {
+      for (const id of this.playerTrails.keys()) {
+        if (!players.has(id)) {
+          this.playerTrails.delete(id);
+          this.lastTrailPositions.delete(id);
         }
       }
-    } else {
-      this.lastTrailPosition = { x: pos.x, y: pos.y };
     }
   }
 
-  private renderLocalPlayerTrail(world: World): void {
-    if (this.localPlayerTrail.length < 2) return;
-
-    const localPlayer = world.getLocalPlayer();
-    if (!localPlayer || !localPlayer.alive) return;
-
-    const color = world.getPlayerColor(localPlayer.colorIndex);
+  private renderPlayerTrails(world: World): void {
     const now = Date.now();
-    const radius = world.massToRadius(localPlayer.mass);
 
-    // Draw trail as a series of circles with fading opacity
-    for (let i = 0; i < this.localPlayerTrail.length; i++) {
-      const point = this.localPlayerTrail[i];
-      const age = now - point.timestamp;
-      const lifeRatio = 1 - age / this.TRAIL_POINT_LIFETIME;
-      const indexRatio = i / this.localPlayerTrail.length;
+    for (const [playerId, trail] of this.playerTrails) {
+      if (trail.length < 2) continue;
 
-      // Fade based on both age and position in trail
-      const alpha = lifeRatio * indexRatio * 0.4;
-      // Trail gets smaller toward the tail
-      const trailRadius = radius * (0.3 + indexRatio * 0.5);
+      const player = world.getPlayer(playerId);
+      if (!player || !player.alive) continue;
 
-      this.ctx.fillStyle = this.colorWithAlpha(color, alpha);
-      this.ctx.beginPath();
-      this.ctx.arc(point.x, point.y, trailRadius, 0, Math.PI * 2);
-      this.ctx.fill();
-    }
-  }
+      const color = world.getPlayerColor(player.colorIndex);
+      const radius = world.massToRadius(player.mass);
 
-  // Velocity-based trail for other players (no history tracking needed)
-  private renderVelocityTrail(
-    position: Vec2,
-    velocity: Vec2,
-    radius: number,
-    color: string
-  ): void {
-    const speed = velocity.length();
-    if (speed < 20) return; // Only show trail when moving
+      for (let i = 0; i < trail.length; i++) {
+        const point = trail[i];
+        const age = now - point.timestamp;
+        const lifeRatio = Math.max(0, 1 - age / this.TRAIL_POINT_LIFETIME);
+        const indexRatio = i / trail.length;
 
-    const trailLength = Math.min(8, Math.floor(speed / 25)); // 1-8 points based on speed
-    if (trailLength < 1) return;
+        const alpha = lifeRatio * indexRatio * 0.4;
+        if (alpha < 0.02) continue;
 
-    const dirX = -velocity.x / speed;
-    const dirY = -velocity.y / speed;
-    const spacing = radius * 0.8;
+        const trailRadius = radius * (0.25 + indexRatio * 0.5);
 
-    for (let i = 1; i <= trailLength; i++) {
-      const t = i / trailLength;
-      const alpha = (1 - t) * 0.35;
-      const trailRadius = radius * (0.6 - t * 0.4);
-
-      const x = position.x + dirX * spacing * i;
-      const y = position.y + dirY * spacing * i;
-
-      this.ctx.fillStyle = this.colorWithAlpha(color, alpha);
-      this.ctx.beginPath();
-      this.ctx.arc(x, y, Math.max(trailRadius, 2), 0, Math.PI * 2);
-      this.ctx.fill();
+        this.ctx.fillStyle = this.colorWithAlpha(color, alpha);
+        this.ctx.beginPath();
+        this.ctx.arc(point.x, point.y, Math.max(trailRadius, 2), 0, Math.PI * 2);
+        this.ctx.fill();
+      }
     }
   }
 
@@ -174,8 +159,8 @@ export class RenderSystem {
     this.cameraOffset.y +=
       (this.targetCameraOffset.y - this.cameraOffset.y) * this.CAMERA_SMOOTHING;
 
-    // Update local player trail
-    this.updateLocalPlayerTrail(world);
+    // Update trails for all players
+    this.updatePlayerTrails(world);
 
     this.ctx.save();
     this.ctx.translate(this.cameraOffset.x, this.cameraOffset.y);
@@ -187,7 +172,7 @@ export class RenderSystem {
     // Render in order (back to front)
     this.renderArena(world);
     this.renderDeathEffects(world);
-    this.renderLocalPlayerTrail(world);
+    this.renderPlayerTrails(world);
     this.renderProjectiles(world);
     this.renderPlayers(world, state.input?.isBoosting ?? false);
 
@@ -427,11 +412,6 @@ export class RenderSystem {
 
       if (showFlame) {
         this.renderBoostFlame(player.position, player.velocity, radius);
-      }
-
-      // Velocity-based trail for other players (local player has full trail)
-      if (!isLocal) {
-        this.renderVelocityTrail(player.position, player.velocity, radius, color);
       }
 
       // Kill effect - golden pulsing glow when player gets a kill
