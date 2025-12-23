@@ -267,7 +267,7 @@ export class RenderSystem {
     this.ctx.fillStyle = '#ffffff';
     this.ctx.font = '10px Inter, system-ui, sans-serif';
     this.ctx.textAlign = 'center';
-    this.ctx.fillText('CHARGING', canvas.width / 2, y - 5);
+    this.ctx.fillText('CHARGING', Math.round(canvas.width / 2), Math.round(y - 5));
   }
 
   private renderArena(world: World): void {
@@ -658,6 +658,9 @@ export class RenderSystem {
     const localPlayer = world.getLocalPlayer();
     const sessionStats = world.getSessionStats();
 
+    // Reset text baseline for consistent rendering (countdown sets it to 'middle')
+    this.ctx.textBaseline = 'alphabetic';
+
     // === LEFT PANEL - Player Stats ===
     if (localPlayer) {
       const panelX = padding;
@@ -681,82 +684,82 @@ export class RenderSystem {
 
         // Glow effect for top 3
         if (placement <= 3) {
-          this.drawGlowText(rankText, panelX + 14, panelY + 32, rankColor, 1.2);
+          this.drawGlowText(rankText, Math.round(panelX + 14), Math.round(panelY + 32), rankColor, 1.2);
         } else {
           this.ctx.fillStyle = rankColor;
-          this.ctx.fillText(rankText, panelX + 14, panelY + 32);
+          this.ctx.fillText(rankText, Math.round(panelX + 14), Math.round(panelY + 32));
         }
 
         const rankWidth = this.ctx.measureText(rankText).width;
         this.ctx.fillStyle = '#64748b';
         this.ctx.font = '11px Inter, system-ui, sans-serif';
-        this.ctx.fillText(`of ${aliveCount}`, panelX + 18 + rankWidth, panelY + 32);
+        this.ctx.fillText(`of ${aliveCount}`, Math.round(panelX + 18 + rankWidth), Math.round(panelY + 32));
       } else {
         // Dead state with pulsing effect
         const pulse = Math.sin(Date.now() / 200) * 0.2 + 0.8;
         this.ctx.font = 'bold 20px Inter, system-ui, sans-serif';
         this.ctx.textAlign = 'left';
-        this.drawGlowText('DEAD', panelX + 14, panelY + 32, `rgba(239, 68, 68, ${pulse})`, 1);
+        this.drawGlowText('DEAD', Math.round(panelX + 14), Math.round(panelY + 32), `rgba(239, 68, 68, ${pulse})`, 1);
         const deadWidth = this.ctx.measureText('DEAD').width;
         this.ctx.fillStyle = '#64748b';
         this.ctx.font = '11px Inter, system-ui, sans-serif';
-        this.ctx.fillText(`${aliveCount} alive`, panelX + 18 + deadWidth, panelY + 32);
+        this.ctx.fillText(`${aliveCount} alive`, Math.round(panelX + 18 + deadWidth), Math.round(panelY + 32));
       }
 
       // Mass with enhanced bar
       const massPercent = Math.min(localPlayer.mass / 500, 1);
-      const barStartX = panelX + 58;
+      const barStartX = Math.round(panelX + 58);
       const barWidth = panelW - 72;
       this.ctx.fillStyle = '#64748b';
       this.ctx.font = '9px Inter, system-ui, sans-serif';
       this.ctx.textAlign = 'left';
-      this.ctx.fillText('MASS', panelX + 14, panelY + 52);
+      this.ctx.fillText('MASS', Math.round(panelX + 14), Math.round(panelY + 52));
       this.ctx.fillStyle = '#00d4ff';
       this.ctx.font = 'bold 15px monospace';
-      this.ctx.fillText(Math.floor(localPlayer.mass).toString(), panelX + 14, panelY + 70);
-      this.drawProgressBarEnhanced(barStartX, panelY + 58, barWidth, 10, massPercent, '#3b82f6', massPercent > 0.5);
+      this.ctx.fillText(Math.floor(localPlayer.mass).toString(), Math.round(panelX + 14), Math.round(panelY + 70));
+      this.drawProgressBarEnhanced(barStartX, Math.round(panelY + 58), barWidth, 10, massPercent, '#3b82f6', massPercent > 0.5);
 
       // Speed with enhanced bar
       const speed = localPlayer.velocity.length();
       const speedPercent = Math.min(speed / 300, 1);
       this.ctx.fillStyle = '#64748b';
       this.ctx.font = '9px Inter, system-ui, sans-serif';
-      this.ctx.fillText('SPEED', panelX + 14, panelY + 88);
+      this.ctx.fillText('SPEED', Math.round(panelX + 14), Math.round(panelY + 88));
       this.ctx.fillStyle = '#4ade80';
       this.ctx.font = 'bold 15px monospace';
-      this.ctx.fillText(Math.floor(speed).toString(), panelX + 14, panelY + 106);
-      this.drawProgressBarEnhanced(barStartX, panelY + 94, barWidth, 10, speedPercent, '#22c55e', speedPercent > 0.7);
+      this.ctx.fillText(Math.floor(speed).toString(), Math.round(panelX + 14), Math.round(panelY + 106));
+      this.drawProgressBarEnhanced(barStartX, Math.round(panelY + 94), barWidth, 10, speedPercent, '#22c55e', speedPercent > 0.7);
 
       // K/D Stats in styled boxes
-      const kdY = panelY + 125;
+      const kdY = Math.round(panelY + 125);
       // Kills box
       this.ctx.fillStyle = 'rgba(34, 197, 94, 0.15)';
       this.ctx.beginPath();
-      this.ctx.roundRect(panelX + 14, kdY, 50, 28, 4);
+      this.ctx.roundRect(Math.round(panelX + 14), kdY, 50, 28, 4);
       this.ctx.fill();
       this.ctx.fillStyle = '#64748b';
       this.ctx.font = '8px Inter, system-ui, sans-serif';
       this.ctx.textAlign = 'center';
-      this.ctx.fillText('KILLS', panelX + 39, kdY + 10);
+      this.ctx.fillText('KILLS', Math.round(panelX + 39), kdY + 10);
       this.ctx.fillStyle = '#4ade80';
       this.ctx.font = 'bold 14px monospace';
-      this.ctx.fillText(localPlayer.kills.toString(), panelX + 39, kdY + 24);
+      this.ctx.fillText(localPlayer.kills.toString(), Math.round(panelX + 39), kdY + 24);
 
       // Deaths box
       this.ctx.fillStyle = 'rgba(239, 68, 68, 0.15)';
       this.ctx.beginPath();
-      this.ctx.roundRect(panelX + 70, kdY, 50, 28, 4);
+      this.ctx.roundRect(Math.round(panelX + 70), kdY, 50, 28, 4);
       this.ctx.fill();
       this.ctx.fillStyle = '#64748b';
       this.ctx.font = '8px Inter, system-ui, sans-serif';
-      this.ctx.fillText('DEATHS', panelX + 95, kdY + 10);
+      this.ctx.fillText('DEATHS', Math.round(panelX + 95), kdY + 10);
       this.ctx.fillStyle = '#ef4444';
       this.ctx.font = 'bold 14px monospace';
-      this.ctx.fillText(localPlayer.deaths.toString(), panelX + 95, kdY + 24);
+      this.ctx.fillText(localPlayer.deaths.toString(), Math.round(panelX + 95), kdY + 24);
 
       // Kill streak with fire glow
       if (sessionStats.killStreak > 0) {
-        const streakX = panelX + 130;
+        const streakX = Math.round(panelX + 130);
         this.ctx.fillStyle = 'rgba(251, 191, 36, 0.2)';
         this.ctx.beginPath();
         this.ctx.roundRect(streakX, kdY, 46, 28, 4);
@@ -774,13 +777,13 @@ export class RenderSystem {
       this.ctx.fillStyle = '#475569';
       this.ctx.font = '10px monospace';
       this.ctx.textAlign = 'right';
-      this.ctx.fillText(`${minutes}:${seconds.toString().padStart(2, '0')}`, panelX + panelW - 14, panelY + 18);
+      this.ctx.fillText(`${minutes}:${seconds.toString().padStart(2, '0')}`, Math.round(panelX + panelW - 14), Math.round(panelY + 18));
     }
 
     // === BOTTOM LEFT - Session Stats (Compact) ===
     if (localPlayer) {
       const panelX = padding;
-      const panelY = canvas.height - padding - 50;
+      const panelY = Math.round(canvas.height - padding - 50);
       const panelW = 200;
       const panelH = 50;
 
@@ -790,28 +793,28 @@ export class RenderSystem {
       this.ctx.fillStyle = '#475569';
       this.ctx.font = '8px Inter, system-ui, sans-serif';
       this.ctx.textAlign = 'left';
-      this.ctx.fillText('SESSION BEST', panelX + 12, panelY + 14);
+      this.ctx.fillText('SESSION BEST', Math.round(panelX + 12), Math.round(panelY + 14));
 
       // Compact stats in a row
-      const statsY = panelY + 34;
+      const statsY = Math.round(panelY + 34);
       const statSpacing = 60;
 
       // Best Mass (cyan)
       this.ctx.fillStyle = '#00d4ff';
       this.ctx.font = 'bold 14px monospace';
       this.ctx.textAlign = 'center';
-      this.ctx.fillText(Math.floor(sessionStats.bestMass).toString(), panelX + 30, statsY);
+      this.ctx.fillText(Math.floor(sessionStats.bestMass).toString(), Math.round(panelX + 30), statsY);
       this.ctx.fillStyle = '#475569';
       this.ctx.font = '8px Inter, system-ui, sans-serif';
-      this.ctx.fillText('MASS', panelX + 30, statsY + 10);
+      this.ctx.fillText('MASS', Math.round(panelX + 30), statsY + 10);
 
       // Best Streak (orange)
       this.ctx.fillStyle = '#fbbf24';
       this.ctx.font = 'bold 14px monospace';
-      this.ctx.fillText(sessionStats.bestKillStreak.toString(), panelX + 30 + statSpacing, statsY);
+      this.ctx.fillText(sessionStats.bestKillStreak.toString(), Math.round(panelX + 30 + statSpacing), statsY);
       this.ctx.fillStyle = '#475569';
       this.ctx.font = '8px Inter, system-ui, sans-serif';
-      this.ctx.fillText('STREAK', panelX + 30 + statSpacing, statsY + 10);
+      this.ctx.fillText('STREAK', Math.round(panelX + 30 + statSpacing), statsY + 10);
 
       // Best Time (green)
       const bestSeconds = Math.floor(sessionStats.bestTimeAlive / 1000);
@@ -819,10 +822,10 @@ export class RenderSystem {
       const bestSec = bestSeconds % 60;
       this.ctx.fillStyle = '#4ade80';
       this.ctx.font = 'bold 14px monospace';
-      this.ctx.fillText(`${bestMin}:${bestSec.toString().padStart(2, '0')}`, panelX + 30 + statSpacing * 2, statsY);
+      this.ctx.fillText(`${bestMin}:${bestSec.toString().padStart(2, '0')}`, Math.round(panelX + 30 + statSpacing * 2), statsY);
       this.ctx.fillStyle = '#475569';
       this.ctx.font = '8px Inter, system-ui, sans-serif';
-      this.ctx.fillText('TIME', panelX + 30 + statSpacing * 2, statsY + 10);
+      this.ctx.fillText('TIME', Math.round(panelX + 30 + statSpacing * 2), statsY + 10);
     }
 
     // === RIGHT PANEL - Leaderboard ===
@@ -838,14 +841,14 @@ export class RenderSystem {
     this.ctx.fillStyle = '#64748b';
     this.ctx.font = 'bold 9px Inter, system-ui, sans-serif';
     this.ctx.textAlign = 'left';
-    this.ctx.fillText('LEADERBOARD', lbPanelX + 14, lbPanelY + 16);
+    this.ctx.fillText('LEADERBOARD', Math.round(lbPanelX + 14), Math.round(lbPanelY + 16));
 
     const rankColors = ['#FFD700', '#C0C0C0', '#CD7F32']; // Gold, Silver, Bronze
     const maxMass = leaderboard.length > 0 ? leaderboard[0].mass : 100;
 
     leaderboard.forEach((entry, index) => {
       const isLocal = entry.id === world.localPlayerId;
-      const y = lbPanelY + 36 + index * lbRowHeight;
+      const y = Math.round(lbPanelY + 36 + index * lbRowHeight);
 
       // Highlight row for local player
       if (isLocal) {
@@ -865,17 +868,17 @@ export class RenderSystem {
 
       if (index < 3) {
         // Glowing medal number
-        this.drawGlowText(`${index + 1}`, lbPanelX + 16, y + 4, rankColor, 0.8);
+        this.drawGlowText(`${index + 1}`, Math.round(lbPanelX + 16), y + 4, rankColor, 0.8);
       } else {
         this.ctx.fillStyle = rankColor;
-        this.ctx.fillText(`${index + 1}`, lbPanelX + 16, y + 4);
+        this.ctx.fillText(`${index + 1}`, Math.round(lbPanelX + 16), y + 4);
       }
 
       // Name - cyan for local, white for others
       this.ctx.fillStyle = isLocal ? '#00ffff' : '#e2e8f0';
       this.ctx.font = `${isLocal ? 'bold ' : ''}11px Inter, system-ui, sans-serif`;
       const name = entry.name.length > 9 ? entry.name.slice(0, 9) + '…' : entry.name;
-      this.ctx.fillText(name, lbPanelX + 32, y + 4);
+      this.ctx.fillText(name, Math.round(lbPanelX + 32), y + 4);
 
       // Mini mass bar
       const barX = lbPanelX + 100;
@@ -898,7 +901,7 @@ export class RenderSystem {
       this.ctx.fillStyle = isLocal ? '#00ffff' : '#94a3b8';
       this.ctx.font = '10px monospace';
       this.ctx.textAlign = 'right';
-      this.ctx.fillText(Math.floor(entry.mass).toString(), lbPanelX + lbPanelW - 12, y + 4);
+      this.ctx.fillText(Math.floor(entry.mass).toString(), Math.round(lbPanelX + lbPanelW - 12), y + 4);
     });
 
     // === DANGER ZONE INDICATOR ===
@@ -937,7 +940,7 @@ export class RenderSystem {
         this.ctx.fillStyle = `rgba(239, 68, 68, ${dangerLevel * pulse * 0.8})`;
         this.ctx.font = 'bold 14px Inter, system-ui, sans-serif';
         this.ctx.textAlign = 'center';
-        this.ctx.fillText(`⚠ ${dangerType}`, canvas.width / 2, canvas.height - 60);
+        this.ctx.fillText(`⚠ ${dangerType}`, Math.round(canvas.width / 2), Math.round(canvas.height - 60));
       }
     }
 
@@ -947,8 +950,8 @@ export class RenderSystem {
     const textWidth = this.ctx.measureText(controlsText).width;
     const pillW = textWidth + 24;
     const pillH = 22;
-    const pillX = (canvas.width - pillW) / 2;
-    const pillY = canvas.height - padding - pillH - 2;
+    const pillX = Math.round((canvas.width - pillW) / 2);
+    const pillY = Math.round(canvas.height - padding - pillH - 2);
 
     // Pill background
     this.ctx.fillStyle = 'rgba(15, 23, 42, 0.75)';
@@ -962,7 +965,7 @@ export class RenderSystem {
     // Text
     this.ctx.fillStyle = '#64748b';
     this.ctx.textAlign = 'center';
-    this.ctx.fillText(controlsText, canvas.width / 2, pillY + 15);
+    this.ctx.fillText(controlsText, Math.round(canvas.width / 2), pillY + 15);
 
     // === MINIMAP ===
     this.renderMinimap(world, canvas, padding);
@@ -1259,7 +1262,7 @@ export class RenderSystem {
     this.ctx.font = '10px Inter, system-ui, sans-serif';
     this.ctx.textAlign = 'center';
     this.ctx.fillStyle = 'rgba(148, 163, 184, 0.7)';
-    this.ctx.fillText(`${aliveCount} alive`, centerX, minimapY - 6);
+    this.ctx.fillText(`${aliveCount} alive`, Math.round(centerX), Math.round(minimapY - 6));
   }
 
   // Enhanced panel with gradient background and optional corner accents
@@ -1427,7 +1430,7 @@ export class RenderSystem {
     this.ctx.font = 'bold 120px Inter, system-ui, sans-serif';
     this.ctx.textAlign = 'center';
     this.ctx.textBaseline = 'middle';
-    this.ctx.fillText(count > 0 ? count.toString() : 'GO!', canvas.width / 2, canvas.height / 2);
+    this.ctx.fillText(count > 0 ? count.toString() : 'GO!', Math.round(canvas.width / 2), Math.round(canvas.height / 2));
   }
 
   private renderConnectionStatus(state: RenderState): void {
@@ -1455,8 +1458,8 @@ export class RenderSystem {
     // Pill background
     const pillW = 70;
     const pillH = 20;
-    const pillX = canvas.width - padding - pillW;
-    const pillY = padding - 2;
+    const pillX = Math.round(canvas.width - padding - pillW);
+    const pillY = Math.round(padding - 2);
 
     this.ctx.fillStyle = 'rgba(15, 23, 42, 0.85)';
     this.ctx.beginPath();
@@ -1492,12 +1495,12 @@ export class RenderSystem {
       this.ctx.fillStyle = '#94a3b8';
       this.ctx.font = '10px monospace';
       this.ctx.textAlign = 'right';
-      this.ctx.fillText(`${Math.round(state.rtt)}ms`, pillX + pillW - 8, pillY + 14);
+      this.ctx.fillText(`${Math.round(state.rtt)}ms`, Math.round(pillX + pillW - 8), Math.round(pillY + 14));
     } else {
       this.ctx.fillStyle = statusColor;
       this.ctx.font = '9px Inter, system-ui, sans-serif';
       this.ctx.textAlign = 'right';
-      this.ctx.fillText(statusLabel, pillX + pillW - 8, pillY + 14);
+      this.ctx.fillText(statusLabel, Math.round(pillX + pillW - 8), Math.round(pillY + 14));
     }
   }
 
