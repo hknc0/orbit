@@ -170,6 +170,19 @@ impl Metrics {
         metric!("orbit_royale_budget_usage_percent", "Tick budget usage percentage", "gauge",
             self.budget_usage_percent.load(Ordering::Relaxed));
 
+        // Human-readable performance status as a label
+        let status_name = match self.performance_status.load(Ordering::Relaxed) {
+            0 => "excellent",
+            1 => "good",
+            2 => "warning",
+            3 => "critical",
+            _ => "catastrophic",
+        };
+        output.push_str(&format!(
+            "# HELP orbit_royale_performance_state Human-readable performance state\n# TYPE orbit_royale_performance_state gauge\norbit_royale_performance_state{{state=\"{}\"}} 1\n",
+            status_name
+        ));
+
         // Network metrics
         metric!("orbit_royale_connections_active", "Active WebTransport connections", "gauge",
             self.connections_active.load(Ordering::Relaxed));
@@ -214,6 +227,7 @@ impl Metrics {
     "tick_time_max_us": {},
     "tick_count": {},
     "status": {},
+    "status_name": "{}",
     "budget_percent": {}
   }},
   "network": {{
@@ -242,6 +256,13 @@ impl Metrics {
             self.tick_time_max_us.load(Ordering::Relaxed),
             self.tick_count.load(Ordering::Relaxed),
             self.performance_status.load(Ordering::Relaxed),
+            match self.performance_status.load(Ordering::Relaxed) {
+                0 => "excellent",
+                1 => "good",
+                2 => "warning",
+                3 => "critical",
+                _ => "catastrophic",
+            },
             self.budget_usage_percent.load(Ordering::Relaxed),
             self.connections_active.load(Ordering::Relaxed),
             self.messages_sent.load(Ordering::Relaxed),
