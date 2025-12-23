@@ -295,19 +295,25 @@ impl GameSession {
                     respawned += 1;
                     debug!("Respawned player {}", player_id);
                 }
+
+                // Reset charge state to prevent stale charging state from before death
+                self.game_loop.reset_charge(player_id);
             }
         }
     }
 
     /// Maintain minimum player count with bots
-    /// Only spawns bots if alive count is below minimum
+    /// Spawns bots gradually (a few per tick) rather than all at once
     fn maintain_player_count(&mut self) {
-        let alive_count = self.game_loop.state().alive_count();
-        let target = self.bot_count; // Minimum players in game
+        let current_count = self.game_loop.state().players.len();
+        let target = self.bot_count;
 
         // Only add bots if we're below target
-        if alive_count < target {
-            self.game_loop.fill_with_bots(target);
+        if current_count < target {
+            // Add bots gradually - max 5 per tick for smoother distribution
+            let bots_needed = (target - current_count).min(5);
+            let new_target = current_count + bots_needed;
+            self.game_loop.fill_with_bots(new_target);
         }
     }
 }

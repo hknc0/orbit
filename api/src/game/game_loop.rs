@@ -293,6 +293,11 @@ impl GameLoop {
         self.state.remove_player(player_id)
     }
 
+    /// Reset charge state for a player (e.g., on respawn)
+    pub fn reset_charge(&mut self, player_id: PlayerId) {
+        self.charge_manager.reset(player_id);
+    }
+
     /// Add AI bots to fill the game
     pub fn fill_with_bots(&mut self, total_players: usize) {
         let current_count = self.state.players.len();
@@ -476,5 +481,59 @@ mod tests {
         // Position should have been updated
         let added = game_loop.state().get_player(player.id).unwrap();
         assert!(added.position.length() > 0.0);
+    }
+
+    #[test]
+    fn test_reset_charge_on_respawn() {
+        let mut game_loop = GameLoop::new(GameLoopConfig::default());
+        let player = create_player("Test", false);
+        let player_id = player.id;
+        game_loop.add_player(player);
+
+        // Start charging by processing fire input
+        let fire_input = PlayerInput {
+            sequence: 1,
+            tick: 1,
+            fire: true,
+            aim: Vec2::new(1.0, 0.0),
+            ..Default::default()
+        };
+        game_loop.queue_input(player_id, fire_input.clone());
+        game_loop.state_mut().match_state.phase = MatchPhase::Playing;
+        game_loop.tick();
+
+        // Process several more charging ticks
+        for i in 2..5 {
+            game_loop.queue_input(
+                player_id,
+                PlayerInput {
+                    sequence: i,
+                    tick: i,
+                    fire: true,
+                    aim: Vec2::new(1.0, 0.0),
+                    ..Default::default()
+                },
+            );
+            game_loop.tick();
+        }
+
+        // Verify charge state exists (implicitly via reset not panicking)
+        // Reset charge state (simulates respawn)
+        game_loop.reset_charge(player_id);
+
+        // Now send fire_released - should NOT fire a projectile since charge was reset
+        let release_input = PlayerInput {
+            sequence: 10,
+            tick: 10,
+            fire: false,
+            fire_released: true,
+            aim: Vec2::new(1.0, 0.0),
+            ..Default::default()
+        };
+        game_loop.queue_input(player_id, release_input);
+        game_loop.tick();
+
+        // No projectile should have been created (charge was reset)
+        assert_eq!(game_loop.state().projectiles.len(), 0);
     }
 }

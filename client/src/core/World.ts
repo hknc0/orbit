@@ -159,6 +159,16 @@ export class World {
       (effect) => now - effect.timestamp < DEATH_EFFECT_DURATION
     );
 
+    // Clean up tracking for players no longer in state (prevents stale data accumulation)
+    const currentPlayerIds = new Set(state.players.keys());
+    for (const playerId of this.lastAliveStates.keys()) {
+      if (!currentPlayerIds.has(playerId)) {
+        this.lastAliveStates.delete(playerId);
+        this.lastKillCounts.delete(playerId);
+        this.recentKills.delete(playerId);
+      }
+    }
+
     this.state = state;
 
     // Update arena
@@ -173,6 +183,19 @@ export class World {
   // Set player name (from events)
   setPlayerName(playerId: PlayerId, name: string): void {
     this.playerNames.set(playerId, name);
+  }
+
+  // Apply client-side prediction for local player (reduces perceived latency)
+  applyLocalPrediction(position: { x: number; y: number }, velocity: { x: number; y: number }): void {
+    if (!this.localPlayerId || !this.state) return;
+
+    const localPlayer = this.state.players.get(this.localPlayerId);
+    if (localPlayer && localPlayer.alive) {
+      localPlayer.position.x = position.x;
+      localPlayer.position.y = position.y;
+      localPlayer.velocity.x = velocity.x;
+      localPlayer.velocity.y = velocity.y;
+    }
   }
 
   // Get all players

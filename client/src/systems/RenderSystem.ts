@@ -22,14 +22,98 @@ interface RenderState {
   connectionState: ConnectionState;
 }
 
+// Trail point for local player
+interface TrailPoint {
+  x: number;
+  y: number;
+  timestamp: number;
+}
+
 export class RenderSystem {
   private ctx: CanvasRenderingContext2D;
   private cameraOffset: Vec2 = new Vec2();
   private targetCameraOffset: Vec2 = new Vec2();
   private readonly CAMERA_SMOOTHING = 0.1;
 
+  // Trail for local player
+  private localPlayerTrail: TrailPoint[] = [];
+  private readonly TRAIL_MAX_LENGTH = 50;
+  private readonly TRAIL_POINT_LIFETIME = 500; // ms
+  private lastTrailPosition: { x: number; y: number } | null = null;
+  private readonly TRAIL_MIN_DISTANCE = 5; // minimum distance between trail points
+
   constructor(ctx: CanvasRenderingContext2D) {
     this.ctx = ctx;
+  }
+
+  private updateLocalPlayerTrail(world: World): void {
+    const localPlayer = world.getLocalPlayer();
+    const now = Date.now();
+
+    // Remove old trail points
+    this.localPlayerTrail = this.localPlayerTrail.filter(
+      (point) => now - point.timestamp < this.TRAIL_POINT_LIFETIME
+    );
+
+    // Clear trail if player is dead or doesn't exist
+    if (!localPlayer || !localPlayer.alive) {
+      this.localPlayerTrail = [];
+      this.lastTrailPosition = null;
+      return;
+    }
+
+    // Add new trail point if moved enough distance
+    const pos = localPlayer.position;
+    if (this.lastTrailPosition) {
+      const dx = pos.x - this.lastTrailPosition.x;
+      const dy = pos.y - this.lastTrailPosition.y;
+      const dist = Math.sqrt(dx * dx + dy * dy);
+
+      if (dist >= this.TRAIL_MIN_DISTANCE) {
+        this.localPlayerTrail.push({
+          x: pos.x,
+          y: pos.y,
+          timestamp: now,
+        });
+        this.lastTrailPosition = { x: pos.x, y: pos.y };
+
+        // Limit trail length
+        if (this.localPlayerTrail.length > this.TRAIL_MAX_LENGTH) {
+          this.localPlayerTrail.shift();
+        }
+      }
+    } else {
+      this.lastTrailPosition = { x: pos.x, y: pos.y };
+    }
+  }
+
+  private renderLocalPlayerTrail(world: World): void {
+    if (this.localPlayerTrail.length < 2) return;
+
+    const localPlayer = world.getLocalPlayer();
+    if (!localPlayer || !localPlayer.alive) return;
+
+    const color = world.getPlayerColor(localPlayer.colorIndex);
+    const now = Date.now();
+    const radius = world.massToRadius(localPlayer.mass);
+
+    // Draw trail as a series of circles with fading opacity
+    for (let i = 0; i < this.localPlayerTrail.length; i++) {
+      const point = this.localPlayerTrail[i];
+      const age = now - point.timestamp;
+      const lifeRatio = 1 - age / this.TRAIL_POINT_LIFETIME;
+      const indexRatio = i / this.localPlayerTrail.length;
+
+      // Fade based on both age and position in trail
+      const alpha = lifeRatio * indexRatio * 0.4;
+      // Trail gets smaller toward the tail
+      const trailRadius = radius * (0.3 + indexRatio * 0.5);
+
+      this.ctx.fillStyle = this.colorWithAlpha(color, alpha);
+      this.ctx.beginPath();
+      this.ctx.arc(point.x, point.y, trailRadius, 0, Math.PI * 2);
+      this.ctx.fill();
+    }
   }
 
   render(world: World, state: RenderState): void {
@@ -54,12 +138,20 @@ export class RenderSystem {
     this.cameraOffset.y +=
       (this.targetCameraOffset.y - this.cameraOffset.y) * this.CAMERA_SMOOTHING;
 
+    // Update local player trail
+    this.updateLocalPlayerTrail(world);
+
     this.ctx.save();
     this.ctx.translate(this.cameraOffset.x, this.cameraOffset.y);
+
+    // Reset any lingering canvas state that might cause visual artifacts
+    this.ctx.setLineDash([]);
+    this.ctx.globalAlpha = 1.0;
 
     // Render in order (back to front)
     this.renderArena(world);
     this.renderDeathEffects(world);
+    this.renderLocalPlayerTrail(world);
     this.renderProjectiles(world);
     this.renderPlayers(world, state.input?.isBoosting ?? false);
 
@@ -730,38 +822,62 @@ export class RenderSystem {
       this.ctx.globalAlpha = 1.0;
     }
 
-    // 2. Local player - VERY prominent, always on top
+    // 2. Local player - VERY prominent, always on top (show even when dead)
     const localPlayer = world.getLocalPlayer();
-    if (localPlayer && localPlayer.alive) {
+    if (localPlayer) {
       const pos = clampToMinimap(
         centerX + localPlayer.position.x * scale,
         centerY + localPlayer.position.y * scale
       );
 
-      // Large outer glow
-      this.ctx.fillStyle = 'rgba(0, 255, 255, 0.25)';
-      this.ctx.beginPath();
-      this.ctx.arc(pos.x, pos.y, 14, 0, Math.PI * 2);
-      this.ctx.fill();
+      if (localPlayer.alive) {
+        // Alive: Bright cyan indicator
+        // Large outer glow
+        this.ctx.fillStyle = 'rgba(0, 255, 255, 0.25)';
+        this.ctx.beginPath();
+        this.ctx.arc(pos.x, pos.y, 14, 0, Math.PI * 2);
+        this.ctx.fill();
 
-      // Thick white ring
-      this.ctx.strokeStyle = '#ffffff';
-      this.ctx.lineWidth = 3;
-      this.ctx.beginPath();
-      this.ctx.arc(pos.x, pos.y, 8, 0, Math.PI * 2);
-      this.ctx.stroke();
+        // Thick white ring
+        this.ctx.strokeStyle = '#ffffff';
+        this.ctx.lineWidth = 3;
+        this.ctx.beginPath();
+        this.ctx.arc(pos.x, pos.y, 8, 0, Math.PI * 2);
+        this.ctx.stroke();
 
-      // Bright cyan fill
-      this.ctx.fillStyle = '#00ffff';
-      this.ctx.beginPath();
-      this.ctx.arc(pos.x, pos.y, 6, 0, Math.PI * 2);
-      this.ctx.fill();
+        // Bright cyan fill
+        this.ctx.fillStyle = '#00ffff';
+        this.ctx.beginPath();
+        this.ctx.arc(pos.x, pos.y, 6, 0, Math.PI * 2);
+        this.ctx.fill();
 
-      // White center dot
-      this.ctx.fillStyle = '#ffffff';
-      this.ctx.beginPath();
-      this.ctx.arc(pos.x, pos.y, 2, 0, Math.PI * 2);
-      this.ctx.fill();
+        // White center dot
+        this.ctx.fillStyle = '#ffffff';
+        this.ctx.beginPath();
+        this.ctx.arc(pos.x, pos.y, 2, 0, Math.PI * 2);
+        this.ctx.fill();
+      } else {
+        // Dead: Dimmed red X indicator
+        this.ctx.globalAlpha = 0.6;
+
+        // Dark red glow
+        this.ctx.fillStyle = 'rgba(239, 68, 68, 0.2)';
+        this.ctx.beginPath();
+        this.ctx.arc(pos.x, pos.y, 12, 0, Math.PI * 2);
+        this.ctx.fill();
+
+        // Red X mark
+        this.ctx.strokeStyle = '#ef4444';
+        this.ctx.lineWidth = 2;
+        this.ctx.beginPath();
+        this.ctx.moveTo(pos.x - 5, pos.y - 5);
+        this.ctx.lineTo(pos.x + 5, pos.y + 5);
+        this.ctx.moveTo(pos.x + 5, pos.y - 5);
+        this.ctx.lineTo(pos.x - 5, pos.y + 5);
+        this.ctx.stroke();
+
+        this.ctx.globalAlpha = 1.0;
+      }
     }
 
     // 4. Gravity well - show only the NEAREST one to avoid clutter
