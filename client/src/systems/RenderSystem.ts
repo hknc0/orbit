@@ -416,29 +416,88 @@ export class RenderSystem {
       this.ctx.stroke();
     } else {
       // === NORMAL GRAVITY WELL (star/sun) ===
-      // Orange/yellow colors, size varies with coreRadius
+      // Different star types based on position hash for variety
+
+      // Generate deterministic "random" values from position
+      const seed = Math.abs(Math.floor(x * 7919 + y * 104729)) % 10000;
+      const starType = seed % 6; // 6 different star types
+      const variation = (seed % 100) / 100; // 0-1 for subtle variations
+
+      // Star color palettes based on stellar classification
+      type StarColors = {
+        core: [number, number, number];
+        mid: [number, number, number];
+        outer: [number, number, number];
+        glow: [number, number, number];
+      };
+
+      const starTypes: StarColors[] = [
+        // O-type: Blue giant (hot, bright blue-white)
+        { core: [200, 220, 255], mid: [150, 180, 255], outer: [100, 140, 255], glow: [80, 120, 255] },
+        // B-type: Blue-white
+        { core: [220, 230, 255], mid: [180, 200, 255], outer: [140, 170, 255], glow: [100, 150, 255] },
+        // A-type: White
+        { core: [255, 255, 255], mid: [240, 245, 255], outer: [220, 230, 250], glow: [200, 210, 240] },
+        // G-type: Yellow (sun-like)
+        { core: [255, 250, 200], mid: [255, 220, 120], outer: [255, 180, 60], glow: [255, 150, 30] },
+        // K-type: Orange
+        { core: [255, 200, 150], mid: [255, 150, 80], outer: [255, 100, 40], glow: [255, 80, 20] },
+        // M-type: Red dwarf
+        { core: [255, 180, 160], mid: [255, 120, 100], outer: [220, 80, 60], glow: [180, 50, 30] },
+      ];
+
+      const colors = starTypes[starType];
+
+      // Apply subtle variation to colors
+      const vary = (c: number, amount: number) => Math.min(255, Math.max(0, c + (variation - 0.5) * amount));
 
       // Outer glow based on mass
       const glowRadius = coreRadius * (1.5 + Math.log10(mass) * 0.1);
       const outerGlow = this.ctx.createRadialGradient(x, y, coreRadius * 0.5, x, y, glowRadius);
-      outerGlow.addColorStop(0, 'rgba(255, 150, 50, 0.3)');
-      outerGlow.addColorStop(0.5, 'rgba(255, 100, 30, 0.15)');
-      outerGlow.addColorStop(1, 'rgba(255, 50, 0, 0)');
+      outerGlow.addColorStop(0, `rgba(${vary(colors.glow[0], 20)}, ${vary(colors.glow[1], 20)}, ${vary(colors.glow[2], 20)}, 0.35)`);
+      outerGlow.addColorStop(0.5, `rgba(${vary(colors.glow[0], 30)}, ${vary(colors.glow[1], 30)}, ${vary(colors.glow[2], 30)}, 0.15)`);
+      outerGlow.addColorStop(1, `rgba(${colors.glow[0]}, ${colors.glow[1]}, ${colors.glow[2]}, 0)`);
       this.ctx.fillStyle = outerGlow;
       this.ctx.beginPath();
       this.ctx.arc(x, y, glowRadius, 0, Math.PI * 2);
       this.ctx.fill();
 
-      // Core death zone gradient
+      // Corona/surface activity (subtle shimmer effect for larger stars)
+      if (coreRadius > 40) {
+        const time = Date.now() / 2000;
+        const coronaRadius = coreRadius * 1.15;
+        this.ctx.save();
+        this.ctx.globalAlpha = 0.3 + Math.sin(time * 2 + seed) * 0.1;
+        const corona = this.ctx.createRadialGradient(x, y, coreRadius * 0.9, x, y, coronaRadius);
+        corona.addColorStop(0, `rgba(${colors.core[0]}, ${colors.core[1]}, ${colors.core[2]}, 0.4)`);
+        corona.addColorStop(1, `rgba(${colors.mid[0]}, ${colors.mid[1]}, ${colors.mid[2]}, 0)`);
+        this.ctx.fillStyle = corona;
+        this.ctx.beginPath();
+        this.ctx.arc(x, y, coronaRadius, 0, Math.PI * 2);
+        this.ctx.fill();
+        this.ctx.restore();
+      }
+
+      // Core gradient
       const gradient = this.ctx.createRadialGradient(x, y, 0, x, y, coreRadius);
-      gradient.addColorStop(0, 'rgba(255, 200, 100, 0.9)');
-      gradient.addColorStop(0.3, 'rgba(255, 150, 50, 0.8)');
-      gradient.addColorStop(0.7, 'rgba(200, 80, 30, 0.6)');
-      gradient.addColorStop(1, 'rgba(150, 40, 20, 0.3)');
+      gradient.addColorStop(0, `rgba(${vary(colors.core[0], 15)}, ${vary(colors.core[1], 15)}, ${vary(colors.core[2], 15)}, 0.95)`);
+      gradient.addColorStop(0.3, `rgba(${vary(colors.mid[0], 20)}, ${vary(colors.mid[1], 20)}, ${vary(colors.mid[2], 20)}, 0.85)`);
+      gradient.addColorStop(0.7, `rgba(${vary(colors.outer[0], 25)}, ${vary(colors.outer[1], 25)}, ${vary(colors.outer[2], 25)}, 0.6)`);
+      gradient.addColorStop(1, `rgba(${colors.outer[0]}, ${colors.outer[1]}, ${colors.outer[2]}, 0.25)`);
 
       this.ctx.fillStyle = gradient;
       this.ctx.beginPath();
       this.ctx.arc(x, y, coreRadius, 0, Math.PI * 2);
+      this.ctx.fill();
+
+      // Bright center spot (photosphere highlight)
+      const centerGlow = this.ctx.createRadialGradient(x, y, 0, x, y, coreRadius * 0.4);
+      centerGlow.addColorStop(0, `rgba(255, 255, 255, 0.6)`);
+      centerGlow.addColorStop(0.5, `rgba(${colors.core[0]}, ${colors.core[1]}, ${colors.core[2]}, 0.3)`);
+      centerGlow.addColorStop(1, `rgba(${colors.core[0]}, ${colors.core[1]}, ${colors.core[2]}, 0)`);
+      this.ctx.fillStyle = centerGlow;
+      this.ctx.beginPath();
+      this.ctx.arc(x, y, coreRadius * 0.4, 0, Math.PI * 2);
       this.ctx.fill();
     }
   }

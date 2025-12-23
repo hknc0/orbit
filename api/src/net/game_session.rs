@@ -135,12 +135,12 @@ impl GameSession {
         &mut self,
         player_id: PlayerId,
         player_name: String,
+        color_index: u8,
         writer: Arc<RwLock<Option<wtransport::SendStream>>>,
     ) -> PlayerId {
         info!("Adding player {} ({}) to game session", player_name, player_id);
 
-        // Create player entity
-        let color_index = self.players.len() as u8;
+        // Create player entity with their selected color
         let player = Player::new(player_id, player_name.clone(), false, color_index);
 
         // Add to game loop

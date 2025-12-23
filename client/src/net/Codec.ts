@@ -180,6 +180,7 @@ export function encodeClientMessage(msg: ClientMessage): Uint8Array {
     case 'JoinRequest':
       writer.writeU32(0); // Enum variant
       writer.writeString(msg.playerName);
+      writer.writeU8(msg.colorIndex);
       break;
     case 'Input':
       writer.writeU32(1);

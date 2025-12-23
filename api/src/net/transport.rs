@@ -191,8 +191,41 @@ async fn handle_connection(
                                 };
 
                                 match client_msg {
-                                    ClientMessage::JoinRequest { player_name } => {
-                                        tracing::info!("Received JoinRequest from '{}'", player_name);
+                                    ClientMessage::JoinRequest { player_name, color_index } => {
+                                        // === INPUT VALIDATION ===
+                                        // Sanitize player name: trim, remove control chars, limit length
+                                        let sanitized_name: String = player_name
+                                            .trim()
+                                            .chars()
+                                            // Remove control characters (0x00-0x1F and 0x7F)
+                                            .filter(|c| !c.is_control())
+                                            // Remove potentially dangerous characters
+                                            .filter(|c| *c != '<' && *c != '>' && *c != '&')
+                                            .take(16) // Max 16 characters
+                                            .collect();
+
+                                        // Collapse multiple spaces
+                                        let sanitized_name: String = sanitized_name
+                                            .split_whitespace()
+                                            .collect::<Vec<_>>()
+                                            .join(" ");
+
+                                        // Validate name is not empty after sanitization
+                                        if sanitized_name.is_empty() {
+                                            tracing::warn!("Rejecting player with empty/invalid name");
+                                            let response_msg = ServerMessage::JoinRejected {
+                                                reason: "Invalid player name".to_string(),
+                                            };
+                                            if let Err(e) = send_to_player(&writer, &response_msg).await {
+                                                tracing::warn!("Failed to send JoinRejected: {}", e);
+                                            }
+                                            continue;
+                                        }
+
+                                        // Clamp color index to valid range (0-9)
+                                        let safe_color_index = color_index.min(9);
+
+                                        tracing::info!("Received JoinRequest from '{}' with color {}", sanitized_name, safe_color_index);
 
                                         // Check if server can accept new players (performance-based)
                                         let can_accept = {
@@ -206,7 +239,7 @@ async fn handle_connection(
                                                 let session = game_session.read().await;
                                                 session.rejection_message()
                                             };
-                                            tracing::warn!("Rejecting player '{}': {}", player_name, rejection_msg);
+                                            tracing::warn!("Rejecting player '{}': {}", sanitized_name, rejection_msg);
 
                                             let response_msg = ServerMessage::JoinRejected {
                                                 reason: rejection_msg,
@@ -225,7 +258,8 @@ async fn handle_connection(
                                             let mut session = game_session.write().await;
                                             session.add_player(
                                                 new_player_id,
-                                                player_name.clone(),
+                                                sanitized_name.clone(),
+                                                safe_color_index,
                                                 writer.clone(),
                                             );
                                         }

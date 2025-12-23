@@ -11,7 +11,7 @@ export type MatchPhase = 'waiting' | 'countdown' | 'playing' | 'ended';
 
 // Client -> Server messages
 export type ClientMessage =
-  | { type: 'JoinRequest'; playerName: string }
+  | { type: 'JoinRequest'; playerName: string; colorIndex: number }
   | { type: 'Input'; input: PlayerInput }
   | { type: 'Leave' }
   | { type: 'Ping'; timestamp: number }

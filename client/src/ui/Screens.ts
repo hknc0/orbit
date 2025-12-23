@@ -1,6 +1,23 @@
 // UI Screens for menu, end game, and connection states
 // Uses safe DOM methods instead of innerHTML
 
+// Player colors (must match Constants.ts PLAYER_COLORS)
+const PLAYER_COLORS = [
+  '#3b82f6', // blue
+  '#ef4444', // red
+  '#22c55e', // green
+  '#f59e0b', // amber
+  '#8b5cf6', // purple
+  '#ec4899', // pink
+  '#06b6d4', // cyan
+  '#f97316', // orange
+  '#84cc16', // lime
+  '#6366f1', // indigo
+];
+
+const STORAGE_KEY_NAME = 'orbit-royale-player-name';
+const STORAGE_KEY_COLOR = 'orbit-royale-player-color';
+
 export class Screens {
   private menuScreen: HTMLElement;
   private endScreen: HTMLElement;
@@ -13,11 +30,42 @@ export class Screens {
   private endKills: HTMLElement | null = null;
   private errorMessage: HTMLElement | null = null;
 
+  private selectedColorIndex: number = 0;
+  private colorSwatches: HTMLElement[] = [];
+
   constructor() {
+    // Load saved preferences
+    this.loadPreferences();
+
     this.menuScreen = this.createMenuScreen();
     this.endScreen = this.createEndScreen();
     this.connectingScreen = this.createConnectingScreen();
     this.errorScreen = this.createErrorScreen();
+  }
+
+  private loadPreferences(): void {
+    try {
+      const savedColor = localStorage.getItem(STORAGE_KEY_COLOR);
+      if (savedColor !== null) {
+        const colorIndex = parseInt(savedColor, 10);
+        if (!isNaN(colorIndex) && colorIndex >= 0 && colorIndex < PLAYER_COLORS.length) {
+          this.selectedColorIndex = colorIndex;
+        }
+      }
+    } catch {
+      // localStorage not available
+    }
+  }
+
+  private savePreferences(): void {
+    try {
+      if (this.playerNameInput?.value) {
+        localStorage.setItem(STORAGE_KEY_NAME, this.playerNameInput.value);
+      }
+      localStorage.setItem(STORAGE_KEY_COLOR, String(this.selectedColorIndex));
+    } catch {
+      // localStorage not available
+    }
   }
 
   private createElement<K extends keyof HTMLElementTagNameMap>(
@@ -56,8 +104,30 @@ export class Screens {
     nameInput.className = 'name-input';
     nameInput.placeholder = 'Enter your name';
     nameInput.maxLength = 16;
+    // Load saved name
+    try {
+      const savedName = localStorage.getItem(STORAGE_KEY_NAME);
+      if (savedName) nameInput.value = savedName;
+    } catch { /* localStorage not available */ }
     nameContainer.appendChild(nameInput);
     this.playerNameInput = nameInput;
+
+    // Color picker
+    const colorContainer = this.createElement('div', 'color-picker-container');
+    const colorLabel = this.createElement('span', 'color-label', 'COLOR');
+    colorContainer.appendChild(colorLabel);
+    const colorSwatchesContainer = this.createElement('div', 'color-swatches');
+    PLAYER_COLORS.forEach((color, index) => {
+      const swatch = this.createElement('div', 'color-swatch');
+      swatch.style.backgroundColor = color;
+      if (index === this.selectedColorIndex) {
+        swatch.classList.add('selected');
+      }
+      swatch.addEventListener('click', () => this.selectColor(index));
+      colorSwatchesContainer.appendChild(swatch);
+      this.colorSwatches.push(swatch);
+    });
+    colorContainer.appendChild(colorSwatchesContainer);
 
     // Play button
     const playBtn = this.createElement('button', 'btn-primary');
@@ -99,12 +169,21 @@ export class Screens {
 
     container.appendChild(titleSection);
     container.appendChild(nameContainer);
+    container.appendChild(colorContainer);
     container.appendChild(playBtn);
     container.appendChild(controlsPanel);
     container.appendChild(versionTag);
     screen.appendChild(container);
 
     return screen;
+  }
+
+  private selectColor(index: number): void {
+    // Remove selection from previous
+    this.colorSwatches[this.selectedColorIndex]?.classList.remove('selected');
+    // Add selection to new
+    this.selectedColorIndex = index;
+    this.colorSwatches[index]?.classList.add('selected');
   }
 
   private createEndScreen(): HTMLElement {
@@ -330,6 +409,45 @@ export class Screens {
         75% { transform: translateX(5px); }
       }
 
+      .color-picker-container {
+        display: flex;
+        align-items: center;
+        gap: 1rem;
+      }
+
+      .color-label {
+        font-family: 'Orbitron', sans-serif;
+        font-size: 0.75rem;
+        color: #606080;
+        letter-spacing: 0.15em;
+      }
+
+      .color-swatches {
+        display: flex;
+        gap: 0.5rem;
+      }
+
+      .color-swatch {
+        width: 28px;
+        height: 28px;
+        border-radius: 50%;
+        cursor: pointer;
+        border: 2px solid transparent;
+        transition: all 0.2s ease;
+        box-shadow: 0 2px 8px rgba(0, 0, 0, 0.3);
+      }
+
+      .color-swatch:hover {
+        transform: scale(1.15);
+        box-shadow: 0 0 12px currentColor;
+      }
+
+      .color-swatch.selected {
+        border-color: #fff;
+        box-shadow: 0 0 15px currentColor, 0 0 5px #fff;
+        transform: scale(1.1);
+      }
+
       .btn-primary {
         display: flex;
         align-items: center;
@@ -526,12 +644,32 @@ export class Screens {
   }
 
   getPlayerName(): string {
-    return this.playerNameInput?.value.trim() || '';
+    // Sanitize: trim, remove control characters, limit length
+    const raw = this.playerNameInput?.value || '';
+    return this.sanitizeName(raw);
+  }
+
+  private sanitizeName(name: string): string {
+    return name
+      .trim()
+      // Remove control characters and null bytes
+      .replace(/[\x00-\x1F\x7F]/g, '')
+      // Remove HTML-like tags
+      .replace(/<[^>]*>/g, '')
+      // Collapse multiple spaces
+      .replace(/\s+/g, ' ')
+      // Limit length
+      .slice(0, 16);
+  }
+
+  getSelectedColor(): number {
+    // Ensure color index is within valid range
+    return Math.max(0, Math.min(this.selectedColorIndex, PLAYER_COLORS.length - 1));
   }
 
   private validateName(): boolean {
     const name = this.getPlayerName();
-    if (!name) {
+    if (!name || name.length < 1) {
       this.playerNameInput?.classList.add('error');
       this.playerNameInput?.setAttribute('placeholder', 'Name required!');
       this.playerNameInput?.focus();
@@ -544,6 +682,8 @@ export class Screens {
       this.playerNameInput?.addEventListener('input', removeError);
       return false;
     }
+    // Save preferences when valid
+    this.savePreferences();
     return true;
   }
 

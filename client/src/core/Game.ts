@@ -70,7 +70,7 @@ export class Game {
   }
 
   // Start connecting and playing
-  async start(playerName: string): Promise<void> {
+  async start(playerName: string, colorIndex: number): Promise<void> {
     this.setPhase('connecting');
     this.inputSequence = 0;
 
@@ -81,6 +81,7 @@ export class Game {
       await this.transport.sendReliable({
         type: 'JoinRequest',
         playerName,
+        colorIndex,
       });
     } catch (err) {
       this.setPhase('disconnected');

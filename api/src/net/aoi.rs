@@ -232,6 +232,7 @@ mod tests {
             total_players: player_len,
             total_alive: player_len,
             density_grid: vec![],
+            notable_players: vec![],
         }
     }
 
@@ -282,6 +283,7 @@ mod tests {
             total_players: 3,
             total_alive: 3,
             density_grid: vec![],
+            notable_players: vec![],
         };
 
         let filtered = aoi.filter_for_player(player_id, player_pos, &snapshot);
@@ -321,6 +323,7 @@ mod tests {
             total_players: 3,
             total_alive: 3,
             density_grid: vec![],
+            notable_players: vec![],
         };
 
         let filtered = aoi.filter_for_player(player_id, player_pos, &snapshot);
@@ -360,6 +363,7 @@ mod tests {
             total_players: 1,
             total_alive: 1,
             density_grid: vec![],
+            notable_players: vec![],
         };
 
         let filtered = aoi.filter_for_player(player_id, player_pos, &snapshot);

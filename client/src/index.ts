@@ -72,21 +72,24 @@ window.addEventListener('resize', () => {
 // Handle play button click
 screens.onPlay(() => {
   const playerName = screens.getPlayerName();
-  game.start(playerName);
+  const colorIndex = screens.getSelectedColor();
+  game.start(playerName, colorIndex);
 });
 
 // Handle restart button click
 screens.onRestart(() => {
   screens.hideEnd();
   const playerName = screens.getPlayerName();
-  game.start(playerName);
+  const colorIndex = screens.getSelectedColor();
+  game.start(playerName, colorIndex);
 });
 
 // Handle retry button click
 screens.onRetry(() => {
   screens.hideError();
   const playerName = screens.getPlayerName();
-  game.start(playerName);
+  const colorIndex = screens.getSelectedColor();
+  game.start(playerName, colorIndex);
 });
 
 // Handle game end
@@ -117,7 +120,8 @@ window.addEventListener('keydown', (e) => {
   if (e.code === 'Space' && game.getPhase() === 'ended') {
     screens.hideEnd();
     const playerName = screens.getPlayerName();
-    game.start(playerName);
+    const colorIndex = screens.getSelectedColor();
+    game.start(playerName, colorIndex);
   }
 });
 

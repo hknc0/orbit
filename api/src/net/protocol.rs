@@ -7,7 +7,7 @@ use crate::util::vec2::Vec2;
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum ClientMessage {
     /// Request to join a game
-    JoinRequest { player_name: String },
+    JoinRequest { player_name: String, color_index: u8 },
     /// Player input for current tick
     Input(PlayerInput),
     /// Request to leave the game
@@ -374,12 +374,14 @@ mod tests {
     fn test_client_message_join() {
         let msg = ClientMessage::JoinRequest {
             player_name: "TestPlayer".to_string(),
+            color_index: 3,
         };
         let encoded = encode(&msg).unwrap();
         let decoded: ClientMessage = decode(&encoded).unwrap();
         match decoded {
-            ClientMessage::JoinRequest { player_name } => {
+            ClientMessage::JoinRequest { player_name, color_index } => {
                 assert_eq!(player_name, "TestPlayer");
+                assert_eq!(color_index, 3);
             }
             _ => panic!("Wrong message type"),
         }
@@ -463,6 +465,7 @@ mod tests {
             total_players: 1,
             total_alive: 1,
             density_grid: vec![0; 64],
+            notable_players: vec![],
         };
 
         let encoded = encode(&snapshot).unwrap();
@@ -775,6 +778,7 @@ mod encoding_tests {
             total_players: 1,
             total_alive: 1,
             density_grid: vec![],
+            notable_players: vec![],
         };
 
         let encoded = encode(&snapshot).unwrap();
