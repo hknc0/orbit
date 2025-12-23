@@ -1,0 +1,14 @@
+[package]
+name = "gen-dev-cert"
+version = "0.1.0"
+edition = "2021"
+
+[[bin]]
+name = "gen-dev-cert"
+path = "gen-dev-cert.rs"
+
+[dependencies]
+rcgen = "0.14"
+ring = "0.17"
+base64 = "0.22"
+pem = "3.0"

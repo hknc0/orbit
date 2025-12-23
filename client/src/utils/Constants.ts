@@ -1,0 +1,78 @@
+// Must match server constants from api/src/game/constants.rs
+
+export const PHYSICS = {
+  G: 6.67,
+  CENTRAL_MASS: 10_000,
+  DRAG: 0.002,
+  MAX_VELOCITY: 500,
+  TICK_RATE: 30,
+  DT: 1 / 30,
+} as const;
+
+export const MASS = {
+  STARTING: 100,
+  MINIMUM: 10,
+  ABSORPTION_CAP: 200,
+  ABSORPTION_RATE: 0.7,
+  RADIUS_SCALE: 2.0,
+} as const;
+
+export const BOOST = {
+  BASE_THRUST: 200,
+  BASE_COST: 2,
+  MASS_COST_RATIO: 0.01,
+} as const;
+
+export const EJECT = {
+  MIN_CHARGE_TIME: 0.2,
+  MAX_CHARGE_TIME: 1.0,
+  MIN_MASS: 10,
+  MAX_MASS_RATIO: 0.5,
+  MIN_VELOCITY: 100,
+  MAX_VELOCITY: 300,
+  LIFETIME: 8,
+} as const;
+
+export const ARENA = {
+  CORE_RADIUS: 50,
+  INNER_RADIUS: 200,
+  MIDDLE_RADIUS: 400,
+  OUTER_RADIUS: 600,
+  ESCAPE_RADIUS: 800,
+  COLLAPSE_INTERVAL: 30,
+  COLLAPSE_PHASES: 8,
+  COLLAPSE_DURATION: 3,
+} as const;
+
+export const SPAWN = {
+  PROTECTION_DURATION: 3,
+  ZONE_MIN: 250,
+  ZONE_MAX: 350,
+} as const;
+
+export const MATCH = {
+  DURATION: 300,
+  COUNTDOWN: 3,
+} as const;
+
+export const NETWORK = {
+  INTERPOLATION_DELAY_MS: 100,
+  SNAPSHOT_BUFFER_SIZE: 32,
+  INPUT_BUFFER_SIZE: 64,
+  RECONNECT_ATTEMPTS: 3,
+  PING_INTERVAL_MS: 1000,
+} as const;
+
+// Player colors matching server
+export const PLAYER_COLORS = [
+  '#3b82f6', // blue
+  '#ef4444', // red
+  '#22c55e', // green
+  '#f59e0b', // amber
+  '#8b5cf6', // purple
+  '#ec4899', // pink
+  '#06b6d4', // cyan
+  '#f97316', // orange
+  '#84cc16', // lime
+  '#6366f1', // indigo
+] as const;

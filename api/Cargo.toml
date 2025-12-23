@@ -1,0 +1,33 @@
+[package]
+name = "orbit-royale-server"
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.75"
+
+[dependencies]
+# Networking - WebTransport
+wtransport = "0.6.1"
+tokio = { version = "1.43", features = ["full"] }
+
+# Serialization (NOTE: bincode 2.0 has different API!)
+bincode = { version = "2.0.1", features = ["serde"] }
+serde = { version = "1.0", features = ["derive"] }
+
+# Utilities
+uuid = { version = "1.11", features = ["v4", "serde"] }
+rand = "0.8"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+dotenvy = "0.15"
+
+# TLS (required by wtransport)
+rcgen = "0.14"
+ring = "0.17"
+base64 = "0.22"
+
+# Error handling
+thiserror = "2.0"
+anyhow = "1.0"
+
+[dev-dependencies]
+tokio-test = "0.4"

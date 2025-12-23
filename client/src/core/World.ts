@@ -1,0 +1,341 @@
+// World state for multiplayer client
+// Stores interpolated server state and local player prediction
+
+import { ARENA, MASS, PLAYER_COLORS } from '@/utils/Constants';
+import type { PlayerId, MatchPhase } from '@/net/Protocol';
+import type { InterpolatedState, InterpolatedPlayer, InterpolatedProjectile, InterpolatedGravityWell } from '@/net/StateSync';
+
+// Arena state
+export interface ArenaState {
+  coreRadius: number;
+  innerRadius: number;
+  middleRadius: number;
+  outerRadius: number;
+  collapsePhase: number;
+  isCollapsing: boolean;
+  scale: number;
+  gravityWells: InterpolatedGravityWell[];
+}
+
+// Leaderboard entry
+export interface LeaderboardEntry {
+  id: PlayerId;
+  name: string;
+  mass: number;
+  kills: number;
+}
+
+// Kill effect duration in ms
+const KILL_EFFECT_DURATION = 1500;
+// Death effect duration in ms
+const DEATH_EFFECT_DURATION = 800;
+
+// Death effect data
+interface DeathEffect {
+  position: { x: number; y: number };
+  timestamp: number;
+  color: string;
+}
+
+export class World {
+  // Current interpolated state from server
+  private state: InterpolatedState | null = null;
+
+  // Local player info
+  localPlayerId: PlayerId | null = null;
+
+  // Arena state
+  arena: ArenaState = {
+    coreRadius: ARENA.CORE_RADIUS,
+    innerRadius: ARENA.INNER_RADIUS,
+    middleRadius: ARENA.MIDDLE_RADIUS,
+    outerRadius: ARENA.OUTER_RADIUS,
+    collapsePhase: 0,
+    isCollapsing: false,
+    scale: 1.0,
+    gravityWells: [],
+  };
+
+  // Player names (from join events)
+  private playerNames: Map<PlayerId, string> = new Map();
+
+  // Recent kills tracking (player id -> timestamp)
+  private recentKills: Map<PlayerId, number> = new Map();
+
+  // Previous kill counts to detect new kills
+  private lastKillCounts: Map<PlayerId, number> = new Map();
+
+  // Death effects (explosion at death location)
+  private deathEffects: DeathEffect[] = [];
+
+  // Previous alive states to detect deaths
+  private lastAliveStates: Map<PlayerId, { alive: boolean; position: { x: number; y: number }; color: string }> = new Map();
+
+  // Session stats tracking
+  private sessionStats = {
+    bestMass: 0,
+    killStreak: 0,
+    bestKillStreak: 0,
+    lastSpawnTime: Date.now(),
+    totalKills: 0,
+    totalDeaths: 0,
+    bestTimeAlive: 0,
+  };
+
+  // Update from interpolated server state
+  updateFromState(state: InterpolatedState): void {
+    const now = Date.now();
+
+    // Detect new kills and deaths before updating state
+    for (const [playerId, player] of state.players) {
+      // Detect kills
+      const lastKills = this.lastKillCounts.get(playerId) ?? 0;
+      if (player.kills > lastKills) {
+        // Player got a new kill - record timestamp
+        this.recentKills.set(playerId, now);
+
+        // Track local player kill streak
+        if (playerId === this.localPlayerId) {
+          const killsGained = player.kills - lastKills;
+          this.sessionStats.killStreak += killsGained;
+          this.sessionStats.totalKills += killsGained;
+          if (this.sessionStats.killStreak > this.sessionStats.bestKillStreak) {
+            this.sessionStats.bestKillStreak = this.sessionStats.killStreak;
+          }
+        }
+      }
+      this.lastKillCounts.set(playerId, player.kills);
+
+      // Detect deaths - player was alive, now dead
+      const lastState = this.lastAliveStates.get(playerId);
+      if (lastState && lastState.alive && !player.alive) {
+        // Player just died - create death effect at their last position
+        this.deathEffects.push({
+          position: { x: lastState.position.x, y: lastState.position.y },
+          timestamp: now,
+          color: lastState.color,
+        });
+
+        // Reset local player kill streak on death and track best time alive
+        if (playerId === this.localPlayerId) {
+          const timeAlive = now - this.sessionStats.lastSpawnTime;
+          if (timeAlive > this.sessionStats.bestTimeAlive) {
+            this.sessionStats.bestTimeAlive = timeAlive;
+          }
+          this.sessionStats.killStreak = 0;
+          this.sessionStats.totalDeaths++;
+        }
+      }
+
+      // Detect respawn - player was dead, now alive
+      if (lastState && !lastState.alive && player.alive && playerId === this.localPlayerId) {
+        this.sessionStats.lastSpawnTime = now;
+      }
+
+      // Update last alive state for next comparison
+      this.lastAliveStates.set(playerId, {
+        alive: player.alive,
+        position: { x: player.position.x, y: player.position.y },
+        color: this.getPlayerColor(player.colorIndex),
+      });
+
+      // Track best mass for local player
+      if (playerId === this.localPlayerId && player.alive) {
+        if (player.mass > this.sessionStats.bestMass) {
+          this.sessionStats.bestMass = player.mass;
+        }
+      }
+    }
+
+    // Clean up old kill effects
+    for (const [playerId, timestamp] of this.recentKills) {
+      if (now - timestamp > KILL_EFFECT_DURATION) {
+        this.recentKills.delete(playerId);
+      }
+    }
+
+    // Clean up old death effects
+    this.deathEffects = this.deathEffects.filter(
+      (effect) => now - effect.timestamp < DEATH_EFFECT_DURATION
+    );
+
+    this.state = state;
+
+    // Update arena
+    this.arena.collapsePhase = state.arenaCollapsePhase;
+    this.arena.scale = state.arenaScale;
+    this.arena.gravityWells = state.gravityWells;
+    // Calculate radii based on collapse phase
+    const collapseRatio = state.arenaCollapsePhase / ARENA.COLLAPSE_PHASES;
+    this.arena.coreRadius = ARENA.CORE_RADIUS + (ARENA.OUTER_RADIUS - ARENA.CORE_RADIUS) * collapseRatio * 0.5;
+  }
+
+  // Set player name (from events)
+  setPlayerName(playerId: PlayerId, name: string): void {
+    this.playerNames.set(playerId, name);
+  }
+
+  // Get all players
+  getPlayers(): Map<PlayerId, InterpolatedPlayer> {
+    return this.state?.players ?? new Map();
+  }
+
+  // Get a specific player
+  getPlayer(id: PlayerId): InterpolatedPlayer | undefined {
+    return this.state?.players.get(id);
+  }
+
+  // Get local player
+  getLocalPlayer(): InterpolatedPlayer | undefined {
+    if (!this.localPlayerId) return undefined;
+    return this.state?.players.get(this.localPlayerId);
+  }
+
+  // Get all projectiles
+  getProjectiles(): Map<number, InterpolatedProjectile> {
+    return this.state?.projectiles ?? new Map();
+  }
+
+  // Get match phase
+  getMatchPhase(): MatchPhase {
+    return this.state?.matchPhase ?? 'waiting';
+  }
+
+  // Get match time
+  getMatchTime(): number {
+    return this.state?.matchTime ?? 0;
+  }
+
+  // Get countdown time
+  getCountdown(): number {
+    return this.state?.countdown ?? 0;
+  }
+
+  // Get current tick
+  getTick(): number {
+    return this.state?.tick ?? 0;
+  }
+
+  // Get arena safe radius
+  getArenaSafeRadius(): number {
+    return this.state?.arenaSafeRadius ?? ARENA.OUTER_RADIUS;
+  }
+
+  // Calculate radius from mass
+  massToRadius(mass: number): number {
+    return Math.sqrt(mass) * MASS.RADIUS_SCALE;
+  }
+
+  // Get player color
+  getPlayerColor(colorIndex: number): string {
+    return PLAYER_COLORS[colorIndex % PLAYER_COLORS.length];
+  }
+
+  // Get player name
+  getPlayerName(playerId: PlayerId): string {
+    // Get name from player snapshot
+    const player = this.getPlayer(playerId);
+    if (player?.name) return player.name;
+
+    // Fallback to cached names
+    const cachedName = this.playerNames.get(playerId);
+    if (cachedName) return cachedName;
+
+    return `Player ${playerId.substring(0, 4)}`;
+  }
+
+  // Get alive player count
+  getAlivePlayerCount(): number {
+    let count = 0;
+    for (const player of this.getPlayers().values()) {
+      if (player.alive) count++;
+    }
+    return count;
+  }
+
+  // Get player placement (rank by mass)
+  getPlayerPlacement(playerId: PlayerId): number {
+    const players = Array.from(this.getPlayers().values())
+      .filter((p) => p.alive)
+      .sort((a, b) => b.mass - a.mass);
+
+    const index = players.findIndex((p) => p.id === playerId);
+    return index >= 0 ? index + 1 : players.length + 1;
+  }
+
+  // Get leaderboard
+  getLeaderboard(): LeaderboardEntry[] {
+    return Array.from(this.getPlayers().values())
+      .filter((p) => p.alive)
+      .map((p) => ({
+        id: p.id,
+        name: this.getPlayerName(p.id),
+        mass: p.mass,
+        kills: p.kills,
+      }))
+      .sort((a, b) => b.mass - a.mass);
+  }
+
+  // Check if local player is alive
+  isLocalPlayerAlive(): boolean {
+    const player = this.getLocalPlayer();
+    return player?.alive ?? false;
+  }
+
+  // Get kill effect progress (0-1, 1 = just killed, 0 = effect ended)
+  getKillEffectProgress(playerId: PlayerId): number {
+    const timestamp = this.recentKills.get(playerId);
+    if (!timestamp) return 0;
+    const elapsed = Date.now() - timestamp;
+    if (elapsed >= KILL_EFFECT_DURATION) return 0;
+    return 1 - elapsed / KILL_EFFECT_DURATION;
+  }
+
+  // Get active death effects for rendering
+  getDeathEffects(): Array<{ position: { x: number; y: number }; progress: number; color: string }> {
+    const now = Date.now();
+    return this.deathEffects.map((effect) => ({
+      position: effect.position,
+      progress: 1 - (now - effect.timestamp) / DEATH_EFFECT_DURATION,
+      color: effect.color,
+    }));
+  }
+
+  // Get session stats for HUD
+  getSessionStats() {
+    return {
+      ...this.sessionStats,
+      timeAlive: this.isLocalPlayerAlive() ? Date.now() - this.sessionStats.lastSpawnTime : 0,
+    };
+  }
+
+  // Reset world state
+  reset(): void {
+    this.state = null;
+    this.localPlayerId = null;
+    this.playerNames.clear();
+    this.recentKills.clear();
+    this.lastKillCounts.clear();
+    this.deathEffects = [];
+    this.lastAliveStates.clear();
+    this.sessionStats = {
+      bestMass: 0,
+      killStreak: 0,
+      bestKillStreak: 0,
+      lastSpawnTime: Date.now(),
+      totalKills: 0,
+      totalDeaths: 0,
+      bestTimeAlive: 0,
+    };
+    this.arena = {
+      coreRadius: ARENA.CORE_RADIUS,
+      innerRadius: ARENA.INNER_RADIUS,
+      middleRadius: ARENA.MIDDLE_RADIUS,
+      outerRadius: ARENA.OUTER_RADIUS,
+      collapsePhase: 0,
+      isCollapsing: false,
+      scale: 1.0,
+      gravityWells: [],
+    };
+  }
+}

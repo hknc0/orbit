@@ -1,0 +1,83 @@
+mod anticheat;
+mod config;
+mod game;
+mod lobby;
+mod net;
+mod util;
+
+use std::sync::Arc;
+use tokio::sync::RwLock;
+use tracing::{error, info, Level};
+
+use crate::anticheat::sanctions::BanList;
+use crate::config::ServerConfig;
+use crate::lobby::manager::LobbyManager;
+use crate::net::transport::WebTransportServer;
+
+#[tokio::main]
+async fn main() -> anyhow::Result<()> {
+    // Load .env file if present
+    dotenvy::dotenv().ok();
+
+    // Initialize logging
+    tracing_subscriber::fmt()
+        .with_max_level(Level::INFO)
+        .with_target(false)
+        .init();
+
+    info!(
+        "Orbit Royale Server v{}",
+        env!("CARGO_PKG_VERSION")
+    );
+
+    // Load configuration
+    let config = ServerConfig::load_or_default();
+    info!(
+        "Configuration loaded: {}:{}, max_rooms={}",
+        config.bind_address, config.port, config.max_rooms
+    );
+
+    // Initialize shared state
+    let lobby_manager = Arc::new(RwLock::new(LobbyManager::new(config.max_rooms)));
+    let ban_list = Arc::new(RwLock::new(BanList::new()));
+
+    // Create WebTransport server
+    let server = WebTransportServer::new(config.clone(), lobby_manager.clone(), ban_list.clone())
+        .await?;
+
+    info!(
+        "Server ready on https://{}:{}",
+        config.bind_address, config.port
+    );
+    info!("Certificate hash: {}", server.cert_hash());
+    info!(
+        "Chrome flag: --ignore-certificate-errors-spki-list={}",
+        server.cert_hash()
+    );
+
+    // Shutdown signal handler
+    let shutdown = async {
+        tokio::signal::ctrl_c()
+            .await
+            .expect("Failed to install Ctrl+C handler");
+        info!("Shutdown signal received");
+    };
+
+    // Run server with graceful shutdown
+    tokio::select! {
+        result = server.run() => {
+            if let Err(e) = result {
+                error!("Server error: {}", e);
+            }
+        }
+        _ = shutdown => {
+            info!("Shutting down...");
+        }
+    }
+
+    // Cleanup
+    lobby_manager.write().await.shutdown_all_rooms().await;
+    info!("Server stopped");
+
+    Ok(())
+}
