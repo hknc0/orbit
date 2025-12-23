@@ -996,19 +996,21 @@ export class RenderSystem {
     const baseScale = (minimapSize / 2 - 4) / safeRadius;
     const scale = baseScale * this.minimapZoom;
 
-    // Always center on local player
+    // Get local player for centering when zoomed
     const localPlayer = world.getLocalPlayer();
-    let worldOffsetX = 0;
-    let worldOffsetY = 0;
-    if (localPlayer) {
-      worldOffsetX = -localPlayer.position.x * scale;
-      worldOffsetY = -localPlayer.position.y * scale;
+
+    // When zoomed in (>1x), center on local player; otherwise center on arena origin
+    let viewCenterWorldX = 0;
+    let viewCenterWorldY = 0;
+    if (this.minimapZoom > 1 && localPlayer) {
+      viewCenterWorldX = localPlayer.position.x;
+      viewCenterWorldY = localPlayer.position.y;
     }
 
     // Helper to convert world position to minimap position
     const worldToMinimap = (worldX: number, worldY: number) => ({
-      x: minimapCenterX + worldX * scale + worldOffsetX,
-      y: minimapCenterY + worldY * scale + worldOffsetY,
+      x: minimapCenterX + (worldX - viewCenterWorldX) * scale,
+      y: minimapCenterY + (worldY - viewCenterWorldY) * scale,
     });
 
     // For backward compatibility, keep centerX/centerY as minimap center
@@ -1039,8 +1041,8 @@ export class RenderSystem {
     const gridLength = densityGrid.length;
     if (gridLength === 64 || gridLength === 256) {
       const GRID_SIZE = Math.sqrt(gridLength);
-      // Grid covers the full arena from -OUTER_RADIUS to +OUTER_RADIUS
-      const gridRadius = ARENA.OUTER_RADIUS;
+      // Grid covers the full arena from -ESCAPE_RADIUS to +ESCAPE_RADIUS (server uses escape_radius)
+      const gridRadius = ARENA.ESCAPE_RADIUS;
       const cellWorldSize = (gridRadius * 2) / GRID_SIZE;
 
       // Find max density for normalization (use percentile to avoid single hotspots dominating)
@@ -1203,8 +1205,9 @@ export class RenderSystem {
     // 2. Local player - VERY prominent, always on top (show even when dead)
     // Note: localPlayer already defined above
     if (localPlayer) {
-      // Local player is always at center since we offset by their position
-      const pos = { x: centerX, y: centerY };
+      // When zoomed in, local player is at center; otherwise use world position
+      const localWorldPos = worldToMinimap(localPlayer.position.x, localPlayer.position.y);
+      const pos = clampToMinimap(localWorldPos.x, localWorldPos.y);
 
       if (localPlayer.alive) {
         // Alive: Bright LIME GREEN indicator (contrasts with orange heatmap)
