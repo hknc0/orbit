@@ -16,7 +16,6 @@ interface InputState {
 interface RenderState {
   phase: GamePhase;
   matchTime: number;
-  countdownTime: number;
   input?: InputState;
   rtt: number;
   connectionState: ConnectionState;
@@ -177,7 +176,7 @@ export class RenderSystem {
     this.renderPlayers(world, state.input?.isBoosting ?? false);
 
     // Render aim indicator
-    if (state.input && (state.phase === 'playing' || state.phase === 'countdown')) {
+    if (state.input && state.phase === 'playing') {
       this.renderAimIndicator(world, state.input);
     }
 
@@ -189,11 +188,6 @@ export class RenderSystem {
     // Render charge indicator
     if (state.input?.isCharging && state.phase === 'playing') {
       this.renderChargeIndicator(state.input.chargeRatio);
-    }
-
-    // Render countdown
-    if (state.phase === 'countdown') {
-      this.renderCountdown(state.countdownTime);
     }
 
     // Render connection status
@@ -1417,22 +1411,6 @@ export class RenderSystem {
     ctx.fillStyle = color;
     ctx.fillText(text, x, y);
     ctx.restore();
-  }
-
-  private renderCountdown(time: number): void {
-    const count = Math.ceil(time);
-    if (count <= 0) return; // Skip "GO!" screen
-
-    const canvas = this.ctx.canvas;
-
-    this.ctx.fillStyle = 'rgba(0, 0, 0, 0.5)';
-    this.ctx.fillRect(0, 0, canvas.width, canvas.height);
-
-    this.ctx.fillStyle = '#ffffff';
-    this.ctx.font = 'bold 120px Inter, system-ui, sans-serif';
-    this.ctx.textAlign = 'center';
-    this.ctx.textBaseline = 'middle';
-    this.ctx.fillText(count.toString(), Math.round(canvas.width / 2), Math.round(canvas.height / 2));
   }
 
   private renderConnectionStatus(state: RenderState): void {

@@ -156,7 +156,6 @@ export class Game {
     this.renderSystem.render(this.world, {
       phase: this.phase,
       matchTime: this.world.getMatchTime(),
-      countdownTime: this.world.getCountdown(),
       input: {
         aimDirection: this.inputSystem.getAimDirection(),
         chargeRatio: this.inputSystem.getChargeRatio(),

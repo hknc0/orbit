@@ -229,11 +229,6 @@ export class World {
     return this.state?.matchTime ?? 0;
   }
 
-  // Get countdown time
-  getCountdown(): number {
-    return this.state?.countdown ?? 0;
-  }
-
   // Get current tick
   getTick(): number {
     return this.state?.tick ?? 0;
