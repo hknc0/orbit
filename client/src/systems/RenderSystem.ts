@@ -1420,8 +1420,10 @@ export class RenderSystem {
   }
 
   private renderCountdown(time: number): void {
-    const canvas = this.ctx.canvas;
     const count = Math.ceil(time);
+    if (count <= 0) return; // Skip "GO!" screen
+
+    const canvas = this.ctx.canvas;
 
     this.ctx.fillStyle = 'rgba(0, 0, 0, 0.5)';
     this.ctx.fillRect(0, 0, canvas.width, canvas.height);
@@ -1430,7 +1432,7 @@ export class RenderSystem {
     this.ctx.font = 'bold 120px Inter, system-ui, sans-serif';
     this.ctx.textAlign = 'center';
     this.ctx.textBaseline = 'middle';
-    this.ctx.fillText(count > 0 ? count.toString() : 'GO!', Math.round(canvas.width / 2), Math.round(canvas.height / 2));
+    this.ctx.fillText(count.toString(), Math.round(canvas.width / 2), Math.round(canvas.height / 2));
   }
 
   private renderConnectionStatus(state: RenderState): void {
