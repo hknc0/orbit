@@ -33,6 +33,7 @@ export class RenderSystem {
   private cameraOffset: Vec2 = new Vec2();
   private targetCameraOffset: Vec2 = new Vec2();
   private cameraInitialized: boolean = false;
+  private gameStartTime: number = 0;
   private readonly CAMERA_SMOOTHING = 0.1;
   private _densityLogged = false; // Debug flag
 
@@ -162,6 +163,7 @@ export class RenderSystem {
       if (!this.cameraInitialized) {
         this.cameraOffset.copy(this.targetCameraOffset);
         this.cameraInitialized = true;
+        this.gameStartTime = Date.now();
       }
 
       // Calculate dynamic zoom based on speed
@@ -969,28 +971,41 @@ export class RenderSystem {
       }
     }
 
-    // === CONTROLS HINT (Pill background) ===
-    const controlsText = 'WASD/Arrows: Move  •  LMB/Shift: Boost  •  SPACE: Eject';
-    this.ctx.font = '10px Inter, system-ui, sans-serif';
-    const textWidth = this.ctx.measureText(controlsText).width;
-    const pillW = textWidth + 24;
-    const pillH = 22;
-    const pillX = Math.round((canvas.width - pillW) / 2);
-    const pillY = Math.round(canvas.height - padding - pillH - 2);
+    // === CONTROLS HINT (fades out after 10 seconds) ===
+    const hintDuration = 10000; // Show for 10 seconds
+    const hintFadeDuration = 2000; // Fade over 2 seconds
+    const timeSinceStart = Date.now() - this.gameStartTime;
 
-    // Pill background
-    this.ctx.fillStyle = 'rgba(15, 23, 42, 0.75)';
-    this.ctx.beginPath();
-    this.ctx.roundRect(pillX, pillY, pillW, pillH, pillH / 2);
-    this.ctx.fill();
-    this.ctx.strokeStyle = 'rgba(100, 150, 255, 0.15)';
-    this.ctx.lineWidth = 1;
-    this.ctx.stroke();
+    if (this.gameStartTime > 0 && timeSinceStart < hintDuration + hintFadeDuration) {
+      let hintAlpha = 1;
+      if (timeSinceStart > hintDuration) {
+        hintAlpha = 1 - (timeSinceStart - hintDuration) / hintFadeDuration;
+      }
 
-    // Text
-    this.ctx.fillStyle = '#64748b';
-    this.ctx.textAlign = 'center';
-    this.ctx.fillText(controlsText, Math.round(canvas.width / 2), pillY + 15);
+      const controlsText = 'WASD/Arrows: Move  •  LMB/Shift: Boost  •  SPACE: Eject';
+      this.ctx.font = '10px Inter, system-ui, sans-serif';
+      const textWidth = this.ctx.measureText(controlsText).width;
+      const pillW = textWidth + 24;
+      const pillH = 22;
+      const pillX = Math.round((canvas.width - pillW) / 2);
+      const pillY = Math.round(canvas.height - padding - pillH - 2);
+
+      // Pill background
+      this.ctx.globalAlpha = hintAlpha;
+      this.ctx.fillStyle = 'rgba(15, 23, 42, 0.75)';
+      this.ctx.beginPath();
+      this.ctx.roundRect(pillX, pillY, pillW, pillH, pillH / 2);
+      this.ctx.fill();
+      this.ctx.strokeStyle = 'rgba(100, 150, 255, 0.15)';
+      this.ctx.lineWidth = 1;
+      this.ctx.stroke();
+
+      // Text
+      this.ctx.fillStyle = '#64748b';
+      this.ctx.textAlign = 'center';
+      this.ctx.fillText(controlsText, Math.round(canvas.width / 2), pillY + 15);
+      this.ctx.globalAlpha = 1;
+    }
 
     // === EDGE INDICATORS FOR NEAREST GRAVITY WELLS ===
     if (localPlayer && localPlayer.alive && world.arena.gravityWells.length > 0) {
