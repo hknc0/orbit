@@ -259,4 +259,8 @@ export class InputSystem {
   isBoosting(): boolean {
     return this.isBoostHeld;
   }
+
+  getMousePos(): { x: number; y: number } {
+    return { x: this.mousePos.x, y: this.mousePos.y };
+  }
 }

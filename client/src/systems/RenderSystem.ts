@@ -19,6 +19,7 @@ interface RenderState {
   input?: InputState;
   rtt: number;
   connectionState: ConnectionState;
+  mousePos?: { x: number; y: number };
 }
 
 // Trail point for local player
@@ -53,6 +54,22 @@ export class RenderSystem {
   private readonly TRAIL_MAX_LENGTH = 30;
   private readonly TRAIL_POINT_LIFETIME = 400; // ms
   private readonly TRAIL_MIN_DISTANCE = 8; // minimum distance between trail points
+
+  // Minimap state for hover detection and animation
+  private minimapHovered: boolean = false;
+  private minimapHoverProgress: number = 0; // 0-1 for smooth animation
+  private minimapLastHoverTime: number = 0;
+  private minimapMousePos: { x: number; y: number } | null = null;
+
+  // Minimap sizing constants
+  private readonly MINIMAP_MIN_SIZE = 100;
+  private readonly MINIMAP_MAX_SIZE = 160;
+  private readonly MINIMAP_EXPAND_RATIO = 2.0;
+  private readonly MINIMAP_HOVER_TRANSITION_MS = 200;
+  private readonly MINIMAP_UNHOVER_DELAY_MS = 300;
+
+  // Player-centered view radius (in world units)
+  private readonly MINIMAP_TACTICAL_RADIUS = 800;
 
   constructor(ctx: CanvasRenderingContext2D) {
     this.ctx = ctx;
@@ -800,7 +817,7 @@ export class RenderSystem {
     }
   }
 
-  private renderHUD(world: World, _state: RenderState): void {
+  private renderHUD(world: World, state: RenderState): void {
     const canvas = this.ctx.canvas;
     const padding = 16;
     const localPlayer = world.getLocalPlayer();
@@ -1211,309 +1228,437 @@ export class RenderSystem {
     }
 
     // === MINIMAP ===
-    this.renderMinimap(world, canvas, padding);
+    this.renderMinimap(world, canvas, padding, state);
   }
 
-  private renderMinimap(world: World, canvas: HTMLCanvasElement, padding: number): void {
-    const minimapSize = 120;
+  private renderMinimap(world: World, canvas: HTMLCanvasElement, padding: number, state: RenderState): void {
+    const localPlayer = world.getLocalPlayer();
+    if (!localPlayer) return;
+
+    // === UPDATE MOUSE POSITION FOR HOVER ===
+    this.minimapMousePos = state.mousePos || null;
+
+    // === SIZE CALCULATIONS ===
+    const baseSize = this.getMinimapSize(canvas.width);
+
+    // Update hover animation
+    const now = Date.now();
+    const isHovering = this.isMouseOverMinimap(canvas, padding, baseSize);
+
+    if (isHovering) {
+      this.minimapLastHoverTime = now;
+      this.minimapHovered = true;
+    } else if (this.minimapHovered && now - this.minimapLastHoverTime > this.MINIMAP_UNHOVER_DELAY_MS) {
+      this.minimapHovered = false;
+    }
+
+    // Smooth animation (approximately per frame at 60fps)
+    const targetProgress = this.minimapHovered ? 1 : 0;
+    const progressSpeed = 16 / this.MINIMAP_HOVER_TRANSITION_MS;
+    if (this.minimapHoverProgress < targetProgress) {
+      this.minimapHoverProgress = Math.min(1, this.minimapHoverProgress + progressSpeed);
+    } else if (this.minimapHoverProgress > targetProgress) {
+      this.minimapHoverProgress = Math.max(0, this.minimapHoverProgress - progressSpeed);
+    }
+
+    // Ease-out for smooth feel
+    const easedProgress = 1 - Math.pow(1 - this.minimapHoverProgress, 2);
+    const expandedSize = baseSize * this.MINIMAP_EXPAND_RATIO;
+    const minimapSize = baseSize + (expandedSize - baseSize) * easedProgress;
+
+    // === POSITION CALCULATIONS ===
     const minimapX = canvas.width - padding - minimapSize;
     const minimapY = canvas.height - padding - minimapSize;
     const centerX = minimapX + minimapSize / 2;
     const centerY = minimapY + minimapSize / 2;
-    const safeRadius = world.getArenaSafeRadius();
-    const scale = (minimapSize / 2 - 4) / safeRadius;
 
-    // Minimap background
-    this.ctx.fillStyle = 'rgba(15, 23, 42, 0.85)';
+    // === DUAL-LAYER SETUP ===
+    const safeRadius = world.getArenaSafeRadius();
+    const innerRadius = minimapSize / 2 * 0.65;  // Inner tactical view (65%)
+    const outerRadius = minimapSize / 2 - 2;     // Outer arena view
+
+    // Scale for player-centered inner view
+    const tacticalScale = innerRadius / this.MINIMAP_TACTICAL_RADIUS;
+
+    // === BACKGROUND ===
+    this.ctx.fillStyle = 'rgba(15, 23, 42, 0.9)';
     this.ctx.beginPath();
     this.ctx.arc(centerX, centerY, minimapSize / 2, 0, Math.PI * 2);
     this.ctx.fill();
 
-    // Border
-    this.ctx.strokeStyle = 'rgba(100, 116, 139, 0.4)';
+    // Outer border
+    this.ctx.strokeStyle = 'rgba(100, 116, 139, 0.5)';
     this.ctx.lineWidth = 1;
-    this.ctx.stroke();
-
-    // Safe zone boundary on minimap
-    this.ctx.strokeStyle = 'rgba(80, 80, 120, 0.5)';
     this.ctx.beginPath();
-    this.ctx.arc(centerX, centerY, safeRadius * scale, 0, Math.PI * 2);
+    this.ctx.arc(centerX, centerY, outerRadius, 0, Math.PI * 2);
     this.ctx.stroke();
 
-    // 1. Density heatmap (16x16 grid showing player concentrations)
-    const densityGrid = world.getDensityGrid();
-    // Support both 8x8 (64) and 16x16 (256) grids
-    const gridLength = densityGrid.length;
-    if (gridLength === 64 || gridLength === 256) {
-      const GRID_SIZE = Math.sqrt(gridLength);
-      const gridPixelSize = minimapSize - 8;
-      const cellPixelSize = gridPixelSize / GRID_SIZE;
+    // Inner/outer divider
+    this.ctx.strokeStyle = 'rgba(100, 116, 139, 0.3)';
+    this.ctx.beginPath();
+    this.ctx.arc(centerX, centerY, innerRadius, 0, Math.PI * 2);
+    this.ctx.stroke();
 
-      // Find max density for normalization (use percentile to avoid single hotspots dominating)
+    // === OUTER RING - Arena overview ===
+    this.ctx.save();
+    // Clip to ring shape
+    this.ctx.beginPath();
+    this.ctx.arc(centerX, centerY, outerRadius, 0, Math.PI * 2);
+    this.ctx.arc(centerX, centerY, innerRadius, 0, Math.PI * 2, true);
+    this.ctx.clip();
+
+    // Show danger when near arena edge
+    const playerDist = Math.sqrt(localPlayer.position.x ** 2 + localPlayer.position.y ** 2);
+    const normalizedDist = Math.min(playerDist / safeRadius, 1);
+    if (normalizedDist > 0.7) {
+      const dangerAlpha = (normalizedDist - 0.7) / 0.3 * 0.3;
+      this.ctx.fillStyle = `rgba(239, 68, 68, ${dangerAlpha})`;
+      this.ctx.beginPath();
+      this.ctx.arc(centerX, centerY, outerRadius, 0, Math.PI * 2);
+      this.ctx.arc(centerX, centerY, innerRadius, 0, Math.PI * 2, true);
+      this.ctx.fill();
+    }
+
+    // Arena boundary indicator - dashed circle
+    const ringMidRadius = innerRadius + (outerRadius - innerRadius) * 0.5;
+    this.ctx.strokeStyle = 'rgba(239, 68, 68, 0.4)';
+    this.ctx.lineWidth = 1;
+    this.ctx.setLineDash([3, 3]);
+    this.ctx.beginPath();
+    this.ctx.arc(centerX, centerY, ringMidRadius, 0, Math.PI * 2);
+    this.ctx.stroke();
+    this.ctx.setLineDash([]);
+
+    // Notable players in outer ring (arena-centered positions)
+    const notablePlayers = world.getNotablePlayers();
+    const visiblePlayerIds = new Set(world.getPlayers().keys());
+
+    for (const notable of notablePlayers) {
+      if (visiblePlayerIds.has(notable.id) || notable.id === world.localPlayerId) continue;
+
+      const angle = Math.atan2(notable.position.y, notable.position.x);
+      const dist = Math.sqrt(notable.position.x ** 2 + notable.position.y ** 2);
+      const normDist = Math.min(dist / safeRadius, 1);
+
+      // Position on ring
+      const ringRadius = innerRadius + (outerRadius - innerRadius) * (0.3 + normDist * 0.4);
+      const mapX = centerX + Math.cos(angle) * ringRadius;
+      const mapY = centerY + Math.sin(angle) * ringRadius;
+
+      // Threat coloring
+      const threatColor = this.getThreatColor(notable.mass, localPlayer.mass);
+
+      // Pulsing size
+      const massRatio = Math.min(notable.mass / 200, 1);
+      const dotSize = 2 + massRatio * 2;
+      const pulse = 1 + 0.15 * Math.sin(now / 400);
+
+      // Glow ring
+      this.ctx.strokeStyle = threatColor;
+      this.ctx.lineWidth = 1;
+      this.ctx.globalAlpha = 0.4;
+      this.ctx.beginPath();
+      this.ctx.arc(mapX, mapY, (dotSize + 2) * pulse, 0, Math.PI * 2);
+      this.ctx.stroke();
+      this.ctx.globalAlpha = 1;
+
+      // Fill
+      this.ctx.fillStyle = threatColor;
+      this.ctx.beginPath();
+      this.ctx.arc(mapX, mapY, dotSize, 0, Math.PI * 2);
+      this.ctx.fill();
+    }
+
+    this.ctx.restore();
+
+    // === INNER CIRCLE - Player-centered tactical view ===
+    this.ctx.save();
+    this.ctx.beginPath();
+    this.ctx.arc(centerX, centerY, innerRadius - 1, 0, Math.PI * 2);
+    this.ctx.clip();
+
+    // Render density heatmap centered on player
+    const densityGrid = world.getDensityGrid();
+    if (densityGrid.length === 256) {
+      const GRID_SIZE = 16;
+      const cellWorldSize = (safeRadius * 2) / GRID_SIZE;
+
       const sortedDensities = densityGrid.filter(d => d > 0).sort((a, b) => b - a);
       const maxDensity = sortedDensities.length > 0
         ? Math.max(sortedDensities[Math.floor(sortedDensities.length * 0.1)] || sortedDensities[0], 1)
         : 1;
 
-      // Save context for clipping
-      this.ctx.save();
-      this.ctx.beginPath();
-      this.ctx.arc(centerX, centerY, minimapSize / 2 - 2, 0, Math.PI * 2);
-      this.ctx.clip();
-
-      // Render with radial gradients for smoother appearance
       for (let gy = 0; gy < GRID_SIZE; gy++) {
         for (let gx = 0; gx < GRID_SIZE; gx++) {
           const idx = gy * GRID_SIZE + gx;
           const density = densityGrid[idx];
+          if (density <= 0) continue;
 
-          if (density > 0) {
-            // Cell center position on minimap
-            const cellCenterX = centerX - gridPixelSize / 2 + (gx + 0.5) * cellPixelSize;
-            const cellCenterY = centerY - gridPixelSize / 2 + (gy + 0.5) * cellPixelSize;
+          // Cell center in world coordinates
+          const worldX = -safeRadius + (gx + 0.5) * cellWorldSize;
+          const worldY = -safeRadius + (gy + 0.5) * cellWorldSize;
 
-            // Intensity with log scale for better distribution
-            const rawIntensity = Math.min(density / maxDensity, 1);
-            const intensity = Math.pow(rawIntensity, 0.6); // Gamma for visibility
+          // Relative to player
+          const relX = worldX - localPlayer.position.x;
+          const relY = worldY - localPlayer.position.y;
 
-            // Hot color scheme: low=blue, mid=cyan, high=yellow/orange
-            let r: number, g: number, b: number;
-            if (intensity < 0.5) {
-              // Blue to cyan
-              const t = intensity * 2;
-              r = Math.floor(30 * t);
-              g = Math.floor(100 + 155 * t);
-              b = Math.floor(200 - 50 * t);
-            } else {
-              // Cyan to orange/yellow
-              const t = (intensity - 0.5) * 2;
-              r = Math.floor(30 + 225 * t);
-              g = Math.floor(255 - 55 * t);
-              b = Math.floor(150 - 130 * t);
-            }
+          // Skip if outside tactical range
+          const dist = Math.sqrt(relX * relX + relY * relY);
+          if (dist > this.MINIMAP_TACTICAL_RADIUS * 1.5) continue;
 
-            // Radial gradient for soft blob effect
-            const blobRadius = cellPixelSize * 1.2;
-            const gradient = this.ctx.createRadialGradient(
-              cellCenterX, cellCenterY, 0,
-              cellCenterX, cellCenterY, blobRadius
-            );
+          // Position on minimap
+          const mapX = centerX + relX * tacticalScale;
+          const mapY = centerY + relY * tacticalScale;
 
-            const alpha = 0.15 + intensity * 0.4;
-            gradient.addColorStop(0, `rgba(${r}, ${g}, ${b}, ${alpha})`);
-            gradient.addColorStop(0.6, `rgba(${r}, ${g}, ${b}, ${alpha * 0.5})`);
-            gradient.addColorStop(1, `rgba(${r}, ${g}, ${b}, 0)`);
+          // Intensity with gamma
+          const rawIntensity = Math.min(density / maxDensity, 1);
+          const intensity = Math.pow(rawIntensity, 0.6);
 
-            this.ctx.fillStyle = gradient;
-            this.ctx.beginPath();
-            this.ctx.arc(cellCenterX, cellCenterY, blobRadius, 0, Math.PI * 2);
-            this.ctx.fill();
+          // Color (cyan to orange heat)
+          let r: number, g: number, b: number;
+          if (intensity < 0.5) {
+            const t = intensity * 2;
+            r = Math.floor(30 * t);
+            g = Math.floor(100 + 155 * t);
+            b = Math.floor(200 - 50 * t);
+          } else {
+            const t = (intensity - 0.5) * 2;
+            r = Math.floor(30 + 225 * t);
+            g = Math.floor(255 - 55 * t);
+            b = Math.floor(150 - 130 * t);
           }
+
+          const blobRadius = cellWorldSize * tacticalScale * 1.2;
+          const alpha = 0.15 + intensity * 0.4;
+
+          const gradient = this.ctx.createRadialGradient(mapX, mapY, 0, mapX, mapY, blobRadius);
+          gradient.addColorStop(0, `rgba(${r}, ${g}, ${b}, ${alpha})`);
+          gradient.addColorStop(0.6, `rgba(${r}, ${g}, ${b}, ${alpha * 0.5})`);
+          gradient.addColorStop(1, `rgba(${r}, ${g}, ${b}, 0)`);
+
+          this.ctx.fillStyle = gradient;
+          this.ctx.beginPath();
+          this.ctx.arc(mapX, mapY, blobRadius, 0, Math.PI * 2);
+          this.ctx.fill();
         }
       }
-
-      this.ctx.restore();
     }
 
-    // 1b. Gravity wells - central black hole (purple) and stars (orange)
+    // Gravity wells in tactical view (relative to player)
     for (const well of world.arena.gravityWells) {
-      const wellX = centerX + well.position.x * scale;
-      const wellY = centerY + well.position.y * scale;
+      const relX = well.position.x - localPlayer.position.x;
+      const relY = well.position.y - localPlayer.position.y;
+      const dist = Math.sqrt(relX * relX + relY * relY);
 
-      // Check if central supermassive black hole
+      if (dist > this.MINIMAP_TACTICAL_RADIUS * 1.2) continue;
+
+      const mapX = centerX + relX * tacticalScale;
+      const mapY = centerY + relY * tacticalScale;
+
       const isCentral = Math.abs(well.position.x) < 10 && Math.abs(well.position.y) < 10 && well.coreRadius > 80;
 
-      // Only draw if within minimap bounds
-      const dist = Math.sqrt(Math.pow(wellX - centerX, 2) + Math.pow(wellY - centerY, 2));
-      if (dist < minimapSize / 2 - 2) {
-        if (isCentral) {
-          // Purple dot for supermassive black hole
-          this.ctx.fillStyle = '#b366ff';
-          this.ctx.beginPath();
-          this.ctx.arc(wellX, wellY, 3, 0, Math.PI * 2);
-          this.ctx.fill();
-        } else {
-          // Orange dot for normal stars, size based on core radius
-          const dotSize = Math.max(1.5, well.coreRadius / 35);
-          this.ctx.fillStyle = '#ff9944';
-          this.ctx.beginPath();
-          this.ctx.arc(wellX, wellY, dotSize, 0, Math.PI * 2);
-          this.ctx.fill();
-        }
+      if (isCentral) {
+        this.ctx.fillStyle = '#b366ff';
+        this.ctx.beginPath();
+        this.ctx.arc(mapX, mapY, 3, 0, Math.PI * 2);
+        this.ctx.fill();
+      } else {
+        const dotSize = Math.max(1.5, well.coreRadius / 35);
+        this.ctx.fillStyle = '#ff9944';
+        this.ctx.beginPath();
+        this.ctx.arc(mapX, mapY, dotSize, 0, Math.PI * 2);
+        this.ctx.fill();
       }
     }
 
-    // Helper to clamp position to minimap bounds
-    const clampToMinimap = (x: number, y: number) => {
-      const dist = Math.sqrt(Math.pow(x - centerX, 2) + Math.pow(y - centerY, 2));
-      const maxDist = minimapSize / 2 - 4;
-      if (dist > maxDist) {
-        const ratio = maxDist / dist;
-        return {
-          x: centerX + (x - centerX) * ratio,
-          y: centerY + (y - centerY) * ratio,
-        };
-      }
-      return { x, y };
-    };
-
-    // 2. Notable players (high mass) - larger pulsing indicators visible from anywhere
-    const notablePlayers = world.getNotablePlayers();
-    const visiblePlayerIds = new Set(world.getPlayers().keys());
-
-    for (const notable of notablePlayers) {
-      // Skip if already visible as regular player or is local player
-      if (visiblePlayerIds.has(notable.id) || notable.id === world.localPlayerId) continue;
-
-      const pos = clampToMinimap(
-        centerX + notable.position.x * scale,
-        centerY + notable.position.y * scale
-      );
-
-      // Pulsing size based on mass
-      const massRatio = Math.min(notable.mass / 200, 1);
-      const baseSize = 3 + massRatio * 3; // 3-6px based on mass
-      const pulse = 1 + 0.2 * Math.sin(Date.now() / 400);
-
-      const color = world.getPlayerColor(notable.colorIndex);
-
-      // Outer glow ring
-      this.ctx.strokeStyle = color;
-      this.ctx.lineWidth = 1.5;
-      this.ctx.globalAlpha = 0.4;
-      this.ctx.beginPath();
-      this.ctx.arc(pos.x, pos.y, (baseSize + 3) * pulse, 0, Math.PI * 2);
-      this.ctx.stroke();
-      this.ctx.globalAlpha = 1;
-
-      // Dark outline
-      this.ctx.fillStyle = 'rgba(0, 0, 0, 0.6)';
-      this.ctx.beginPath();
-      this.ctx.arc(pos.x, pos.y, baseSize + 1, 0, Math.PI * 2);
-      this.ctx.fill();
-
-      // Colored fill
-      this.ctx.fillStyle = color;
-      this.ctx.beginPath();
-      this.ctx.arc(pos.x, pos.y, baseSize, 0, Math.PI * 2);
-      this.ctx.fill();
-    }
-
-    // 3. Other players (nearby/visible) - small dots
+    // Nearby players with threat coloring (relative to local player)
     for (const [playerId, player] of world.getPlayers()) {
-      if (!player.alive) continue;
-      if (playerId === world.localPlayerId) continue;
+      if (!player.alive || playerId === world.localPlayerId) continue;
 
-      const pos = clampToMinimap(
-        centerX + player.position.x * scale,
-        centerY + player.position.y * scale
-      );
+      const relX = player.position.x - localPlayer.position.x;
+      const relY = player.position.y - localPlayer.position.y;
+      const dist = Math.sqrt(relX * relX + relY * relY);
 
-      // Colored dot with outline for visibility over heatmap
-      const color = world.getPlayerColor(player.colorIndex);
+      if (dist > this.MINIMAP_TACTICAL_RADIUS) continue;
+
+      const mapX = centerX + relX * tacticalScale;
+      const mapY = centerY + relY * tacticalScale;
+
+      // Threat-based coloring
+      const threatColor = this.getThreatColor(player.mass, localPlayer.mass);
+
       // Dark outline
       this.ctx.fillStyle = 'rgba(0, 0, 0, 0.5)';
       this.ctx.beginPath();
-      this.ctx.arc(pos.x, pos.y, 3.5, 0, Math.PI * 2);
+      this.ctx.arc(mapX, mapY, 3.5, 0, Math.PI * 2);
       this.ctx.fill();
-      // Colored fill
-      this.ctx.fillStyle = color;
+
+      // Threat-colored fill
+      this.ctx.fillStyle = threatColor;
       this.ctx.beginPath();
-      this.ctx.arc(pos.x, pos.y, 2.5, 0, Math.PI * 2);
+      this.ctx.arc(mapX, mapY, 2.5, 0, Math.PI * 2);
       this.ctx.fill();
     }
 
-    // 2. Local player - VERY prominent, always on top (show even when dead)
-    const localPlayer = world.getLocalPlayer();
-    if (localPlayer) {
-      const pos = clampToMinimap(
-        centerX + localPlayer.position.x * scale,
-        centerY + localPlayer.position.y * scale
-      );
+    this.ctx.restore();
 
-      if (localPlayer.alive) {
-        // Alive: Bright LIME GREEN indicator (contrasts with orange heatmap)
-        // Pulsing effect for extra visibility
-        const pulse = 0.7 + 0.3 * Math.sin(Date.now() / 200);
-        const pulseSize = 1 + 0.15 * Math.sin(Date.now() / 300);
+    // === LOCAL PLAYER at center ===
+    if (localPlayer.alive) {
+      const pulse = 0.7 + 0.3 * Math.sin(now / 200);
+      const pulseSize = 1 + 0.1 * Math.sin(now / 300);
 
-        // Outer pulsing glow - lime green
-        this.ctx.fillStyle = `rgba(0, 255, 100, ${0.15 * pulse})`;
-        this.ctx.beginPath();
-        this.ctx.arc(pos.x, pos.y, 16 * pulseSize, 0, Math.PI * 2);
-        this.ctx.fill();
+      // Outer glow
+      this.ctx.fillStyle = `rgba(0, 255, 100, ${0.12 * pulse})`;
+      this.ctx.beginPath();
+      this.ctx.arc(centerX, centerY, 12 * pulseSize, 0, Math.PI * 2);
+      this.ctx.fill();
 
-        // Strong black outline for contrast
-        this.ctx.strokeStyle = '#000000';
-        this.ctx.lineWidth = 4;
-        this.ctx.beginPath();
-        this.ctx.arc(pos.x, pos.y, 8, 0, Math.PI * 2);
-        this.ctx.stroke();
+      // Black outline
+      this.ctx.strokeStyle = '#000000';
+      this.ctx.lineWidth = 3;
+      this.ctx.beginPath();
+      this.ctx.arc(centerX, centerY, 6, 0, Math.PI * 2);
+      this.ctx.stroke();
 
-        // Bright white ring
-        this.ctx.strokeStyle = '#ffffff';
-        this.ctx.lineWidth = 2;
-        this.ctx.beginPath();
-        this.ctx.arc(pos.x, pos.y, 8, 0, Math.PI * 2);
-        this.ctx.stroke();
+      // White ring
+      this.ctx.strokeStyle = '#ffffff';
+      this.ctx.lineWidth = 1.5;
+      this.ctx.stroke();
 
-        // Bright lime green fill
-        this.ctx.fillStyle = '#00ff64';
-        this.ctx.beginPath();
-        this.ctx.arc(pos.x, pos.y, 6, 0, Math.PI * 2);
-        this.ctx.fill();
+      // Lime fill
+      this.ctx.fillStyle = '#00ff64';
+      this.ctx.beginPath();
+      this.ctx.arc(centerX, centerY, 5, 0, Math.PI * 2);
+      this.ctx.fill();
 
-        // Direction indicator (small triangle pointing in aim direction)
-        const rotation = localPlayer.rotation;
-        const arrowDist = 11;
-        const arrowX = pos.x + Math.cos(rotation) * arrowDist;
-        const arrowY = pos.y + Math.sin(rotation) * arrowDist;
-        this.ctx.fillStyle = '#ffffff';
-        this.ctx.beginPath();
-        this.ctx.moveTo(
-          arrowX + Math.cos(rotation) * 4,
-          arrowY + Math.sin(rotation) * 4
-        );
-        this.ctx.lineTo(
-          arrowX + Math.cos(rotation + 2.5) * 3,
-          arrowY + Math.sin(rotation + 2.5) * 3
-        );
-        this.ctx.lineTo(
-          arrowX + Math.cos(rotation - 2.5) * 3,
-          arrowY + Math.sin(rotation - 2.5) * 3
-        );
-        this.ctx.closePath();
-        this.ctx.fill();
-      } else {
-        // Dead: Dimmed red X indicator
-        this.ctx.globalAlpha = 0.6;
+      // Direction arrow
+      const rotation = localPlayer.rotation;
+      const arrowDist = 9;
+      const arrowX = centerX + Math.cos(rotation) * arrowDist;
+      const arrowY = centerY + Math.sin(rotation) * arrowDist;
 
-        // Dark red glow
-        this.ctx.fillStyle = 'rgba(239, 68, 68, 0.2)';
-        this.ctx.beginPath();
-        this.ctx.arc(pos.x, pos.y, 12, 0, Math.PI * 2);
-        this.ctx.fill();
+      this.ctx.fillStyle = '#ffffff';
+      this.ctx.beginPath();
+      this.ctx.moveTo(arrowX + Math.cos(rotation) * 3, arrowY + Math.sin(rotation) * 3);
+      this.ctx.lineTo(arrowX + Math.cos(rotation + 2.5) * 2.5, arrowY + Math.sin(rotation + 2.5) * 2.5);
+      this.ctx.lineTo(arrowX + Math.cos(rotation - 2.5) * 2.5, arrowY + Math.sin(rotation - 2.5) * 2.5);
+      this.ctx.closePath();
+      this.ctx.fill();
+    } else {
+      // Dead indicator
+      this.ctx.globalAlpha = 0.6;
+      this.ctx.fillStyle = 'rgba(239, 68, 68, 0.2)';
+      this.ctx.beginPath();
+      this.ctx.arc(centerX, centerY, 10, 0, Math.PI * 2);
+      this.ctx.fill();
 
-        // Red X mark
-        this.ctx.strokeStyle = '#ef4444';
-        this.ctx.lineWidth = 2;
-        this.ctx.beginPath();
-        this.ctx.moveTo(pos.x - 5, pos.y - 5);
-        this.ctx.lineTo(pos.x + 5, pos.y + 5);
-        this.ctx.moveTo(pos.x + 5, pos.y - 5);
-        this.ctx.lineTo(pos.x - 5, pos.y + 5);
-        this.ctx.stroke();
-
-        this.ctx.globalAlpha = 1.0;
-      }
+      this.ctx.strokeStyle = '#ef4444';
+      this.ctx.lineWidth = 2;
+      this.ctx.beginPath();
+      this.ctx.moveTo(centerX - 4, centerY - 4);
+      this.ctx.lineTo(centerX + 4, centerY + 4);
+      this.ctx.moveTo(centerX + 4, centerY - 4);
+      this.ctx.lineTo(centerX - 4, centerY + 4);
+      this.ctx.stroke();
+      this.ctx.globalAlpha = 1;
     }
 
-    // Compact label above minimap
+    // === DIRECTION TO CENTER indicator ===
+    const distToCenter = Math.sqrt(localPlayer.position.x ** 2 + localPlayer.position.y ** 2);
+    if (distToCenter > 100 && localPlayer.alive) {
+      const angleToCenter = Math.atan2(-localPlayer.position.y, -localPlayer.position.x);
+      const indicatorDist = innerRadius - 8;
+
+      const indX = centerX + Math.cos(angleToCenter) * indicatorDist;
+      const indY = centerY + Math.sin(angleToCenter) * indicatorDist;
+
+      // Purple diamond pointing to center
+      this.ctx.fillStyle = '#b366ff';
+      this.ctx.save();
+      this.ctx.translate(indX, indY);
+      this.ctx.rotate(angleToCenter);
+      this.ctx.beginPath();
+      this.ctx.moveTo(4, 0);
+      this.ctx.lineTo(0, -2.5);
+      this.ctx.lineTo(-2, 0);
+      this.ctx.lineTo(0, 2.5);
+      this.ctx.closePath();
+      this.ctx.fill();
+      this.ctx.restore();
+    }
+
+    // === LABELS (when expanded) ===
+    if (easedProgress > 0.5) {
+      const labelAlpha = (easedProgress - 0.5) * 2;
+      this.ctx.globalAlpha = labelAlpha;
+
+      // Show local player mass
+      if (localPlayer.alive) {
+        this.ctx.font = 'bold 10px Inter, system-ui, sans-serif';
+        this.ctx.textAlign = 'center';
+        this.ctx.fillStyle = '#00ff64';
+        this.ctx.fillText(`${Math.floor(localPlayer.mass)}`, centerX, centerY + 18);
+      }
+
+      // Threat legend at bottom
+      this.ctx.font = '8px Inter, system-ui, sans-serif';
+      const legendY = centerY + minimapSize / 2 - 12;
+
+      this.ctx.textAlign = 'left';
+      this.ctx.fillStyle = '#22c55e';
+      this.ctx.fillText('Smaller', centerX - minimapSize / 2 + 8, legendY);
+
+      this.ctx.textAlign = 'center';
+      this.ctx.fillStyle = '#fbbf24';
+      this.ctx.fillText('Similar', centerX, legendY);
+
+      this.ctx.textAlign = 'right';
+      this.ctx.fillStyle = '#ef4444';
+      this.ctx.fillText('Larger', centerX + minimapSize / 2 - 8, legendY);
+
+      this.ctx.globalAlpha = 1;
+    }
+
+    // === ALIVE COUNT ===
     const aliveCount = world.getAlivePlayerCount();
     this.ctx.font = '10px Inter, system-ui, sans-serif';
     this.ctx.textAlign = 'center';
     this.ctx.fillStyle = 'rgba(148, 163, 184, 0.7)';
     this.ctx.fillText(`${aliveCount} alive`, Math.round(centerX), Math.round(minimapY - 6));
+  }
+
+  // === MINIMAP HELPER METHODS ===
+
+  // Get responsive minimap size based on screen width
+  private getMinimapSize(screenWidth: number): number {
+    if (screenWidth < 800) return this.MINIMAP_MIN_SIZE;
+    if (screenWidth > 1920) return this.MINIMAP_MAX_SIZE;
+    const t = (screenWidth - 800) / (1920 - 800);
+    return this.MINIMAP_MIN_SIZE + (this.MINIMAP_MAX_SIZE - this.MINIMAP_MIN_SIZE) * t;
+  }
+
+  // Check if mouse is over the minimap
+  private isMouseOverMinimap(canvas: HTMLCanvasElement, padding: number, minimapSize: number): boolean {
+    if (!this.minimapMousePos) return false;
+
+    const centerX = canvas.width - padding - minimapSize / 2;
+    const centerY = canvas.height - padding - minimapSize / 2;
+
+    const dx = this.minimapMousePos.x - centerX;
+    const dy = this.minimapMousePos.y - centerY;
+    const dist = Math.sqrt(dx * dx + dy * dy);
+
+    return dist <= minimapSize / 2;
+  }
+
+  // Get threat color based on mass ratio
+  private getThreatColor(playerMass: number, localMass: number): string {
+    const ratio = playerMass / localMass;
+    if (ratio < 0.5) return '#22c55e';  // Green - much smaller
+    if (ratio < 0.8) return '#84cc16';  // Lime - smaller
+    if (ratio < 1.2) return '#fbbf24';  // Yellow - similar
+    if (ratio < 2.0) return '#f97316';  // Orange - larger
+    return '#ef4444';                    // Red - much larger
   }
 
   // Enhanced panel with gradient background and optional corner accents
@@ -1768,5 +1913,11 @@ export class RenderSystem {
     this.previousSpeeds.clear();
     this.playerTrails.clear();
     this.lastTrailPositions.clear();
+
+    // Reset minimap state
+    this.minimapHovered = false;
+    this.minimapHoverProgress = 0;
+    this.minimapLastHoverTime = 0;
+    this.minimapMousePos = null;
   }
 }

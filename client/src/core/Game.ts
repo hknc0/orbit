@@ -173,6 +173,7 @@ export class Game {
       },
       rtt: this.transport.getRtt(),
       connectionState: this.transport.getState(),
+      mousePos: this.inputSystem.getMousePos(),
     });
   }
 
