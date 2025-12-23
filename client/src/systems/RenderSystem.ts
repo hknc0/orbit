@@ -1357,7 +1357,7 @@ export class RenderSystem {
       return { x, y };
     };
 
-    // 2. Notable players (high mass) - larger pulsing indicators visible from anywhere
+    // 2. Notable players (high mass) - thin red circle indicators
     const notablePlayers = world.getNotablePlayers();
     const visiblePlayerIds = new Set(world.getPlayers().keys());
 
@@ -1370,33 +1370,12 @@ export class RenderSystem {
         centerY + notable.position.y * scale
       );
 
-      // Pulsing size based on mass
-      const massRatio = Math.min(notable.mass / 200, 1);
-      const baseSize = 3 + massRatio * 3; // 3-6px based on mass
-      const pulse = 1 + 0.2 * Math.sin(Date.now() / 400);
-
-      const color = world.getPlayerColor(notable.colorIndex);
-
-      // Outer glow ring
-      this.ctx.strokeStyle = color;
-      this.ctx.lineWidth = 1.5;
-      this.ctx.globalAlpha = 0.4;
+      // Thin red circle outline
+      this.ctx.strokeStyle = '#ef4444';
+      this.ctx.lineWidth = 1;
       this.ctx.beginPath();
-      this.ctx.arc(pos.x, pos.y, (baseSize + 3) * pulse, 0, Math.PI * 2);
+      this.ctx.arc(pos.x, pos.y, 4, 0, Math.PI * 2);
       this.ctx.stroke();
-      this.ctx.globalAlpha = 1;
-
-      // Dark outline
-      this.ctx.fillStyle = 'rgba(0, 0, 0, 0.6)';
-      this.ctx.beginPath();
-      this.ctx.arc(pos.x, pos.y, baseSize + 1, 0, Math.PI * 2);
-      this.ctx.fill();
-
-      // Colored fill
-      this.ctx.fillStyle = color;
-      this.ctx.beginPath();
-      this.ctx.arc(pos.x, pos.y, baseSize, 0, Math.PI * 2);
-      this.ctx.fill();
     }
 
     // 3. Other players (nearby/visible) - small dots
