@@ -315,6 +315,21 @@ export class Screens {
         color: #606080;
       }
 
+      .name-input.error {
+        border-color: #ef4444;
+        animation: shake 0.3s ease;
+      }
+
+      .name-input.error::placeholder {
+        color: #ef4444;
+      }
+
+      @keyframes shake {
+        0%, 100% { transform: translateX(0); }
+        25% { transform: translateX(-5px); }
+        75% { transform: translateX(5px); }
+      }
+
       .btn-primary {
         display: flex;
         align-items: center;
@@ -511,7 +526,25 @@ export class Screens {
   }
 
   getPlayerName(): string {
-    return this.playerNameInput?.value.trim() || `Player${Math.floor(Math.random() * 1000)}`;
+    return this.playerNameInput?.value.trim() || '';
+  }
+
+  private validateName(): boolean {
+    const name = this.getPlayerName();
+    if (!name) {
+      this.playerNameInput?.classList.add('error');
+      this.playerNameInput?.setAttribute('placeholder', 'Name required!');
+      this.playerNameInput?.focus();
+      // Remove error state when user starts typing
+      const removeError = () => {
+        this.playerNameInput?.classList.remove('error');
+        this.playerNameInput?.setAttribute('placeholder', 'Enter your name');
+        this.playerNameInput?.removeEventListener('input', removeError);
+      };
+      this.playerNameInput?.addEventListener('input', removeError);
+      return false;
+    }
+    return true;
   }
 
   showMenu(): void {
@@ -576,10 +609,14 @@ export class Screens {
 
   onPlay(callback: () => void): void {
     const btn = this.menuScreen.querySelector('#play-btn');
-    btn?.addEventListener('click', callback);
+    btn?.addEventListener('click', () => {
+      if (this.validateName()) {
+        callback();
+      }
+    });
 
     this.playerNameInput?.addEventListener('keydown', (e) => {
-      if (e.key === 'Enter') {
+      if (e.key === 'Enter' && this.validateName()) {
         callback();
       }
     });
