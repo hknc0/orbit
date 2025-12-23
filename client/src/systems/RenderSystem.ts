@@ -151,19 +151,21 @@ export class RenderSystem {
     const centerX = canvas.width / 2;
     const centerY = canvas.height / 2;
 
-    // Update camera to follow local player
+    // Update camera to follow local player (only when alive)
     const localPlayer = world.getLocalPlayer();
-    if (localPlayer) {
+    if (localPlayer && localPlayer.alive) {
       this.targetCameraOffset.set(
         centerX - localPlayer.position.x,
         centerY - localPlayer.position.y
       );
 
-      // Snap camera on first frame (avoid jump from origin)
+      // Snap camera on first frame or respawn (avoid jump)
       if (!this.cameraInitialized) {
         this.cameraOffset.copy(this.targetCameraOffset);
         this.cameraInitialized = true;
-        this.gameStartTime = Date.now();
+        if (this.gameStartTime === 0) {
+          this.gameStartTime = Date.now();
+        }
       }
 
       // Calculate dynamic zoom based on speed
@@ -171,9 +173,9 @@ export class RenderSystem {
       const speedRatio = Math.min(speed / this.SPEED_FOR_MAX_ZOOM_OUT, 1);
       this.targetZoom = this.ZOOM_MAX - (this.ZOOM_MAX - this.ZOOM_MIN) * speedRatio;
     } else {
-      this.targetCameraOffset.set(centerX, centerY);
+      // Player dead or not found - reset for next spawn
+      this.cameraInitialized = false;
       this.targetZoom = this.ZOOM_MAX;
-      this.cameraInitialized = false; // Reset so next spawn snaps camera
     }
 
     // Smooth camera interpolation
