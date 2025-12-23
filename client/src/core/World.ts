@@ -3,7 +3,7 @@
 
 import { ARENA, MASS, PLAYER_COLORS } from '@/utils/Constants';
 import type { PlayerId, MatchPhase } from '@/net/Protocol';
-import type { InterpolatedState, InterpolatedPlayer, InterpolatedProjectile, InterpolatedGravityWell } from '@/net/StateSync';
+import type { InterpolatedState, InterpolatedPlayer, InterpolatedProjectile, InterpolatedGravityWell, InterpolatedNotablePlayer } from '@/net/StateSync';
 
 // Arena state
 export interface ArenaState {
@@ -267,13 +267,36 @@ export class World {
     return `Player ${playerId.substring(0, 4)}`;
   }
 
-  // Get alive player count
+  // Get alive player count (uses server's total, not AOI-filtered count)
   getAlivePlayerCount(): number {
+    // Use totalAlive from server state (accurate count before AOI filtering)
+    if (this.state?.totalAlive !== undefined && this.state.totalAlive > 0) {
+      return this.state.totalAlive;
+    }
+    // Fallback to counting local players (AOI filtered)
     let count = 0;
     for (const player of this.getPlayers().values()) {
       if (player.alive) count++;
     }
     return count;
+  }
+
+  // Get total player count (uses server's total, not AOI-filtered count)
+  getTotalPlayerCount(): number {
+    if (this.state?.totalPlayers !== undefined && this.state.totalPlayers > 0) {
+      return this.state.totalPlayers;
+    }
+    return this.getPlayers().size;
+  }
+
+  // Get density grid for minimap heatmap (16x16 grid of player counts)
+  getDensityGrid(): number[] {
+    return this.state?.densityGrid ?? [];
+  }
+
+  // Get notable players for minimap radar (high-mass players visible everywhere)
+  getNotablePlayers(): InterpolatedNotablePlayer[] {
+    return this.state?.notablePlayers ?? [];
   }
 
   // Get player placement (rank by mass)

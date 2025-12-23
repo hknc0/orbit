@@ -92,6 +92,9 @@ impl GravityWellSnapshot {
     }
 }
 
+/// Player density grid for minimap (16x16 = 256 cells for detailed heatmap)
+pub const DENSITY_GRID_SIZE: usize = 16;
+
 /// Compressed game state for network transmission
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct GameSnapshot {
@@ -109,12 +112,47 @@ pub struct GameSnapshot {
     /// Gravity wells in the arena
     #[serde(default)]
     pub gravity_wells: Vec<GravityWellSnapshot>,
+    /// Total players in match (before AOI filtering)
+    #[serde(default)]
+    pub total_players: u32,
+    /// Total alive players in match (before AOI filtering)
+    #[serde(default)]
+    pub total_alive: u32,
+    /// Player density grid for minimap (16x16, each cell = player count)
+    #[serde(default)]
+    pub density_grid: Vec<u8>,
+    /// Notable players (high mass) for minimap radar - shown regardless of AOI
+    #[serde(default)]
+    pub notable_players: Vec<NotablePlayer>,
+}
+
+/// Minimum mass to appear on minimap radar
+pub const NOTABLE_MASS_THRESHOLD: f32 = 80.0;
+/// Maximum notable players to send
+pub const MAX_NOTABLE_PLAYERS: usize = 15;
+
+/// Compact player info for minimap radar (high-mass players visible everywhere)
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct NotablePlayer {
+    pub id: PlayerId,
+    pub position: Vec2,
+    pub mass: f32,
+    pub color_index: u8,
 }
 
 fn default_scale() -> f32 { 1.0 }
 
 impl GameSnapshot {
     pub fn from_game_state(state: &GameState) -> Self {
+        let total_players = state.players.len() as u32;
+        let total_alive = state.players.values().filter(|p| p.alive).count() as u32;
+
+        // Calculate density grid for minimap
+        let density_grid = Self::calculate_density_grid(state);
+
+        // Calculate notable players (high mass) for minimap radar
+        let notable_players = Self::calculate_notable_players(state);
+
         Self {
             tick: state.tick,
             match_phase: state.match_state.phase,
@@ -139,7 +177,58 @@ impl GameSnapshot {
                 .iter()
                 .map(GravityWellSnapshot::from_gravity_well)
                 .collect(),
+            total_players,
+            total_alive,
+            density_grid,
+            notable_players,
         }
+    }
+
+    /// Calculate player density grid (16x16) for minimap heatmap
+    fn calculate_density_grid(state: &GameState) -> Vec<u8> {
+        let mut grid = vec![0u8; DENSITY_GRID_SIZE * DENSITY_GRID_SIZE];
+        let arena_radius = state.arena.escape_radius;
+        let cell_size = (arena_radius * 2.0) / DENSITY_GRID_SIZE as f32;
+
+        for player in state.players.values() {
+            if !player.alive {
+                continue;
+            }
+
+            // Convert position to grid cell (centered at origin)
+            let grid_x = ((player.position.x + arena_radius) / cell_size) as usize;
+            let grid_y = ((player.position.y + arena_radius) / cell_size) as usize;
+
+            // Clamp to grid bounds
+            let grid_x = grid_x.min(DENSITY_GRID_SIZE - 1);
+            let grid_y = grid_y.min(DENSITY_GRID_SIZE - 1);
+
+            let idx = grid_y * DENSITY_GRID_SIZE + grid_x;
+            // Saturating add to prevent overflow
+            grid[idx] = grid[idx].saturating_add(1);
+        }
+
+        grid
+    }
+
+    /// Calculate notable players (high mass) for minimap radar
+    fn calculate_notable_players(state: &GameState) -> Vec<NotablePlayer> {
+        let mut notable: Vec<_> = state
+            .players
+            .values()
+            .filter(|p| p.alive && p.mass >= NOTABLE_MASS_THRESHOLD)
+            .map(|p| NotablePlayer {
+                id: p.id,
+                position: p.position,
+                mass: p.mass,
+                color_index: p.color_index,
+            })
+            .collect();
+
+        // Sort by mass descending and take top N
+        notable.sort_by(|a, b| b.mass.partial_cmp(&a.mass).unwrap_or(std::cmp::Ordering::Equal));
+        notable.truncate(MAX_NOTABLE_PLAYERS);
+        notable
     }
 }
 
@@ -371,6 +460,9 @@ mod tests {
                 mass: 10000.0,
                 core_radius: 50.0,
             }],
+            total_players: 1,
+            total_alive: 1,
+            density_grid: vec![0; 64],
         };
 
         let encoded = encode(&snapshot).unwrap();
@@ -381,8 +473,11 @@ mod tests {
         assert_eq!(decoded.players.len(), 1);
         assert_eq!(decoded.players[0].kills, 3);
         assert_eq!(decoded.players[0].deaths, 1);
+        assert_eq!(decoded.total_players, 1);
+        assert_eq!(decoded.total_alive, 1);
         assert_eq!(decoded.players[0].name, "TestPlayer");
         assert_eq!(decoded.gravity_wells.len(), 1);
+        assert_eq!(decoded.density_grid.len(), 64);
     }
 
     #[test]
@@ -677,6 +772,9 @@ mod encoding_tests {
             arena_safe_radius: 500.0,
             arena_scale: 1.0,
             gravity_wells: vec![],
+            total_players: 1,
+            total_alive: 1,
+            density_grid: vec![],
         };
 
         let encoded = encode(&snapshot).unwrap();

@@ -133,6 +133,13 @@ impl AOIManager {
             arena_scale: full_snapshot.arena_scale,
             // Always include all gravity wells - they're sparse and important
             gravity_wells: full_snapshot.gravity_wells.clone(),
+            // Preserve totals from full snapshot so UI shows correct counts
+            total_players: full_snapshot.total_players,
+            total_alive: full_snapshot.total_alive,
+            // Preserve density grid for minimap heatmap
+            density_grid: full_snapshot.density_grid.clone(),
+            // Preserve notable players for minimap radar
+            notable_players: full_snapshot.notable_players.clone(),
         }
     }
 
@@ -210,6 +217,7 @@ mod tests {
             players.push(create_player_snapshot(Uuid::new_v4(), pos, i as u32));
         }
 
+        let player_len = players.len() as u32;
         GameSnapshot {
             tick: 100,
             match_phase: MatchPhase::Playing,
@@ -221,6 +229,9 @@ mod tests {
             arena_safe_radius: 800.0,
             arena_scale: 1.0,
             gravity_wells: vec![],
+            total_players: player_len,
+            total_alive: player_len,
+            density_grid: vec![],
         }
     }
 
@@ -268,6 +279,9 @@ mod tests {
             arena_safe_radius: 800.0,
             arena_scale: 1.0,
             gravity_wells: vec![],
+            total_players: 3,
+            total_alive: 3,
+            density_grid: vec![],
         };
 
         let filtered = aoi.filter_for_player(player_id, player_pos, &snapshot);
@@ -304,6 +318,9 @@ mod tests {
             arena_safe_radius: 800.0,
             arena_scale: 1.0,
             gravity_wells: vec![],
+            total_players: 3,
+            total_alive: 3,
+            density_grid: vec![],
         };
 
         let filtered = aoi.filter_for_player(player_id, player_pos, &snapshot);
@@ -340,6 +357,9 @@ mod tests {
             arena_safe_radius: 800.0,
             arena_scale: 1.0,
             gravity_wells: vec![],
+            total_players: 1,
+            total_alive: 1,
+            density_grid: vec![],
         };
 
         let filtered = aoi.filter_for_player(player_id, player_pos, &snapshot);

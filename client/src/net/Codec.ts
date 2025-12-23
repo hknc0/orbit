@@ -15,6 +15,7 @@ import type {
   ProjectileDelta,
   MatchPhase,
   GravityWellSnapshot,
+  NotablePlayer,
 } from './Protocol';
 
 // Binary writer for encoding messages
@@ -307,6 +308,29 @@ function readGameSnapshot(reader: BinaryReader): GameSnapshot {
     });
   }
 
+  // Read total player counts (for UI display with AOI filtering)
+  const totalPlayers = reader.readU32();
+  const totalAlive = reader.readU32();
+
+  // Read density grid for minimap heatmap (16x16 = 256 u8 values)
+  const densityGridLen = reader.readU64();
+  const densityGrid: number[] = [];
+  for (let i = 0; i < densityGridLen; i++) {
+    densityGrid.push(reader.readU8());
+  }
+
+  // Read notable players for minimap radar
+  const notableCount = reader.readU64();
+  const notablePlayers: NotablePlayer[] = [];
+  for (let i = 0; i < notableCount; i++) {
+    notablePlayers.push({
+      id: reader.readUuid(),
+      position: reader.readVec2(),
+      mass: reader.readF32(),
+      colorIndex: reader.readU8(),
+    });
+  }
+
   return {
     tick,
     matchPhase,
@@ -318,6 +342,10 @@ function readGameSnapshot(reader: BinaryReader): GameSnapshot {
     arenaSafeRadius,
     arenaScale,
     gravityWells,
+    totalPlayers,
+    totalAlive,
+    densityGrid,
+    notablePlayers,
   };
 }
 

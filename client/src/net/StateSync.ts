@@ -30,6 +30,18 @@ export interface InterpolatedState {
   arenaSafeRadius: number;
   arenaScale: number;
   gravityWells: InterpolatedGravityWell[];
+  totalPlayers: number;  // Total players before AOI filtering
+  totalAlive: number;    // Total alive before AOI filtering
+  densityGrid: number[]; // 16x16 grid of player counts for minimap heatmap
+  notablePlayers: InterpolatedNotablePlayer[]; // High-mass players for minimap radar
+}
+
+// Notable player for minimap radar (high-mass, visible everywhere)
+export interface InterpolatedNotablePlayer {
+  id: PlayerId;
+  position: Vec2;
+  mass: number;
+  colorIndex: number;
 }
 
 export interface InterpolatedPlayer {
@@ -133,6 +145,10 @@ export class StateSync {
       arenaSafeRadius: baseEntry.snapshot.arenaSafeRadius,
       arenaScale: baseEntry.snapshot.arenaScale,
       gravityWells: baseEntry.snapshot.gravityWells,
+      totalPlayers: baseEntry.snapshot.totalPlayers,
+      totalAlive: baseEntry.snapshot.totalAlive,
+      densityGrid: baseEntry.snapshot.densityGrid,
+      notablePlayers: baseEntry.snapshot.notablePlayers,
     };
 
     // Apply player deltas
@@ -307,6 +323,15 @@ export class StateSync {
         mass: w.mass,
         coreRadius: w.coreRadius,
       })),
+      totalPlayers: snapshot.totalPlayers,
+      totalAlive: snapshot.totalAlive,
+      densityGrid: snapshot.densityGrid,
+      notablePlayers: snapshot.notablePlayers.map((p) => ({
+        id: p.id,
+        position: p.position.clone(),
+        mass: p.mass,
+        colorIndex: p.colorIndex,
+      })),
     };
   }
 
@@ -412,6 +437,26 @@ export class StateSync {
         before.arenaSafeRadius + (after.arenaSafeRadius - before.arenaSafeRadius) * t,
       arenaScale: before.arenaScale + (after.arenaScale - before.arenaScale) * t,
       gravityWells,
+      totalPlayers: after.totalPlayers,
+      totalAlive: after.totalAlive,
+      densityGrid: after.densityGrid,
+      notablePlayers: after.notablePlayers.map((afterPlayer) => {
+        const beforePlayer = before.notablePlayers.find((p) => p.id === afterPlayer.id);
+        if (beforePlayer) {
+          return {
+            id: afterPlayer.id,
+            position: vec2Lerp(beforePlayer.position, afterPlayer.position, t),
+            mass: beforePlayer.mass + (afterPlayer.mass - beforePlayer.mass) * t,
+            colorIndex: afterPlayer.colorIndex,
+          };
+        }
+        return {
+          id: afterPlayer.id,
+          position: afterPlayer.position.clone(),
+          mass: afterPlayer.mass,
+          colorIndex: afterPlayer.colorIndex,
+        };
+      }),
     };
   }
 
