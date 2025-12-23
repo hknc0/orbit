@@ -696,96 +696,104 @@ export class RenderSystem {
     this.ctx.arc(centerX, centerY, safeRadius * scale, 0, Math.PI * 2);
     this.ctx.stroke();
 
-    // Gravity wells as bright orange/yellow suns - highly visible
-    for (const well of world.arena.gravityWells) {
-      const wellX = centerX + well.position.x * scale;
-      const wellY = centerY + well.position.y * scale;
-      // Minimum 6 pixels so wells are always visible even in large universes
-      const wellRadius = Math.max(6, well.coreRadius * scale);
+    // Helper to clamp position to minimap bounds
+    const clampToMinimap = (x: number, y: number) => {
+      const dist = Math.sqrt(Math.pow(x - centerX, 2) + Math.pow(y - centerY, 2));
+      const maxDist = minimapSize / 2 - 4;
+      if (dist > maxDist) {
+        const ratio = maxDist / dist;
+        return {
+          x: centerX + (x - centerX) * ratio,
+          y: centerY + (y - centerY) * ratio,
+        };
+      }
+      return { x, y };
+    };
 
-      // Outer glow - large and bright
-      const outerGlow = this.ctx.createRadialGradient(wellX, wellY, 0, wellX, wellY, wellRadius * 4);
-      outerGlow.addColorStop(0, 'rgba(255, 200, 100, 0.8)');
-      outerGlow.addColorStop(0.3, 'rgba(255, 150, 50, 0.5)');
-      outerGlow.addColorStop(1, 'rgba(255, 50, 0, 0)');
-      this.ctx.fillStyle = outerGlow;
-      this.ctx.beginPath();
-      this.ctx.arc(wellX, wellY, wellRadius * 4, 0, Math.PI * 2);
-      this.ctx.fill();
-
-      // Core - bright yellow/white center
-      const coreGradient = this.ctx.createRadialGradient(wellX, wellY, 0, wellX, wellY, wellRadius);
-      coreGradient.addColorStop(0, '#ffffcc'); // Bright yellow-white
-      coreGradient.addColorStop(0.5, '#ffcc00'); // Golden
-      coreGradient.addColorStop(1, '#ff6600'); // Orange
-      this.ctx.fillStyle = coreGradient;
-      this.ctx.beginPath();
-      this.ctx.arc(wellX, wellY, wellRadius, 0, Math.PI * 2);
-      this.ctx.fill();
-    }
-
-    // If no gravity wells synced yet, show center dot
-    if (world.arena.gravityWells.length === 0) {
-      this.ctx.fillStyle = '#ff6600';
-      this.ctx.beginPath();
-      this.ctx.arc(centerX, centerY, 3, 0, Math.PI * 2);
-      this.ctx.fill();
-    }
-
-    // Other players as small dots
+    // 2. Other players - small dots
     for (const [playerId, player] of world.getPlayers()) {
       if (!player.alive) continue;
-      const isLocal = playerId === world.localPlayerId;
-      if (isLocal) continue; // Draw local player last
+      if (playerId === world.localPlayerId) continue;
 
-      const px = centerX + player.position.x * scale;
-      const py = centerY + player.position.y * scale;
+      const pos = clampToMinimap(
+        centerX + player.position.x * scale,
+        centerY + player.position.y * scale
+      );
 
-      // Clamp to minimap bounds
-      const dist = Math.sqrt(Math.pow(px - centerX, 2) + Math.pow(py - centerY, 2));
-      const maxDist = minimapSize / 2 - 4;
-      let finalX = px;
-      let finalY = py;
-      if (dist > maxDist) {
-        const ratio = maxDist / dist;
-        finalX = centerX + (px - centerX) * ratio;
-        finalY = centerY + (py - centerY) * ratio;
-      }
-
+      // Small colored dot (reduced opacity)
       const color = world.getPlayerColor(player.colorIndex);
+      this.ctx.globalAlpha = 0.5;
       this.ctx.fillStyle = color;
       this.ctx.beginPath();
-      this.ctx.arc(finalX, finalY, 2, 0, Math.PI * 2);
+      this.ctx.arc(pos.x, pos.y, 2, 0, Math.PI * 2);
+      this.ctx.fill();
+      this.ctx.globalAlpha = 1.0;
+    }
+
+    // 2. Local player - VERY prominent, always on top
+    const localPlayer = world.getLocalPlayer();
+    if (localPlayer && localPlayer.alive) {
+      const pos = clampToMinimap(
+        centerX + localPlayer.position.x * scale,
+        centerY + localPlayer.position.y * scale
+      );
+
+      // Large outer glow
+      this.ctx.fillStyle = 'rgba(0, 255, 255, 0.25)';
+      this.ctx.beginPath();
+      this.ctx.arc(pos.x, pos.y, 14, 0, Math.PI * 2);
+      this.ctx.fill();
+
+      // Thick white ring
+      this.ctx.strokeStyle = '#ffffff';
+      this.ctx.lineWidth = 3;
+      this.ctx.beginPath();
+      this.ctx.arc(pos.x, pos.y, 8, 0, Math.PI * 2);
+      this.ctx.stroke();
+
+      // Bright cyan fill
+      this.ctx.fillStyle = '#00ffff';
+      this.ctx.beginPath();
+      this.ctx.arc(pos.x, pos.y, 6, 0, Math.PI * 2);
+      this.ctx.fill();
+
+      // White center dot
+      this.ctx.fillStyle = '#ffffff';
+      this.ctx.beginPath();
+      this.ctx.arc(pos.x, pos.y, 2, 0, Math.PI * 2);
       this.ctx.fill();
     }
 
-    // Local player as larger dot with glow
-    const localPlayer = world.getLocalPlayer();
-    if (localPlayer && localPlayer.alive) {
-      const lpx = centerX + localPlayer.position.x * scale;
-      const lpy = centerY + localPlayer.position.y * scale;
+    // 4. Gravity well - show only the NEAREST one to avoid clutter
+    if (localPlayer && world.arena.gravityWells.length > 0) {
+      // Find nearest well to local player
+      let nearestWell = world.arena.gravityWells[0];
+      let nearestDist = Infinity;
 
-      // Clamp to minimap bounds
-      const dist = Math.sqrt(Math.pow(lpx - centerX, 2) + Math.pow(lpy - centerY, 2));
-      const maxDist = minimapSize / 2 - 4;
-      let finalX = lpx;
-      let finalY = lpy;
-      if (dist > maxDist) {
-        const ratio = maxDist / dist;
-        finalX = centerX + (lpx - centerX) * ratio;
-        finalY = centerY + (lpy - centerY) * ratio;
+      for (const well of world.arena.gravityWells) {
+        const dx = well.position.x - localPlayer.position.x;
+        const dy = well.position.y - localPlayer.position.y;
+        const dist = Math.sqrt(dx * dx + dy * dy);
+        if (dist < nearestDist) {
+          nearestDist = dist;
+          nearestWell = well;
+        }
       }
 
-      // Glow
-      this.ctx.fillStyle = 'rgba(96, 165, 250, 0.4)';
-      this.ctx.beginPath();
-      this.ctx.arc(finalX, finalY, 5, 0, Math.PI * 2);
-      this.ctx.fill();
+      const wellX = centerX + nearestWell.position.x * scale;
+      const wellY = centerY + nearestWell.position.y * scale;
 
-      // Core
-      this.ctx.fillStyle = '#60a5fa';
+      // Hollow orange circle for nearest well
+      this.ctx.strokeStyle = '#ff8c00';
+      this.ctx.lineWidth = 2;
       this.ctx.beginPath();
-      this.ctx.arc(finalX, finalY, 3, 0, Math.PI * 2);
+      this.ctx.arc(wellX, wellY, 6, 0, Math.PI * 2);
+      this.ctx.stroke();
+
+      // Small filled center
+      this.ctx.fillStyle = '#ff8c00';
+      this.ctx.beginPath();
+      this.ctx.arc(wellX, wellY, 2, 0, Math.PI * 2);
       this.ctx.fill();
     }
   }

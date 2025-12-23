@@ -283,12 +283,48 @@ impl Arena {
         self.middle_radius = arena::MIDDLE_RADIUS;
 
         self.gravity_wells.clear();
-        for i in 0..well_count {
-            let angle = (i as f32 / well_count as f32) * TAU;
+
+        // Use random distribution with minimum spacing between wells
+        use rand::Rng;
+        let mut rng = rand::thread_rng();
+
+        // Minimum distance between wells - at least one full orbital zone apart
+        let min_well_distance = well_spacing * 0.8;
+        const MAX_PLACEMENT_ATTEMPTS: usize = 50;
+
+        for _ in 0..well_count {
             let position = if well_count == 1 {
                 Vec2::ZERO
             } else {
-                Vec2::from_angle(angle) * orbit_radius
+                // Try to find a position that's far enough from existing wells
+                let mut best_pos = Vec2::ZERO;
+                let mut best_min_dist = 0.0f32;
+
+                for attempt in 0..MAX_PLACEMENT_ATTEMPTS {
+                    let angle = rng.gen_range(0.0..TAU);
+                    let radius = rng.gen_range(orbit_radius * 0.3..orbit_radius);
+                    let candidate = Vec2::from_angle(angle) * radius;
+
+                    // Find minimum distance to any existing well
+                    let min_dist = self.gravity_wells
+                        .iter()
+                        .map(|w| (w.position - candidate).length())
+                        .min_by(|a, b| a.partial_cmp(b).unwrap())
+                        .unwrap_or(f32::MAX);
+
+                    // If far enough, use it immediately
+                    if min_dist >= min_well_distance {
+                        best_pos = candidate;
+                        break;
+                    }
+
+                    // Track best attempt in case we can't find ideal position
+                    if min_dist > best_min_dist || attempt == 0 {
+                        best_min_dist = min_dist;
+                        best_pos = candidate;
+                    }
+                }
+                best_pos
             };
             self.gravity_wells.push(GravityWell::new(position, mass_per_well, core_per_well));
         }
