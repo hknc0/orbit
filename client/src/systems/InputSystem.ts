@@ -11,9 +11,11 @@ export class InputSystem {
   private isMouseBoostHeld: boolean = false;
   private isKeyBoostHeld: boolean = false;
   private isEjectHeld: boolean = false;
-  private wasEjectHeld: boolean = false;
   private ejectChargeTime: number = 0;
   private aimDirection: Vec2 = new Vec2(1, 0);
+
+  // Latching flag for eject release - persists until consumed
+  private pendingEjectRelease: boolean = false;
 
   // Keyboard directional input
   private keyDirection: Vec2 = new Vec2();
@@ -29,6 +31,7 @@ export class InputSystem {
     this.isMouseBoostHeld = false;
     this.isKeyBoostHeld = false;
     this.isEjectHeld = false;
+    this.pendingEjectRelease = false;
     this.keysHeld.clear();
     this.keyDirection.set(0, 0);
   }
@@ -93,6 +96,10 @@ export class InputSystem {
     window.addEventListener('keyup', (e) => {
       switch (e.code) {
         case 'Space':
+          // Latch the release so it's not missed between ticks
+          if (this.isEjectHeld) {
+            this.pendingEjectRelease = true;
+          }
           this.isEjectHeld = false;
           break;
         case 'ShiftLeft':
@@ -174,16 +181,14 @@ export class InputSystem {
     if (this.isEjectHeld) {
       this.ejectChargeTime += dt;
     }
-
-    // NOTE: wasEjectHeld is updated in createInput() AFTER checking for release
   }
 
   // Create a player input for sending to server
   createInput(sequence: number, tick: number): PlayerInput {
     const thrust = this.isBoostHeld ? this.aimDirection.clone() : new Vec2(0, 0);
 
-    // Detect fire release (space was held last frame, not held now)
-    const fireReleased = !this.isEjectHeld && this.wasEjectHeld;
+    // Use latched release flag (persists until consumed)
+    const fireReleased = this.pendingEjectRelease;
 
     // Build input
     const input: PlayerInput = {
@@ -196,11 +201,9 @@ export class InputSystem {
       fireReleased,
     };
 
-    // Update previous state AFTER creating input
-    this.wasEjectHeld = this.isEjectHeld;
-
-    // Reset charge time on release
+    // Consume the release flag after sending
     if (fireReleased) {
+      this.pendingEjectRelease = false;
       this.ejectChargeTime = 0;
     }
 
