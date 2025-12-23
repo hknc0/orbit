@@ -224,15 +224,36 @@ pub fn spawn_near_well(wells: &[crate::game::state::GravityWell]) -> crate::util
 
     let mut rng = rand::thread_rng();
 
-    // Pick a random orbital well (not the central black hole)
-    let well = orbital_wells[rng.gen_range(0..orbital_wells.len())];
+    // Try multiple times to find a safe spawn position
+    const MAX_ATTEMPTS: u32 = 20;
+    for _ in 0..MAX_ATTEMPTS {
+        // Pick a random orbital well (not the central black hole)
+        let well = orbital_wells[rng.gen_range(0..orbital_wells.len())];
 
-    // Spawn in orbit zone around that well
-    let angle = rng.gen_range(0.0..std::f32::consts::TAU);
-    let radius = rng.gen_range(ZONE_MIN..ZONE_MAX);
-    let offset = crate::util::vec2::Vec2::from_angle(angle) * radius;
+        // Spawn in orbit zone around that well
+        let angle = rng.gen_range(0.0..std::f32::consts::TAU);
+        let radius = rng.gen_range(ZONE_MIN..ZONE_MAX);
+        let offset = crate::util::vec2::Vec2::from_angle(angle) * radius;
 
-    well.position + offset
+        let spawn_pos = well.position + offset;
+
+        // CRITICAL: Verify spawn position is NOT inside ANY gravity well's core
+        // This prevents spawning inside the supermassive black hole when an orbital
+        // well is close to center and the angle points inward
+        let is_safe = wells.iter().all(|w| {
+            let dist_sq = spawn_pos.distance_sq_to(w.position);
+            // Use 1.5x core radius as safety margin
+            let safe_radius = w.core_radius * 1.5;
+            dist_sq > safe_radius * safe_radius
+        });
+
+        if is_safe {
+            return spawn_pos;
+        }
+    }
+
+    // Fallback to random spawn if can't find safe well spawn
+    random_spawn_position()
 }
 
 /// Calculate a safe spawn position near gravity wells, avoiding other players
@@ -548,5 +569,81 @@ mod tests {
         let safe_radius2 = arena2.current_safe_radius();
 
         assert!(safe_radius2 < safe_radius);
+    }
+
+    #[test]
+    fn test_spawn_near_well_avoids_all_death_zones() {
+        use crate::game::state::GravityWell;
+        use crate::game::constants::arena::CORE_RADIUS;
+        use crate::game::constants::physics::CENTRAL_MASS;
+
+        // Create a realistic well setup with supermassive at center
+        // and an orbital well close enough that some spawn angles could be dangerous
+        let supermassive_core = CORE_RADIUS * 2.5; // 125 units
+        let wells = vec![
+            // Supermassive at center
+            GravityWell::new(Vec2::ZERO, CENTRAL_MASS * 3.0, supermassive_core),
+            // Orbital well at 300 units from center - close enough that
+            // spawning 250-350 units toward center could enter death zone
+            GravityWell::new(Vec2::new(300.0, 0.0), CENTRAL_MASS, CORE_RADIUS),
+            // Another orbital well
+            GravityWell::new(Vec2::new(-400.0, 200.0), CENTRAL_MASS, CORE_RADIUS),
+        ];
+
+        // Run many spawn attempts to verify none land in death zones
+        for _ in 0..200 {
+            let pos = spawn_near_well(&wells);
+
+            // Verify not inside ANY gravity well's core
+            for well in &wells {
+                let dist = (pos - well.position).length();
+                assert!(
+                    dist > well.core_radius,
+                    "Spawn position {:?} is inside well at {:?} (dist {} < core {})",
+                    pos,
+                    well.position,
+                    dist,
+                    well.core_radius
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn test_spawn_near_well_with_very_close_orbital() {
+        use crate::game::state::GravityWell;
+        use crate::game::constants::arena::CORE_RADIUS;
+        use crate::game::constants::physics::CENTRAL_MASS;
+
+        // Edge case: orbital well very close to supermassive death zone
+        // This simulates the worst case scenario
+        let supermassive_core = CORE_RADIUS * 2.5; // 125 units
+        let wells = vec![
+            GravityWell::new(Vec2::ZERO, CENTRAL_MASS * 3.0, supermassive_core),
+            // Orbital at 200 units - spawn at 250 toward center would be at -50 from origin!
+            GravityWell::new(Vec2::new(200.0, 0.0), CENTRAL_MASS, CORE_RADIUS),
+        ];
+
+        for _ in 0..100 {
+            let pos = spawn_near_well(&wells);
+
+            // Must not be inside supermassive
+            let dist_from_center = pos.length();
+            assert!(
+                dist_from_center > supermassive_core,
+                "Spawn at {:?} is inside supermassive death zone (dist {} < {})",
+                pos,
+                dist_from_center,
+                supermassive_core
+            );
+
+            // Must not be inside the orbital well either
+            let dist_from_orbital = (pos - Vec2::new(200.0, 0.0)).length();
+            assert!(
+                dist_from_orbital > CORE_RADIUS,
+                "Spawn at {:?} is inside orbital death zone",
+                pos
+            );
+        }
     }
 }
