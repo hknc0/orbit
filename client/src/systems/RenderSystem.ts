@@ -467,7 +467,10 @@ export class RenderSystem {
     const effects = world.getDeathEffects();
 
     for (const effect of effects) {
-      const { position, progress, color } = effect;
+      const { position, color } = effect;
+      // Guard against negative/zero progress
+      const progress = Math.max(0.001, effect.progress);
+      if (progress <= 0) continue;
 
       // Multiple expanding rings
       const numRings = 3;
@@ -475,11 +478,11 @@ export class RenderSystem {
         const ringProgress = Math.max(0, progress - i * 0.15);
         if (ringProgress <= 0) continue;
 
-        const ringRadius = 10 + (1 - ringProgress) * (60 + i * 20);
+        const ringRadius = Math.max(1, 10 + (1 - ringProgress) * (60 + i * 20));
         const alpha = ringProgress * 0.7;
 
         this.ctx.strokeStyle = this.colorWithAlpha(color, alpha);
-        this.ctx.lineWidth = 4 * ringProgress;
+        this.ctx.lineWidth = Math.max(0.5, 4 * ringProgress);
         this.ctx.beginPath();
         this.ctx.arc(position.x, position.y, ringRadius, 0, Math.PI * 2);
         this.ctx.stroke();
@@ -488,7 +491,7 @@ export class RenderSystem {
       // Central flash
       if (progress > 0.5) {
         const flashProgress = (progress - 0.5) * 2;
-        const flashRadius = 30 * flashProgress;
+        const flashRadius = Math.max(1, 30 * flashProgress);
 
         const flashGradient = this.ctx.createRadialGradient(
           position.x, position.y, 0,
@@ -511,7 +514,7 @@ export class RenderSystem {
         const distance = (1 - progress) * 50 + 10;
         const particleX = position.x + Math.cos(angle) * distance;
         const particleY = position.y + Math.sin(angle) * distance;
-        const particleSize = 3 * progress;
+        const particleSize = Math.max(0.5, 3 * progress);
 
         this.ctx.fillStyle = this.colorWithAlpha(color, progress * 0.8);
         this.ctx.beginPath();
@@ -566,147 +569,243 @@ export class RenderSystem {
     if (localPlayer) {
       const panelX = padding;
       const panelY = padding;
-      const panelW = 180;
-      const panelH = 150;
+      const panelW = 190;
+      const panelH = 160;
 
-      // Panel background
-      this.drawPanel(panelX, panelY, panelW, panelH);
+      // Enhanced panel with gradient and corner accents
+      this.drawPanelEnhanced(panelX, panelY, panelW, panelH, { cornerAccents: true });
 
-      // Rank badge
+      // Rank badge with glow for top 3
       const aliveCount = world.getAlivePlayerCount();
       if (localPlayer.alive) {
         const placement = world.getPlayerPlacement(world.localPlayerId!);
-        const rankBadgeColors = ['#FFD700', '#E2E8F0', '#CD853F']; // Gold, Silver, Bronze
-        this.ctx.fillStyle = placement <= 3 ? rankBadgeColors[placement - 1] : '#94a3b8';
-        this.ctx.font = 'bold 24px Inter, system-ui, sans-serif';
+        const rankBadgeColors = ['#FFD700', '#C0C0C0', '#CD7F32']; // Gold, Silver, Bronze
+        const rankColor = placement <= 3 ? rankBadgeColors[placement - 1] : '#94a3b8';
+
+        this.ctx.font = 'bold 26px Inter, system-ui, sans-serif';
         this.ctx.textAlign = 'left';
         const rankText = `#${placement}`;
-        this.ctx.fillText(rankText, panelX + 12, panelY + 30);
+
+        // Glow effect for top 3
+        if (placement <= 3) {
+          this.drawGlowText(rankText, panelX + 14, panelY + 32, rankColor, 1.2);
+        } else {
+          this.ctx.fillStyle = rankColor;
+          this.ctx.fillText(rankText, panelX + 14, panelY + 32);
+        }
+
         const rankWidth = this.ctx.measureText(rankText).width;
         this.ctx.fillStyle = '#64748b';
         this.ctx.font = '11px Inter, system-ui, sans-serif';
-        this.ctx.fillText(`of ${aliveCount}`, panelX + 16 + rankWidth, panelY + 30);
+        this.ctx.fillText(`of ${aliveCount}`, panelX + 18 + rankWidth, panelY + 32);
       } else {
-        // Dead state
-        this.ctx.fillStyle = '#ef4444';
-        this.ctx.font = 'bold 18px Inter, system-ui, sans-serif';
+        // Dead state with pulsing effect
+        const pulse = Math.sin(Date.now() / 200) * 0.2 + 0.8;
+        this.ctx.font = 'bold 20px Inter, system-ui, sans-serif';
         this.ctx.textAlign = 'left';
-        const deadText = 'DEAD';
-        this.ctx.fillText(deadText, panelX + 12, panelY + 30);
-        const deadWidth = this.ctx.measureText(deadText).width;
+        this.drawGlowText('DEAD', panelX + 14, panelY + 32, `rgba(239, 68, 68, ${pulse})`, 1);
+        const deadWidth = this.ctx.measureText('DEAD').width;
         this.ctx.fillStyle = '#64748b';
         this.ctx.font = '11px Inter, system-ui, sans-serif';
-        this.ctx.fillText(`${aliveCount} alive`, panelX + 16 + deadWidth, panelY + 30);
+        this.ctx.fillText(`${aliveCount} alive`, panelX + 18 + deadWidth, panelY + 32);
       }
 
-      // Mass with bar
+      // Mass with enhanced bar
       const massPercent = Math.min(localPlayer.mass / 500, 1);
-      const barStartX = panelX + 55;
-      const barWidth = panelW - 67;
-      this.ctx.fillStyle = '#94a3b8';
-      this.ctx.font = '10px Inter, system-ui, sans-serif';
-      this.ctx.fillText('MASS', panelX + 12, panelY + 50);
-      this.ctx.fillStyle = '#f1f5f9';
-      this.ctx.font = 'bold 14px Inter, system-ui, sans-serif';
-      this.ctx.fillText(Math.floor(localPlayer.mass).toString(), panelX + 12, panelY + 66);
-      this.drawProgressBar(barStartX, panelY + 56, barWidth, 8, massPercent, '#3b82f6');
+      const barStartX = panelX + 58;
+      const barWidth = panelW - 72;
+      this.ctx.fillStyle = '#64748b';
+      this.ctx.font = '9px Inter, system-ui, sans-serif';
+      this.ctx.textAlign = 'left';
+      this.ctx.fillText('MASS', panelX + 14, panelY + 52);
+      this.ctx.fillStyle = '#00d4ff';
+      this.ctx.font = 'bold 15px monospace';
+      this.ctx.fillText(Math.floor(localPlayer.mass).toString(), panelX + 14, panelY + 70);
+      this.drawProgressBarEnhanced(barStartX, panelY + 58, barWidth, 10, massPercent, '#3b82f6', massPercent > 0.5);
 
-      // Speed indicator
+      // Speed with enhanced bar
       const speed = localPlayer.velocity.length();
       const speedPercent = Math.min(speed / 300, 1);
-      this.ctx.fillStyle = '#94a3b8';
-      this.ctx.font = '10px Inter, system-ui, sans-serif';
-      this.ctx.fillText('SPEED', panelX + 12, panelY + 86);
-      this.ctx.fillStyle = '#f1f5f9';
-      this.ctx.font = 'bold 14px Inter, system-ui, sans-serif';
-      this.ctx.fillText(Math.floor(speed).toString(), panelX + 12, panelY + 102);
-      this.drawProgressBar(barStartX, panelY + 92, barWidth, 8, speedPercent, '#22c55e');
+      this.ctx.fillStyle = '#64748b';
+      this.ctx.font = '9px Inter, system-ui, sans-serif';
+      this.ctx.fillText('SPEED', panelX + 14, panelY + 88);
+      this.ctx.fillStyle = '#4ade80';
+      this.ctx.font = 'bold 15px monospace';
+      this.ctx.fillText(Math.floor(speed).toString(), panelX + 14, panelY + 106);
+      this.drawProgressBarEnhanced(barStartX, panelY + 94, barWidth, 10, speedPercent, '#22c55e', speedPercent > 0.7);
 
-      // K/D Stats
-      this.ctx.fillStyle = '#94a3b8';
-      this.ctx.font = '10px Inter, system-ui, sans-serif';
-      this.ctx.fillText('K / D', panelX + 12, panelY + 120);
-      this.ctx.fillStyle = '#f1f5f9';
-      this.ctx.font = 'bold 14px Inter, system-ui, sans-serif';
-      this.ctx.fillText(`${localPlayer.kills} / ${localPlayer.deaths}`, panelX + 12, panelY + 136);
+      // K/D Stats in styled boxes
+      const kdY = panelY + 125;
+      // Kills box
+      this.ctx.fillStyle = 'rgba(34, 197, 94, 0.15)';
+      this.ctx.beginPath();
+      this.ctx.roundRect(panelX + 14, kdY, 50, 28, 4);
+      this.ctx.fill();
+      this.ctx.fillStyle = '#64748b';
+      this.ctx.font = '8px Inter, system-ui, sans-serif';
+      this.ctx.textAlign = 'center';
+      this.ctx.fillText('KILLS', panelX + 39, kdY + 10);
+      this.ctx.fillStyle = '#4ade80';
+      this.ctx.font = 'bold 14px monospace';
+      this.ctx.fillText(localPlayer.kills.toString(), panelX + 39, kdY + 24);
 
-      // Kill streak
+      // Deaths box
+      this.ctx.fillStyle = 'rgba(239, 68, 68, 0.15)';
+      this.ctx.beginPath();
+      this.ctx.roundRect(panelX + 70, kdY, 50, 28, 4);
+      this.ctx.fill();
+      this.ctx.fillStyle = '#64748b';
+      this.ctx.font = '8px Inter, system-ui, sans-serif';
+      this.ctx.fillText('DEATHS', panelX + 95, kdY + 10);
+      this.ctx.fillStyle = '#ef4444';
+      this.ctx.font = 'bold 14px monospace';
+      this.ctx.fillText(localPlayer.deaths.toString(), panelX + 95, kdY + 24);
+
+      // Kill streak with fire glow
       if (sessionStats.killStreak > 0) {
-        this.ctx.fillStyle = '#fbbf24';
-        this.ctx.font = 'bold 14px Inter, system-ui, sans-serif';
-        this.ctx.fillText(`🔥 ${sessionStats.killStreak}`, panelX + 80, panelY + 136);
+        const streakX = panelX + 130;
+        this.ctx.fillStyle = 'rgba(251, 191, 36, 0.2)';
+        this.ctx.beginPath();
+        this.ctx.roundRect(streakX, kdY, 46, 28, 4);
+        this.ctx.fill();
+        this.ctx.font = 'bold 16px Inter, system-ui, sans-serif';
+        this.ctx.textAlign = 'center';
+        const pulse = Math.sin(Date.now() / 150) * 0.3 + 1;
+        this.drawGlowText(`${sessionStats.killStreak}`, streakX + 23, kdY + 20, '#fbbf24', pulse);
       }
 
-      // Time alive
+      // Time alive (compact, top right of panel)
       const timeAlive = Math.floor(sessionStats.timeAlive / 1000);
       const minutes = Math.floor(timeAlive / 60);
       const seconds = timeAlive % 60;
-      this.ctx.fillStyle = '#64748b';
-      this.ctx.font = '11px Inter, system-ui, sans-serif';
+      this.ctx.fillStyle = '#475569';
+      this.ctx.font = '10px monospace';
       this.ctx.textAlign = 'right';
-      this.ctx.fillText(`⏱ ${minutes}:${seconds.toString().padStart(2, '0')}`, panelX + panelW - 12, panelY + 136);
+      this.ctx.fillText(`${minutes}:${seconds.toString().padStart(2, '0')}`, panelX + panelW - 14, panelY + 18);
     }
 
-    // === BOTTOM LEFT - Session Stats ===
+    // === BOTTOM LEFT - Session Stats (Compact) ===
     if (localPlayer) {
       const panelX = padding;
-      const panelY = canvas.height - padding - 80;
-      const panelW = 160;
-      const panelH = 80;
+      const panelY = canvas.height - padding - 50;
+      const panelW = 200;
+      const panelH = 50;
 
-      this.drawPanel(panelX, panelY, panelW, panelH);
+      this.drawPanelEnhanced(panelX, panelY, panelW, panelH);
 
-      this.ctx.fillStyle = '#94a3b8';
-      this.ctx.font = '10px Inter, system-ui, sans-serif';
+      // Title
+      this.ctx.fillStyle = '#475569';
+      this.ctx.font = '8px Inter, system-ui, sans-serif';
       this.ctx.textAlign = 'left';
-      this.ctx.fillText('SESSION', panelX + 12, panelY + 18);
+      this.ctx.fillText('SESSION BEST', panelX + 12, panelY + 14);
 
-      this.ctx.fillStyle = '#f1f5f9';
-      this.ctx.font = '11px Inter, system-ui, sans-serif';
-      this.ctx.fillText(`Best Mass: ${Math.floor(sessionStats.bestMass)}`, panelX + 12, panelY + 35);
-      this.ctx.fillText(`Best Streak: ${sessionStats.bestKillStreak}`, panelX + 12, panelY + 50);
+      // Compact stats in a row
+      const statsY = panelY + 34;
+      const statSpacing = 60;
+
+      // Best Mass (cyan)
+      this.ctx.fillStyle = '#00d4ff';
+      this.ctx.font = 'bold 14px monospace';
+      this.ctx.textAlign = 'center';
+      this.ctx.fillText(Math.floor(sessionStats.bestMass).toString(), panelX + 30, statsY);
+      this.ctx.fillStyle = '#475569';
+      this.ctx.font = '8px Inter, system-ui, sans-serif';
+      this.ctx.fillText('MASS', panelX + 30, statsY + 10);
+
+      // Best Streak (orange)
+      this.ctx.fillStyle = '#fbbf24';
+      this.ctx.font = 'bold 14px monospace';
+      this.ctx.fillText(sessionStats.bestKillStreak.toString(), panelX + 30 + statSpacing, statsY);
+      this.ctx.fillStyle = '#475569';
+      this.ctx.font = '8px Inter, system-ui, sans-serif';
+      this.ctx.fillText('STREAK', panelX + 30 + statSpacing, statsY + 10);
+
+      // Best Time (green)
       const bestSeconds = Math.floor(sessionStats.bestTimeAlive / 1000);
       const bestMin = Math.floor(bestSeconds / 60);
       const bestSec = bestSeconds % 60;
-      this.ctx.fillText(`Best Time: ${bestMin}:${bestSec.toString().padStart(2, '0')}`, panelX + 12, panelY + 65);
+      this.ctx.fillStyle = '#4ade80';
+      this.ctx.font = 'bold 14px monospace';
+      this.ctx.fillText(`${bestMin}:${bestSec.toString().padStart(2, '0')}`, panelX + 30 + statSpacing * 2, statsY);
+      this.ctx.fillStyle = '#475569';
+      this.ctx.font = '8px Inter, system-ui, sans-serif';
+      this.ctx.fillText('TIME', panelX + 30 + statSpacing * 2, statsY + 10);
     }
 
     // === RIGHT PANEL - Leaderboard ===
     const leaderboard = world.getLeaderboard().slice(0, 5);
-    const lbPanelW = 170;
-    const lbPanelH = 30 + leaderboard.length * 22;
+    const lbPanelW = 185;
+    const lbRowHeight = 26;
+    const lbPanelH = 34 + leaderboard.length * lbRowHeight;
     const lbPanelX = canvas.width - padding - lbPanelW;
     const lbPanelY = padding;
 
-    this.drawPanel(lbPanelX, lbPanelY, lbPanelW, lbPanelH);
+    this.drawPanelEnhanced(lbPanelX, lbPanelY, lbPanelW, lbPanelH, { cornerAccents: true });
 
-    this.ctx.fillStyle = '#94a3b8';
-    this.ctx.font = 'bold 10px Inter, system-ui, sans-serif';
+    this.ctx.fillStyle = '#64748b';
+    this.ctx.font = 'bold 9px Inter, system-ui, sans-serif';
     this.ctx.textAlign = 'left';
-    this.ctx.fillText('LEADERBOARD', lbPanelX + 12, lbPanelY + 18);
+    this.ctx.fillText('LEADERBOARD', lbPanelX + 14, lbPanelY + 16);
 
-    const rankColors = ['#FFD700', '#E2E8F0', '#CD853F']; // Gold, Silver, Bronze
+    const rankColors = ['#FFD700', '#C0C0C0', '#CD7F32']; // Gold, Silver, Bronze
+    const maxMass = leaderboard.length > 0 ? leaderboard[0].mass : 100;
+
     leaderboard.forEach((entry, index) => {
       const isLocal = entry.id === world.localPlayerId;
-      const y = lbPanelY + 38 + index * 22;
+      const y = lbPanelY + 36 + index * lbRowHeight;
 
-      // Rank number with medal colors for top 3
-      this.ctx.fillStyle = index < 3 ? rankColors[index] : '#64748b';
-      this.ctx.font = 'bold 12px Inter, system-ui, sans-serif';
+      // Highlight row for local player
+      if (isLocal) {
+        this.ctx.fillStyle = 'rgba(0, 255, 255, 0.08)';
+        this.ctx.beginPath();
+        this.ctx.roundRect(lbPanelX + 6, y - 10, lbPanelW - 12, lbRowHeight - 2, 4);
+        this.ctx.fill();
+        // Cyan left border indicator
+        this.ctx.fillStyle = '#00ffff';
+        this.ctx.fillRect(lbPanelX + 6, y - 10, 2, lbRowHeight - 2);
+      }
+
+      // Medal/rank with glow for top 3
+      const rankColor = index < 3 ? rankColors[index] : '#475569';
+      this.ctx.font = 'bold 13px Inter, system-ui, sans-serif';
       this.ctx.textAlign = 'left';
-      this.ctx.fillText(`${index + 1}`, lbPanelX + 12, y);
 
-      // Name - highlight local player
-      this.ctx.fillStyle = isLocal ? '#60a5fa' : '#e2e8f0';
+      if (index < 3) {
+        // Glowing medal number
+        this.drawGlowText(`${index + 1}`, lbPanelX + 16, y + 4, rankColor, 0.8);
+      } else {
+        this.ctx.fillStyle = rankColor;
+        this.ctx.fillText(`${index + 1}`, lbPanelX + 16, y + 4);
+      }
+
+      // Name - cyan for local, white for others
+      this.ctx.fillStyle = isLocal ? '#00ffff' : '#e2e8f0';
       this.ctx.font = `${isLocal ? 'bold ' : ''}11px Inter, system-ui, sans-serif`;
-      const name = entry.name.length > 10 ? entry.name.slice(0, 10) + '…' : entry.name;
-      this.ctx.fillText(name, lbPanelX + 28, y);
+      const name = entry.name.length > 9 ? entry.name.slice(0, 9) + '…' : entry.name;
+      this.ctx.fillText(name, lbPanelX + 32, y + 4);
 
-      // Mass
-      this.ctx.fillStyle = '#94a3b8';
-      this.ctx.font = '11px Inter, system-ui, sans-serif';
+      // Mini mass bar
+      const barX = lbPanelX + 100;
+      const barW = 45;
+      const barH = 6;
+      const massPercent = entry.mass / maxMass;
+      this.ctx.fillStyle = 'rgba(30, 41, 59, 0.6)';
+      this.ctx.beginPath();
+      this.ctx.roundRect(barX, y - 1, barW, barH, 2);
+      this.ctx.fill();
+      if (massPercent > 0) {
+        const barColor = isLocal ? '#00ffff' : (index < 3 ? rankColor : '#3b82f6');
+        this.ctx.fillStyle = barColor;
+        this.ctx.beginPath();
+        this.ctx.roundRect(barX, y - 1, Math.max(barW * massPercent, 4), barH, 2);
+        this.ctx.fill();
+      }
+
+      // Mass number
+      this.ctx.fillStyle = isLocal ? '#00ffff' : '#94a3b8';
+      this.ctx.font = '10px monospace';
       this.ctx.textAlign = 'right';
-      this.ctx.fillText(Math.floor(entry.mass).toString(), lbPanelX + lbPanelW - 12, y);
+      this.ctx.fillText(Math.floor(entry.mass).toString(), lbPanelX + lbPanelW - 12, y + 4);
     });
 
     // === DANGER ZONE INDICATOR ===
@@ -749,15 +848,28 @@ export class RenderSystem {
       }
     }
 
-    // === CONTROLS HINT ===
-    this.ctx.fillStyle = '#475569';
-    this.ctx.font = '11px Inter, system-ui, sans-serif';
+    // === CONTROLS HINT (Pill background) ===
+    const controlsText = 'W/LMB: Boost  •  SPACE: Eject Mass';
+    this.ctx.font = '10px Inter, system-ui, sans-serif';
+    const textWidth = this.ctx.measureText(controlsText).width;
+    const pillW = textWidth + 24;
+    const pillH = 22;
+    const pillX = (canvas.width - pillW) / 2;
+    const pillY = canvas.height - padding - pillH - 2;
+
+    // Pill background
+    this.ctx.fillStyle = 'rgba(15, 23, 42, 0.75)';
+    this.ctx.beginPath();
+    this.ctx.roundRect(pillX, pillY, pillW, pillH, pillH / 2);
+    this.ctx.fill();
+    this.ctx.strokeStyle = 'rgba(100, 150, 255, 0.15)';
+    this.ctx.lineWidth = 1;
+    this.ctx.stroke();
+
+    // Text
+    this.ctx.fillStyle = '#64748b';
     this.ctx.textAlign = 'center';
-    this.ctx.fillText(
-      'W/LMB: Boost  •  SPACE: Eject Mass',
-      canvas.width / 2,
-      canvas.height - padding - 5
-    );
+    this.ctx.fillText(controlsText, canvas.width / 2, pillY + 15);
 
     // === MINIMAP ===
     this.renderMinimap(world, canvas, padding);
@@ -1057,33 +1169,158 @@ export class RenderSystem {
     this.ctx.fillText(`${aliveCount} alive`, centerX, minimapY - 6);
   }
 
-  private drawPanel(x: number, y: number, w: number, h: number): void {
-    // Background
-    this.ctx.fillStyle = 'rgba(15, 23, 42, 0.85)';
-    this.ctx.beginPath();
-    this.ctx.roundRect(x, y, w, h, 8);
-    this.ctx.fill();
+  // Enhanced panel with gradient background and optional corner accents
+  private drawPanelEnhanced(
+    x: number,
+    y: number,
+    w: number,
+    h: number,
+    options?: { cornerAccents?: boolean; glowColor?: string }
+  ): void {
+    const ctx = this.ctx;
 
-    // Border
-    this.ctx.strokeStyle = 'rgba(100, 116, 139, 0.3)';
-    this.ctx.lineWidth = 1;
-    this.ctx.stroke();
+    // Create gradient background
+    const gradient = ctx.createLinearGradient(x, y, x, y + h);
+    gradient.addColorStop(0, 'rgba(15, 23, 42, 0.92)');
+    gradient.addColorStop(1, 'rgba(10, 15, 30, 0.95)');
+
+    ctx.fillStyle = gradient;
+    ctx.beginPath();
+    ctx.roundRect(x, y, w, h, 8);
+    ctx.fill();
+
+    // Border with subtle glow
+    ctx.strokeStyle = options?.glowColor
+      ? this.colorWithAlpha(options.glowColor, 0.3)
+      : 'rgba(100, 150, 255, 0.2)';
+    ctx.lineWidth = 1;
+    ctx.stroke();
+
+    // Inner highlight line at top
+    ctx.strokeStyle = 'rgba(255, 255, 255, 0.05)';
+    ctx.beginPath();
+    ctx.moveTo(x + 12, y + 1);
+    ctx.lineTo(x + w - 12, y + 1);
+    ctx.stroke();
+
+    // Corner accents
+    if (options?.cornerAccents) {
+      this.drawCornerAccents(x, y, w, h);
+    }
   }
 
-  private drawProgressBar(x: number, y: number, w: number, h: number, percent: number, color: string): void {
-    // Background
-    this.ctx.fillStyle = 'rgba(51, 65, 85, 0.8)';
-    this.ctx.beginPath();
-    this.ctx.roundRect(x, y, w, h, h / 2);
-    this.ctx.fill();
+  // Cyan corner accent marks for sci-fi look
+  private drawCornerAccents(x: number, y: number, w: number, h: number): void {
+    const ctx = this.ctx;
+    const accentLen = 12;
+    const accentOffset = 4;
+
+    ctx.strokeStyle = 'rgba(0, 255, 255, 0.5)';
+    ctx.lineWidth = 1.5;
+
+    // Top-left
+    ctx.beginPath();
+    ctx.moveTo(x + accentOffset, y + accentOffset + accentLen);
+    ctx.lineTo(x + accentOffset, y + accentOffset);
+    ctx.lineTo(x + accentOffset + accentLen, y + accentOffset);
+    ctx.stroke();
+
+    // Top-right
+    ctx.beginPath();
+    ctx.moveTo(x + w - accentOffset - accentLen, y + accentOffset);
+    ctx.lineTo(x + w - accentOffset, y + accentOffset);
+    ctx.lineTo(x + w - accentOffset, y + accentOffset + accentLen);
+    ctx.stroke();
+
+    // Bottom-left
+    ctx.beginPath();
+    ctx.moveTo(x + accentOffset, y + h - accentOffset - accentLen);
+    ctx.lineTo(x + accentOffset, y + h - accentOffset);
+    ctx.lineTo(x + accentOffset + accentLen, y + h - accentOffset);
+    ctx.stroke();
+
+    // Bottom-right
+    ctx.beginPath();
+    ctx.moveTo(x + w - accentOffset - accentLen, y + h - accentOffset);
+    ctx.lineTo(x + w - accentOffset, y + h - accentOffset);
+    ctx.lineTo(x + w - accentOffset, y + h - accentOffset - accentLen);
+    ctx.stroke();
+  }
+
+  // Enhanced progress bar with glow effect
+  private drawProgressBarEnhanced(
+    x: number,
+    y: number,
+    w: number,
+    h: number,
+    percent: number,
+    color: string,
+    showGlow: boolean = false
+  ): void {
+    const ctx = this.ctx;
+
+    // Background track
+    ctx.fillStyle = 'rgba(30, 41, 59, 0.8)';
+    ctx.beginPath();
+    ctx.roundRect(x, y, w, h, h / 2);
+    ctx.fill();
+
+    // Inner shadow
+    ctx.fillStyle = 'rgba(0, 0, 0, 0.3)';
+    ctx.beginPath();
+    ctx.roundRect(x + 1, y + 1, w - 2, h - 2, (h - 2) / 2);
+    ctx.fill();
 
     // Fill
     if (percent > 0) {
-      this.ctx.fillStyle = color;
-      this.ctx.beginPath();
-      this.ctx.roundRect(x, y, Math.max(w * percent, h), h, h / 2);
-      this.ctx.fill();
+      const fillWidth = Math.max(w * Math.min(percent, 1), h);
+
+      // Glow effect
+      if (showGlow) {
+        ctx.save();
+        ctx.shadowColor = color;
+        ctx.shadowBlur = 8;
+        ctx.fillStyle = color;
+        ctx.beginPath();
+        ctx.roundRect(x, y, fillWidth, h, h / 2);
+        ctx.fill();
+        ctx.restore();
+      }
+
+      // Main fill with gradient
+      const fillGradient = ctx.createLinearGradient(x, y, x, y + h);
+      fillGradient.addColorStop(0, this.lightenColor(color, 30));
+      fillGradient.addColorStop(0.5, color);
+      fillGradient.addColorStop(1, this.colorWithAlpha(color, 0.8));
+
+      ctx.fillStyle = fillGradient;
+      ctx.beginPath();
+      ctx.roundRect(x, y, fillWidth, h, h / 2);
+      ctx.fill();
+
+      // Highlight shine
+      ctx.fillStyle = 'rgba(255, 255, 255, 0.2)';
+      ctx.beginPath();
+      ctx.roundRect(x + 2, y + 1, fillWidth - 4, h / 3, h / 4);
+      ctx.fill();
     }
+  }
+
+  // Draw a glowing text effect
+  private drawGlowText(
+    text: string,
+    x: number,
+    y: number,
+    color: string,
+    glowIntensity: number = 1
+  ): void {
+    const ctx = this.ctx;
+    ctx.save();
+    ctx.shadowColor = color;
+    ctx.shadowBlur = 6 * glowIntensity;
+    ctx.fillStyle = color;
+    ctx.fillText(text, x, y);
+    ctx.restore();
   }
 
   private renderCountdown(time: number): void {
@@ -1102,33 +1339,72 @@ export class RenderSystem {
 
   private renderConnectionStatus(state: RenderState): void {
     const canvas = this.ctx.canvas;
-    const padding = 10;
+    const padding = 12;
 
-    // Connection indicator
-    let statusColor = '#22c55e'; // green
+    // Determine status color based on connection and latency
+    let statusColor = '#22c55e'; // green - good
+    let statusLabel = 'GOOD';
 
-    switch (state.connectionState) {
-      case 'connecting':
-        statusColor = '#fbbf24';
-        break;
-      case 'disconnected':
-      case 'error':
-        statusColor = '#ef4444';
-        break;
+    if (state.connectionState === 'connecting') {
+      statusColor = '#fbbf24'; // yellow
+      statusLabel = 'CONNECTING';
+    } else if (state.connectionState === 'disconnected' || state.connectionState === 'error') {
+      statusColor = '#ef4444'; // red
+      statusLabel = 'OFFLINE';
+    } else if (state.rtt > 150) {
+      statusColor = '#ef4444'; // red - high latency
+      statusLabel = 'HIGH';
+    } else if (state.rtt > 80) {
+      statusColor = '#fbbf24'; // yellow - moderate latency
+      statusLabel = 'OK';
     }
 
-    // Status dot
+    // Pill background
+    const pillW = 70;
+    const pillH = 20;
+    const pillX = canvas.width - padding - pillW;
+    const pillY = padding - 2;
+
+    this.ctx.fillStyle = 'rgba(15, 23, 42, 0.85)';
+    this.ctx.beginPath();
+    this.ctx.roundRect(pillX, pillY, pillW, pillH, pillH / 2);
+    this.ctx.fill();
+    this.ctx.strokeStyle = this.colorWithAlpha(statusColor, 0.3);
+    this.ctx.lineWidth = 1;
+    this.ctx.stroke();
+
+    // Status dot with glow
+    const dotX = pillX + 12;
+    const dotY = pillY + pillH / 2;
+    const dotRadius = 4;
+
+    // Glow
+    this.ctx.save();
+    this.ctx.shadowColor = statusColor;
+    this.ctx.shadowBlur = 8;
     this.ctx.fillStyle = statusColor;
     this.ctx.beginPath();
-    this.ctx.arc(canvas.width - padding - 5, padding + 5, 5, 0, Math.PI * 2);
+    this.ctx.arc(dotX, dotY, dotRadius, 0, Math.PI * 2);
+    this.ctx.fill();
+    this.ctx.restore();
+
+    // Solid dot
+    this.ctx.fillStyle = statusColor;
+    this.ctx.beginPath();
+    this.ctx.arc(dotX, dotY, dotRadius, 0, Math.PI * 2);
     this.ctx.fill();
 
     // RTT display
     if (state.connectionState === 'connected') {
-      this.ctx.fillStyle = '#606080';
+      this.ctx.fillStyle = '#94a3b8';
       this.ctx.font = '10px monospace';
       this.ctx.textAlign = 'right';
-      this.ctx.fillText(`${Math.round(state.rtt)}ms`, canvas.width - padding - 15, padding + 8);
+      this.ctx.fillText(`${Math.round(state.rtt)}ms`, pillX + pillW - 8, pillY + 14);
+    } else {
+      this.ctx.fillStyle = statusColor;
+      this.ctx.font = '9px Inter, system-ui, sans-serif';
+      this.ctx.textAlign = 'right';
+      this.ctx.fillText(statusLabel, pillX + pillW - 8, pillY + 14);
     }
   }
 
