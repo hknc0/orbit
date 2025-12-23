@@ -89,23 +89,30 @@ impl AOIManager {
             }
         }
 
-        // Add nearby players up to max_entities cap
-        for player in &full_snapshot.players {
-            // Skip already added players
-            if player.id == player_id || top_player_ids.contains(&player.id) {
-                continue;
-            }
+        // Collect nearby players with their distances
+        // CRITICAL: Sort by distance to ensure closest players are included first
+        // This prevents far-away players from taking priority over nearby ones
+        // when max_entities cap is reached (HashMap iteration order is arbitrary)
+        let mut nearby_with_distance: Vec<(&PlayerSnapshot, f32)> = full_snapshot
+            .players
+            .iter()
+            .filter(|p| p.id != player_id && !top_player_ids.contains(&p.id))
+            .map(|p| {
+                let distance = (p.position - player_position).length();
+                (p, distance)
+            })
+            .filter(|(_, distance)| *distance <= self.config.extended_radius)
+            .collect();
 
-            // Check distance
-            let distance = (player.position - player_position).length();
-            if distance <= self.config.extended_radius {
-                filtered_players.push(player.clone());
-            }
+        // Sort by distance (closest first)
+        nearby_with_distance.sort_by(|a, b| a.1.partial_cmp(&b.1).unwrap_or(std::cmp::Ordering::Equal));
 
-            // Cap at max entities (but self and top players are already in)
+        // Add nearby players up to max_entities cap (closest first)
+        for (player, _distance) in nearby_with_distance {
             if filtered_players.len() >= self.config.max_entities {
                 break;
             }
+            filtered_players.push(player.clone());
         }
 
         // Fallback should never happen now, but keep for safety
@@ -540,5 +547,96 @@ mod tests {
         // Count occurrences of local player
         let self_count = filtered.players.iter().filter(|p| p.id == player_id).count();
         assert_eq!(self_count, 1, "Local player should appear exactly once, not duplicated");
+    }
+
+    #[test]
+    fn test_aoi_prioritizes_closest_players() {
+        // When max_entities is limited, closest players should be included first
+        // This prevents invisible collisions from players that are actually nearby
+        let max_entities = 5;  // Very limited
+        let config = AOIConfig {
+            full_detail_radius: 1000.0,
+            extended_radius: 1000.0,
+            max_entities,
+            always_include_top_n: 0,  // No top player priority
+        };
+        let aoi = AOIManager::new(config);
+
+        let player_id = Uuid::new_v4();
+        let player_pos = Vec2::new(0.0, 0.0);
+
+        // Create 20 players at various distances
+        let mut snapshot = create_test_snapshot(20);
+        snapshot.players[0].id = player_id;
+        snapshot.players[0].position = player_pos;
+
+        // Set up distances: some far (500-900), some close (50-150)
+        // Put the CLOSE ones at the END of the array to test sorting
+        for i in 1..15 {
+            // Far players (500-900 units)
+            snapshot.players[i].position = Vec2::new(500.0 + (i as f32) * 30.0, 0.0);
+        }
+        for i in 15..20 {
+            // Close players (50-150 units) - these should be prioritized
+            snapshot.players[i].position = Vec2::new(50.0 + ((i - 15) as f32) * 25.0, 0.0);
+        }
+
+        let filtered = aoi.filter_for_player(player_id, player_pos, &snapshot);
+
+        // With max_entities = 5 (1 self + 4 others), we should have the closest 4 others
+        // Check that NO far players (500+ units) are included
+        for player in &filtered.players {
+            if player.id == player_id {
+                continue;
+            }
+            let distance = (player.position - player_pos).length();
+            assert!(
+                distance < 400.0,
+                "Far player at distance {} should NOT be included when closer players exist",
+                distance
+            );
+        }
+    }
+
+    #[test]
+    fn test_aoi_collision_visibility_guarantee() {
+        // Players within collision range (50-100 units) MUST be visible
+        // This test ensures no "invisible collision" scenarios
+        let config = AOIConfig {
+            full_detail_radius: 500.0,
+            extended_radius: 1000.0,
+            max_entities: 10,  // Limited
+            always_include_top_n: 0,
+        };
+        let aoi = AOIManager::new(config);
+
+        let player_id = Uuid::new_v4();
+        let player_pos = Vec2::new(0.0, 0.0);
+
+        // Create many players, with some very close (collision range)
+        let mut snapshot = create_test_snapshot(50);
+        snapshot.players[0].id = player_id;
+        snapshot.players[0].position = player_pos;
+
+        // Put 3 players at collision distance (30-50 units)
+        let close_ids: Vec<_> = (1..=3).map(|i| {
+            snapshot.players[i].position = Vec2::new(30.0 + (i as f32) * 10.0, 0.0);
+            snapshot.players[i].id
+        }).collect();
+
+        // Fill rest with far players (300-500 units)
+        for i in 4..50 {
+            snapshot.players[i].position = Vec2::new(300.0 + (i as f32) * 10.0, 0.0);
+        }
+
+        let filtered = aoi.filter_for_player(player_id, player_pos, &snapshot);
+
+        // ALL close players (collision range) MUST be included
+        for close_id in close_ids {
+            assert!(
+                filtered.players.iter().any(|p| p.id == close_id),
+                "Player at collision range MUST be visible to prevent invisible collisions"
+            );
+        }
     }
 }
