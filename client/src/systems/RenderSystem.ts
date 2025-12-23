@@ -528,35 +528,82 @@ export class RenderSystem {
     const speed = velocity.length();
     if (speed < 10) return;
 
+    const ctx = this.ctx;
+    const time = performance.now();
+
     // Flame direction is opposite to velocity
     const dirX = -velocity.x / speed;
     const dirY = -velocity.y / speed;
 
     const flameX = position.x + dirX * radius;
     const flameY = position.y + dirY * radius;
-    const flameLen = Math.min(radius * 1.5, 15 + speed * 0.05);
-    const flameWidth = radius * 0.4;
+
+    // Dynamic flame length based on speed with flicker
+    const baseLen = Math.min(radius * 2, 20 + speed * 0.08);
+    const flicker = 0.85 + Math.sin(time * 0.03) * 0.1 + Math.sin(time * 0.07) * 0.05;
+    const flameLen = baseLen * flicker;
+    const flameWidth = radius * 0.5;
 
     const perpX = -dirY;
     const perpY = dirX;
 
-    // Outer flame
-    this.ctx.fillStyle = 'rgba(255, 150, 50, 0.8)';
-    this.ctx.beginPath();
-    this.ctx.moveTo(flameX + perpX * flameWidth, flameY + perpY * flameWidth);
-    this.ctx.lineTo(flameX - perpX * flameWidth, flameY - perpY * flameWidth);
-    this.ctx.lineTo(flameX + dirX * flameLen, flameY + dirY * flameLen);
-    this.ctx.closePath();
-    this.ctx.fill();
+    // Outer glow (soft orange, no shadowBlur for performance)
+    const glowAlpha = 0.25 + Math.sin(time * 0.02) * 0.1;
+    ctx.fillStyle = `rgba(255, 100, 30, ${glowAlpha})`;
+    ctx.beginPath();
+    ctx.moveTo(flameX + perpX * flameWidth * 1.4, flameY + perpY * flameWidth * 1.4);
+    ctx.lineTo(flameX - perpX * flameWidth * 1.4, flameY - perpY * flameWidth * 1.4);
+    ctx.lineTo(flameX + dirX * flameLen * 1.1, flameY + dirY * flameLen * 1.1);
+    ctx.closePath();
+    ctx.fill();
 
-    // Inner flame
-    this.ctx.fillStyle = 'rgba(255, 220, 100, 0.9)';
-    this.ctx.beginPath();
-    this.ctx.moveTo(flameX + perpX * flameWidth * 0.5, flameY + perpY * flameWidth * 0.5);
-    this.ctx.lineTo(flameX - perpX * flameWidth * 0.5, flameY - perpY * flameWidth * 0.5);
-    this.ctx.lineTo(flameX + dirX * flameLen * 0.6, flameY + dirY * flameLen * 0.6);
-    this.ctx.closePath();
-    this.ctx.fill();
+    // Main outer flame (orange-red)
+    ctx.fillStyle = 'rgba(255, 120, 40, 0.9)';
+    ctx.beginPath();
+    ctx.moveTo(flameX + perpX * flameWidth, flameY + perpY * flameWidth);
+    ctx.lineTo(flameX - perpX * flameWidth, flameY - perpY * flameWidth);
+    ctx.lineTo(flameX + dirX * flameLen, flameY + dirY * flameLen);
+    ctx.closePath();
+    ctx.fill();
+
+    // Middle flame (orange-yellow)
+    const midFlicker = 0.9 + Math.sin(time * 0.05 + 1) * 0.1;
+    ctx.fillStyle = 'rgba(255, 180, 60, 0.95)';
+    ctx.beginPath();
+    ctx.moveTo(flameX + perpX * flameWidth * 0.65, flameY + perpY * flameWidth * 0.65);
+    ctx.lineTo(flameX - perpX * flameWidth * 0.65, flameY - perpY * flameWidth * 0.65);
+    ctx.lineTo(flameX + dirX * flameLen * 0.75 * midFlicker, flameY + dirY * flameLen * 0.75 * midFlicker);
+    ctx.closePath();
+    ctx.fill();
+
+    // Inner core (bright yellow-white)
+    const coreFlicker = 0.85 + Math.sin(time * 0.08 + 2) * 0.15;
+    ctx.fillStyle = 'rgba(255, 240, 180, 1)';
+    ctx.beginPath();
+    ctx.moveTo(flameX + perpX * flameWidth * 0.3, flameY + perpY * flameWidth * 0.3);
+    ctx.lineTo(flameX - perpX * flameWidth * 0.3, flameY - perpY * flameWidth * 0.3);
+    ctx.lineTo(flameX + dirX * flameLen * 0.45 * coreFlicker, flameY + dirY * flameLen * 0.45 * coreFlicker);
+    ctx.closePath();
+    ctx.fill();
+
+    // Sparks at higher speeds (simple dots, performant)
+    if (speed > 80) {
+      const sparkCount = Math.min(3, Math.floor((speed - 80) / 40) + 1);
+      for (let i = 0; i < sparkCount; i++) {
+        const sparkPhase = (time * 0.01 + i * 2.1) % 1;
+        const sparkDist = flameLen * (0.6 + sparkPhase * 0.5);
+        const sparkOffset = Math.sin(time * 0.02 + i * 3) * flameWidth * 0.3;
+        const sparkX = flameX + dirX * sparkDist + perpX * sparkOffset;
+        const sparkY = flameY + dirY * sparkDist + perpY * sparkOffset;
+        const sparkAlpha = 1 - sparkPhase;
+        const sparkSize = 2 * (1 - sparkPhase * 0.5);
+
+        ctx.fillStyle = `rgba(255, 220, 150, ${sparkAlpha})`;
+        ctx.beginPath();
+        ctx.arc(sparkX, sparkY, sparkSize, 0, Math.PI * 2);
+        ctx.fill();
+      }
+    }
   }
 
   private renderHUD(world: World, _state: RenderState): void {
