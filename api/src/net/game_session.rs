@@ -74,13 +74,20 @@ impl GameSession {
         // Fill with bots initially
         game_loop.fill_with_bots(bot_count);
 
-        // Create AOI manager with performance-tuned settings
+        // Create AOI manager with view-based radii (not arena-based)
+        // Camera zoom ranges 0.45x-1.0x, screen ~2000px diagonal = ~4500 world units at max zoom out
+        // Using fixed values that work regardless of arena size
         let aoi_config = AOIConfig {
-            full_detail_radius: 500.0,   // Full detail for nearby entities
-            extended_radius: 1200.0,     // Extended radius for medium distance
-            max_entities: 100,           // Cap per client
-            always_include_top_n: 5,     // Always show top 5 players
+            full_detail_radius: 3000.0,   // Full detail for immediate viewport
+            extended_radius: 6000.0,      // Extended for max zoom out (0.45x) + buffer
+            max_entities: 150,            // Cap per client for performance
+            always_include_top_n: 10,     // Always show top 10 players
         };
+        info!(
+            "AOI configured: full_detail={:.0}, extended={:.0}, max_entities={}, arena_radius={:.0}",
+            aoi_config.full_detail_radius, aoi_config.extended_radius, aoi_config.max_entities,
+            game_loop.state().arena.escape_radius
+        );
 
         // Initialize metrics with current state
         if let Some(ref m) = metrics {
