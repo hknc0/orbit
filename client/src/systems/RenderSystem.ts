@@ -3,7 +3,6 @@
 
 import { World } from '@/core/World';
 import { Vec2 } from '@/utils/Vec2';
-import { ARENA } from '@/utils/Constants';
 import type { GamePhase } from '@/core/Game';
 import type { ConnectionState } from '@/net/Transport';
 
@@ -34,6 +33,7 @@ export class RenderSystem {
   private cameraOffset: Vec2 = new Vec2();
   private targetCameraOffset: Vec2 = new Vec2();
   private readonly CAMERA_SMOOTHING = 0.1;
+  private _densityLogged = false; // Debug flag
 
   // Track previous speeds to detect acceleration (for other players' boost flames)
   private previousSpeeds: Map<string, number> = new Map();
@@ -45,27 +45,8 @@ export class RenderSystem {
   private readonly TRAIL_POINT_LIFETIME = 400; // ms
   private readonly TRAIL_MIN_DISTANCE = 8; // minimum distance between trail points
 
-  // Minimap zoom
-  private minimapZoom: number = 1.0;
-  private readonly MINIMAP_ZOOM_MIN = 0.5;
-  private readonly MINIMAP_ZOOM_MAX = 3.0;
-  private readonly MINIMAP_ZOOM_STEP = 0.25;
-
   constructor(ctx: CanvasRenderingContext2D) {
     this.ctx = ctx;
-    this.setupMinimapZoomControls();
-  }
-
-  private setupMinimapZoomControls(): void {
-    window.addEventListener('keydown', (e) => {
-      if (e.code === 'BracketRight' || e.code === 'Equal') {
-        // ] or = to zoom in
-        this.minimapZoom = Math.min(this.minimapZoom + this.MINIMAP_ZOOM_STEP, this.MINIMAP_ZOOM_MAX);
-      } else if (e.code === 'BracketLeft' || e.code === 'Minus') {
-        // [ or - to zoom out
-        this.minimapZoom = Math.max(this.minimapZoom - this.MINIMAP_ZOOM_STEP, this.MINIMAP_ZOOM_MIN);
-      }
-    });
   }
 
   private updatePlayerTrails(world: World): void {
@@ -958,7 +939,7 @@ export class RenderSystem {
     }
 
     // === CONTROLS HINT (Pill background) ===
-    const controlsText = 'WASD: Move  •  LMB: Boost  •  SPACE: Eject  •  [ ]: Map Zoom';
+    const controlsText = 'WASD/Arrows: Move  •  LMB/Shift: Boost  •  SPACE: Eject';
     this.ctx.font = '10px Inter, system-ui, sans-serif';
     const textWidth = this.ctx.measureText(controlsText).width;
     const pillW = textWidth + 24;
@@ -988,34 +969,10 @@ export class RenderSystem {
     const minimapSize = 120;
     const minimapX = canvas.width - padding - minimapSize;
     const minimapY = canvas.height - padding - minimapSize;
-    const minimapCenterX = minimapX + minimapSize / 2;
-    const minimapCenterY = minimapY + minimapSize / 2;
+    const centerX = minimapX + minimapSize / 2;
+    const centerY = minimapY + minimapSize / 2;
     const safeRadius = world.getArenaSafeRadius();
-
-    // Apply zoom to scale - higher zoom means world coordinates take more pixels
-    const baseScale = (minimapSize / 2 - 4) / safeRadius;
-    const scale = baseScale * this.minimapZoom;
-
-    // Get local player for centering when zoomed
-    const localPlayer = world.getLocalPlayer();
-
-    // When zoomed in (>1x), center on local player; otherwise center on arena origin
-    let viewCenterWorldX = 0;
-    let viewCenterWorldY = 0;
-    if (this.minimapZoom > 1 && localPlayer) {
-      viewCenterWorldX = localPlayer.position.x;
-      viewCenterWorldY = localPlayer.position.y;
-    }
-
-    // Helper to convert world position to minimap position
-    const worldToMinimap = (worldX: number, worldY: number) => ({
-      x: minimapCenterX + (worldX - viewCenterWorldX) * scale,
-      y: minimapCenterY + (worldY - viewCenterWorldY) * scale,
-    });
-
-    // For backward compatibility, keep centerX/centerY as minimap center
-    const centerX = minimapCenterX;
-    const centerY = minimapCenterY;
+    const scale = (minimapSize / 2 - 4) / safeRadius;
 
     // Minimap background
     this.ctx.fillStyle = 'rgba(15, 23, 42, 0.85)';
@@ -1029,21 +986,24 @@ export class RenderSystem {
     this.ctx.stroke();
 
     // Safe zone boundary on minimap
-    const safeZoneCenter = worldToMinimap(0, 0);
     this.ctx.strokeStyle = 'rgba(80, 80, 120, 0.5)';
     this.ctx.beginPath();
-    this.ctx.arc(safeZoneCenter.x, safeZoneCenter.y, safeRadius * scale, 0, Math.PI * 2);
+    this.ctx.arc(centerX, centerY, safeRadius * scale, 0, Math.PI * 2);
     this.ctx.stroke();
 
     // 1. Density heatmap (16x16 grid showing player concentrations)
     const densityGrid = world.getDensityGrid();
+    // Debug: log density grid once
+    if (densityGrid.length > 0 && !this._densityLogged) {
+      console.log('Density grid:', densityGrid.length, 'cells, sum:', densityGrid.reduce((a, b) => a + b, 0));
+      this._densityLogged = true;
+    }
     // Support both 8x8 (64) and 16x16 (256) grids
     const gridLength = densityGrid.length;
     if (gridLength === 64 || gridLength === 256) {
       const GRID_SIZE = Math.sqrt(gridLength);
-      // Grid covers the full arena from -ESCAPE_RADIUS to +ESCAPE_RADIUS (server uses escape_radius)
-      const gridRadius = ARENA.ESCAPE_RADIUS;
-      const cellWorldSize = (gridRadius * 2) / GRID_SIZE;
+      const gridPixelSize = minimapSize - 8;
+      const cellPixelSize = gridPixelSize / GRID_SIZE;
 
       // Find max density for normalization (use percentile to avoid single hotspots dominating)
       const sortedDensities = densityGrid.filter(d => d > 0).sort((a, b) => b - a);
@@ -1064,10 +1024,9 @@ export class RenderSystem {
           const density = densityGrid[idx];
 
           if (density > 0) {
-            // Convert grid cell to world coordinates (grid covers -gridRadius to +gridRadius)
-            const worldX = -gridRadius + (gx + 0.5) * cellWorldSize;
-            const worldY = -gridRadius + (gy + 0.5) * cellWorldSize;
-            const cellPos = worldToMinimap(worldX, worldY);
+            // Cell center position on minimap
+            const cellCenterX = centerX - gridPixelSize / 2 + (gx + 0.5) * cellPixelSize;
+            const cellCenterY = centerY - gridPixelSize / 2 + (gy + 0.5) * cellPixelSize;
 
             // Intensity with log scale for better distribution
             const rawIntensity = Math.min(density / maxDensity, 1);
@@ -1089,11 +1048,11 @@ export class RenderSystem {
               b = Math.floor(150 - 130 * t);
             }
 
-            // Radial gradient for soft blob effect - scale with zoom
-            const blobRadius = (cellWorldSize * scale) * 1.2;
+            // Radial gradient for soft blob effect
+            const blobRadius = cellPixelSize * 1.2;
             const gradient = this.ctx.createRadialGradient(
-              cellPos.x, cellPos.y, 0,
-              cellPos.x, cellPos.y, blobRadius
+              cellCenterX, cellCenterY, 0,
+              cellCenterX, cellCenterY, blobRadius
             );
 
             const alpha = 0.15 + intensity * 0.4;
@@ -1103,7 +1062,7 @@ export class RenderSystem {
 
             this.ctx.fillStyle = gradient;
             this.ctx.beginPath();
-            this.ctx.arc(cellPos.x, cellPos.y, blobRadius, 0, Math.PI * 2);
+            this.ctx.arc(cellCenterX, cellCenterY, blobRadius, 0, Math.PI * 2);
             this.ctx.fill();
           }
         }
@@ -1114,14 +1073,15 @@ export class RenderSystem {
 
     // 1b. Gravity wells - tiny orange dots (sun color)
     for (const well of world.arena.gravityWells) {
-      const wellPos = worldToMinimap(well.position.x, well.position.y);
+      const wellX = centerX + well.position.x * scale;
+      const wellY = centerY + well.position.y * scale;
 
       // Only draw if within minimap bounds
-      const dist = Math.sqrt(Math.pow(wellPos.x - centerX, 2) + Math.pow(wellPos.y - centerY, 2));
+      const dist = Math.sqrt(Math.pow(wellX - centerX, 2) + Math.pow(wellY - centerY, 2));
       if (dist < minimapSize / 2 - 2) {
         this.ctx.fillStyle = '#ff9944';
         this.ctx.beginPath();
-        this.ctx.arc(wellPos.x, wellPos.y, 1.5 + this.minimapZoom * 0.5, 0, Math.PI * 2);
+        this.ctx.arc(wellX, wellY, 1.5, 0, Math.PI * 2);
         this.ctx.fill();
       }
     }
@@ -1148,8 +1108,10 @@ export class RenderSystem {
       // Skip if already visible as regular player or is local player
       if (visiblePlayerIds.has(notable.id) || notable.id === world.localPlayerId) continue;
 
-      const worldPos = worldToMinimap(notable.position.x, notable.position.y);
-      const pos = clampToMinimap(worldPos.x, worldPos.y);
+      const pos = clampToMinimap(
+        centerX + notable.position.x * scale,
+        centerY + notable.position.y * scale
+      );
 
       // Pulsing size based on mass
       const massRatio = Math.min(notable.mass / 200, 1);
@@ -1185,8 +1147,10 @@ export class RenderSystem {
       if (!player.alive) continue;
       if (playerId === world.localPlayerId) continue;
 
-      const worldPos = worldToMinimap(player.position.x, player.position.y);
-      const pos = clampToMinimap(worldPos.x, worldPos.y);
+      const pos = clampToMinimap(
+        centerX + player.position.x * scale,
+        centerY + player.position.y * scale
+      );
 
       // Colored dot with outline for visibility over heatmap
       const color = world.getPlayerColor(player.colorIndex);
@@ -1203,11 +1167,12 @@ export class RenderSystem {
     }
 
     // 2. Local player - VERY prominent, always on top (show even when dead)
-    // Note: localPlayer already defined above
+    const localPlayer = world.getLocalPlayer();
     if (localPlayer) {
-      // When zoomed in, local player is at center; otherwise use world position
-      const localWorldPos = worldToMinimap(localPlayer.position.x, localPlayer.position.y);
-      const pos = clampToMinimap(localWorldPos.x, localWorldPos.y);
+      const pos = clampToMinimap(
+        centerX + localPlayer.position.x * scale,
+        centerY + localPlayer.position.y * scale
+      );
 
       if (localPlayer.alive) {
         // Alive: Bright LIME GREEN indicator (contrasts with orange heatmap)
@@ -1292,14 +1257,6 @@ export class RenderSystem {
     this.ctx.textAlign = 'center';
     this.ctx.fillStyle = 'rgba(148, 163, 184, 0.7)';
     this.ctx.fillText(`${aliveCount} alive`, Math.round(centerX), Math.round(minimapY - 6));
-
-    // Zoom indicator (only show if not at default zoom)
-    if (this.minimapZoom !== 1.0) {
-      this.ctx.font = '9px monospace';
-      this.ctx.fillStyle = 'rgba(0, 212, 255, 0.8)';
-      this.ctx.textAlign = 'right';
-      this.ctx.fillText(`${this.minimapZoom.toFixed(1)}x`, Math.round(minimapX + minimapSize - 4), Math.round(minimapY + minimapSize - 4));
-    }
   }
 
   // Enhanced panel with gradient background and optional corner accents
