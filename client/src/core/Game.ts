@@ -94,7 +94,8 @@ export class Game {
     this.transport.disconnect();
     this.world.reset();
     this.stateSync.reset();
-    this.inputSystem.destroy();
+    this.inputSystem.reset();    // Reset state but keep listeners for next game
+    this.renderSystem.reset();   // Clear camera and trails for fresh start
     this.setPhase('menu');
     this.stopGameLoop();
   }
@@ -189,7 +190,7 @@ export class Game {
         break;
 
       case 'JoinRejected':
-        this.events.onConnectionError(`Join rejected: ${message.reason}`);
+        this.events.onConnectionError(this.formatRejectionMessage(message.reason));
         this.disconnect();
         break;
 
@@ -287,6 +288,27 @@ export class Game {
       this.phase = phase;
       this.events.onPhaseChange(phase);
     }
+  }
+
+  private formatRejectionMessage(reason: string): string {
+    // Convert server rejection reasons to user-friendly messages
+    if (reason.includes('Server at capacity')) {
+      return 'Server is full. Please try again in a moment.';
+    }
+    if (reason.includes('Invalid name') || reason.includes('Name too')) {
+      return 'Please enter a valid player name (2-20 characters).';
+    }
+    if (reason.includes('rate limit') || reason.includes('too many')) {
+      return 'Too many connection attempts. Please wait a moment.';
+    }
+    if (reason.includes('banned') || reason.includes('blocked')) {
+      return 'You have been temporarily blocked. Please try again later.';
+    }
+    if (reason.includes('maintenance') || reason.includes('restarting')) {
+      return 'Server is undergoing maintenance. Please try again shortly.';
+    }
+    // Default: show the server message if it's already user-friendly
+    return reason;
   }
 
   private stopGameLoop(): void {

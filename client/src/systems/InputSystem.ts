@@ -30,13 +30,19 @@ export class InputSystem {
     this.setupListeners();
   }
 
-  private resetInputState(): void {
+  /** Reset input state without removing listeners (for game restart) */
+  reset(): void {
     this.isMouseBoostHeld = false;
     this.isKeyBoostHeld = false;
     this.isEjectHeld = false;
     this.pendingEjectRelease = false;
+    this.ejectChargeTime = 0;
     this.keysHeld.clear();
     this.keyDirection.set(0, 0);
+  }
+
+  private resetInputState(): void {
+    this.reset();
   }
 
   private addListener<K extends keyof WindowEventMap>(

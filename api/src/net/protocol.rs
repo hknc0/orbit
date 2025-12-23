@@ -187,7 +187,8 @@ impl GameSnapshot {
     /// Calculate player density grid (16x16) for minimap heatmap
     fn calculate_density_grid(state: &GameState) -> Vec<u8> {
         let mut grid = vec![0u8; DENSITY_GRID_SIZE * DENSITY_GRID_SIZE];
-        let arena_radius = state.arena.escape_radius;
+        // Use current_safe_radius() to match minimap scaling on client
+        let arena_radius = state.arena.current_safe_radius();
         let cell_size = (arena_radius * 2.0) / DENSITY_GRID_SIZE as f32;
 
         for player in state.players.values() {

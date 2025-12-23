@@ -1756,4 +1756,17 @@ export class RenderSystem {
     const b = Math.min(255, parseInt(hex.substring(4, 6), 16) + percent);
     return `rgb(${r}, ${g}, ${b})`;
   }
+
+  /** Reset render state for new game session */
+  reset(): void {
+    this.cameraOffset.set(0, 0);
+    this.targetCameraOffset.set(0, 0);
+    this.cameraInitialized = false;
+    this.gameStartTime = 0;
+    this.currentZoom = this.ZOOM_MAX;
+    this.targetZoom = this.ZOOM_MAX;
+    this.previousSpeeds.clear();
+    this.playerTrails.clear();
+    this.lastTrailPositions.clear();
+  }
 }
