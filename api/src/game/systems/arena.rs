@@ -165,13 +165,17 @@ pub fn random_spawn_position() -> crate::util::vec2::Vec2 {
 
 /// Calculate a random spawn position with arena scale
 pub fn random_spawn_position_scaled(scale: f32) -> crate::util::vec2::Vec2 {
-    use crate::game::constants::arena::OUTER_RADIUS;
+    use crate::game::constants::arena::{CORE_RADIUS, OUTER_RADIUS};
     use rand::Rng;
 
     let mut rng = rand::thread_rng();
 
-    // Spawn across a wider range (20% to 80% of outer radius)
-    let min_radius = OUTER_RADIUS * 0.2 * scale;
+    // Minimum spawn radius must be outside the supermassive black hole death zone
+    // Supermassive core is CORE_RADIUS * 2.5 = 125 units, so use 3.0x for safety margin
+    let supermassive_safe_radius = CORE_RADIUS * 3.0; // 150 units
+
+    // Spawn across a wider range (20% to 80% of outer radius, but never inside death zone)
+    let min_radius = (OUTER_RADIUS * 0.2 * scale).max(supermassive_safe_radius);
     let max_radius = OUTER_RADIUS * 0.8 * scale;
 
     let angle = rng.gen_range(0.0..std::f32::consts::TAU);
@@ -290,13 +294,17 @@ pub fn spawn_velocity(position: crate::util::vec2::Vec2) -> crate::util::vec2::V
 
 /// Calculate spawn positions for multiple players randomly distributed across the arena
 pub fn spawn_positions(count: usize) -> Vec<crate::util::vec2::Vec2> {
-    use crate::game::constants::arena::OUTER_RADIUS;
+    use crate::game::constants::arena::{CORE_RADIUS, OUTER_RADIUS};
     use rand::Rng;
 
     let mut rng = rand::thread_rng();
 
-    // Spawn across a wider range of the arena (20% to 80% of outer radius)
-    let min_radius = OUTER_RADIUS * 0.2;
+    // Minimum spawn radius must be outside the supermassive black hole death zone
+    // Supermassive core is CORE_RADIUS * 2.5 = 125 units, so use 3.0x for safety margin
+    let supermassive_safe_radius = CORE_RADIUS * 3.0; // 150 units
+
+    // Spawn across a wider range of the arena (20% to 80% of outer radius, but never inside death zone)
+    let min_radius = (OUTER_RADIUS * 0.2).max(supermassive_safe_radius);
     let max_radius = OUTER_RADIUS * 0.8;
 
     (0..count)
@@ -441,12 +449,13 @@ mod tests {
 
     #[test]
     fn test_spawn_positions_distributed() {
-        use crate::game::constants::arena::OUTER_RADIUS;
+        use crate::game::constants::arena::{CORE_RADIUS, OUTER_RADIUS};
 
         let positions = spawn_positions(10);
 
-        // Check that positions are within expected radius range (20% to 80% of outer)
-        let min_radius = OUTER_RADIUS * 0.2;
+        // Minimum is whichever is larger: 20% of outer radius or supermassive safe distance
+        let supermassive_safe_radius = CORE_RADIUS * 3.0;
+        let min_radius = (OUTER_RADIUS * 0.2).max(supermassive_safe_radius);
         let max_radius = OUTER_RADIUS * 0.8;
 
         for pos in positions {
@@ -469,9 +478,11 @@ mod tests {
 
     #[test]
     fn test_random_spawn_in_zone() {
-        use crate::game::constants::arena::OUTER_RADIUS;
+        use crate::game::constants::arena::{CORE_RADIUS, OUTER_RADIUS};
 
-        let min_radius = OUTER_RADIUS * 0.2;
+        // Minimum is whichever is larger: 20% of outer radius or supermassive safe distance
+        let supermassive_safe_radius = CORE_RADIUS * 3.0;
+        let min_radius = (OUTER_RADIUS * 0.2).max(supermassive_safe_radius);
         let max_radius = OUTER_RADIUS * 0.8;
 
         for _ in 0..100 {
@@ -479,6 +490,38 @@ mod tests {
             let dist = pos.length();
             assert!(dist >= min_radius * 0.9, "Position too close: {}", dist);
             assert!(dist <= max_radius * 1.1, "Position too far: {}", dist);
+        }
+    }
+
+    #[test]
+    fn test_spawn_outside_supermassive_death_zone() {
+        use crate::game::constants::arena::CORE_RADIUS;
+
+        // Supermassive black hole death zone is CORE_RADIUS * 2.5 = 125 units
+        let supermassive_core = CORE_RADIUS * 2.5;
+
+        // Test random_spawn_position
+        for _ in 0..100 {
+            let pos = random_spawn_position();
+            let dist = pos.length();
+            assert!(
+                dist > supermassive_core,
+                "Spawn position {} units from center is inside supermassive death zone ({})",
+                dist,
+                supermassive_core
+            );
+        }
+
+        // Test spawn_positions
+        let positions = spawn_positions(50);
+        for pos in positions {
+            let dist = pos.length();
+            assert!(
+                dist > supermassive_core,
+                "Spawn position {} units from center is inside supermassive death zone ({})",
+                dist,
+                supermassive_core
+            );
         }
     }
 
