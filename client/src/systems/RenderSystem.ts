@@ -35,6 +35,14 @@ export class RenderSystem {
   private readonly CAMERA_SMOOTHING = 0.1;
   private _densityLogged = false; // Debug flag
 
+  // Dynamic zoom based on speed
+  private currentZoom: number = 1.0;
+  private targetZoom: number = 1.0;
+  private readonly ZOOM_SMOOTHING = 0.05;
+  private readonly ZOOM_MIN = 0.65; // Max zoom out at high speed
+  private readonly ZOOM_MAX = 1.0;  // Normal zoom at rest
+  private readonly SPEED_FOR_MAX_ZOOM_OUT = 250; // Speed at which max zoom out is reached
+
   // Track previous speeds to detect acceleration (for other players' boost flames)
   private previousSpeeds: Map<string, number> = new Map();
 
@@ -148,8 +156,14 @@ export class RenderSystem {
         centerX - localPlayer.position.x,
         centerY - localPlayer.position.y
       );
+
+      // Calculate dynamic zoom based on speed
+      const speed = localPlayer.velocity.length();
+      const speedRatio = Math.min(speed / this.SPEED_FOR_MAX_ZOOM_OUT, 1);
+      this.targetZoom = this.ZOOM_MAX - (this.ZOOM_MAX - this.ZOOM_MIN) * speedRatio;
     } else {
       this.targetCameraOffset.set(centerX, centerY);
+      this.targetZoom = this.ZOOM_MAX;
     }
 
     // Smooth camera interpolation
@@ -158,10 +172,18 @@ export class RenderSystem {
     this.cameraOffset.y +=
       (this.targetCameraOffset.y - this.cameraOffset.y) * this.CAMERA_SMOOTHING;
 
+    // Smooth zoom interpolation
+    this.currentZoom += (this.targetZoom - this.currentZoom) * this.ZOOM_SMOOTHING;
+
     // Update trails for all players
     this.updatePlayerTrails(world);
 
     this.ctx.save();
+    // Apply zoom centered on screen
+    this.ctx.translate(centerX, centerY);
+    this.ctx.scale(this.currentZoom, this.currentZoom);
+    this.ctx.translate(-centerX, -centerY);
+    // Then apply camera offset
     this.ctx.translate(this.cameraOffset.x, this.cameraOffset.y);
 
     // Reset any lingering canvas state that might cause visual artifacts
