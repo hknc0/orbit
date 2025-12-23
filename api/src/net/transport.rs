@@ -107,22 +107,43 @@ async fn handle_connection(
     incoming: wtransport::endpoint::IncomingSession,
     _lobby_manager: Arc<RwLock<LobbyManager>>,
     _ban_list: Arc<RwLock<BanList>>,
-    _dos_protection: Arc<RwLock<DoSProtection>>,
+    dos_protection: Arc<RwLock<DoSProtection>>,
     game_session: Arc<RwLock<GameSession>>,
 ) -> anyhow::Result<()> {
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    use std::net::{IpAddr, Ipv4Addr};
 
     let session_request = incoming.await?;
 
+    // Use a placeholder IP - WebTransport doesn't easily expose peer IP
+    // In production, this should be extracted from a proxy header or QUIC connection
+    let client_ip = IpAddr::V4(Ipv4Addr::new(0, 0, 0, 0));
+
+    // Check DoS protection before accepting connection
+    let connection_id = {
+        let mut dos = dos_protection.write().await;
+        match dos.register_connection(client_ip) {
+            Ok(id) => id,
+            Err(e) => {
+                tracing::warn!("Connection rejected by DoS protection: {:?}", e);
+                return Err(anyhow::anyhow!("Connection rejected: {:?}", e));
+            }
+        }
+    };
+
     tracing::info!(
-        "New connection from: {:?}, path: {}",
+        "New connection from: {:?}, path: {}, conn_id: {}",
         session_request.authority(),
-        session_request.path()
+        session_request.path(),
+        connection_id
     );
 
     let connection = session_request.accept().await?;
 
-    tracing::info!("Connection accepted");
+    tracing::info!("Connection accepted (conn_id: {})", connection_id);
+
+    // Store connection info for cleanup
+    let dos_for_cleanup = dos_protection.clone();
 
     // Track this connection's player ID (set after JoinRequest)
     let player_id: Arc<RwLock<Option<PlayerId>>> = Arc::new(RwLock::new(None));
@@ -267,8 +288,8 @@ async fn handle_connection(
                                         // Store player ID for this connection
                                         *player_id.write().await = Some(new_player_id);
 
-                                        // Send JoinAccepted
-                                        let session_token = vec![0u8; 32]; // TODO: generate real token
+                                        // Send JoinAccepted with secure random token
+                                        let session_token: Vec<u8> = (0..32).map(|_| rand::random::<u8>()).collect();
                                         let response_msg = ServerMessage::JoinAccepted {
                                             player_id: new_player_id,
                                             session_token,
@@ -388,7 +409,13 @@ async fn handle_connection(
         session.remove_player(pid);
     }
 
-    tracing::info!("Connection closed");
+    // Unregister from DoS protection
+    {
+        let mut dos = dos_for_cleanup.write().await;
+        dos.unregister_connection(connection_id, client_ip);
+    }
+
+    tracing::info!("Connection closed (conn_id: {})", connection_id);
     Ok(())
 }
 

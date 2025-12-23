@@ -260,7 +260,7 @@ pub fn spawn_velocity_for_well(
         .min_by(|a, b| {
             let dist_a = (a.position - position).length_sq();
             let dist_b = (b.position - position).length_sq();
-            dist_a.partial_cmp(&dist_b).unwrap()
+            dist_a.partial_cmp(&dist_b).unwrap_or(std::cmp::Ordering::Equal)
         });
 
     let center = nearest_well.map(|w| w.position).unwrap_or(crate::util::vec2::Vec2::ZERO);

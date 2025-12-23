@@ -3,7 +3,7 @@
 //! Exposes game server metrics in Prometheus format for Grafana dashboards.
 //! Default endpoint: http://localhost:9090/metrics
 
-use std::collections::HashMap;
+use std::collections::{HashMap, VecDeque};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
@@ -53,8 +53,8 @@ pub struct Metrics {
     // Server uptime
     start_time: Instant,
 
-    // Rolling tick times for percentile calculation
-    tick_history: RwLock<Vec<u64>>,
+    // Rolling tick times for percentile calculation (VecDeque for O(1) pop_front)
+    tick_history: RwLock<VecDeque<u64>>,
 }
 
 impl Metrics {
@@ -82,7 +82,7 @@ impl Metrics {
             match_time_seconds: AtomicU64::new(0),
             arena_scale: AtomicU64::new(100),
             start_time: Instant::now(),
-            tick_history: RwLock::new(Vec::with_capacity(1000)),
+            tick_history: RwLock::new(VecDeque::with_capacity(1000)),
         }
     }
 
@@ -94,16 +94,16 @@ impl Metrics {
 
         // Update rolling history for percentiles
         let mut history = self.tick_history.write();
-        history.push(us);
+        history.push_back(us);
 
-        // Keep last 1000 samples
-        if history.len() > 1000 {
-            history.remove(0);
+        // Keep last 1000 samples - O(1) with VecDeque
+        while history.len() > 1000 {
+            history.pop_front();
         }
 
         // Calculate percentiles
         if history.len() >= 10 {
-            let mut sorted: Vec<u64> = history.clone();
+            let mut sorted: Vec<u64> = history.iter().copied().collect();
             sorted.sort_unstable();
 
             let p95_idx = (sorted.len() as f32 * 0.95) as usize;
@@ -111,7 +111,7 @@ impl Metrics {
 
             self.tick_time_p95_us.store(sorted[p95_idx.min(sorted.len() - 1)], Ordering::Relaxed);
             self.tick_time_p99_us.store(sorted[p99_idx.min(sorted.len() - 1)], Ordering::Relaxed);
-            self.tick_time_max_us.store(*sorted.last().unwrap_or(&0), Ordering::Relaxed);
+            self.tick_time_max_us.store(sorted.last().copied().unwrap_or(0), Ordering::Relaxed);
         }
     }
 

@@ -315,7 +315,7 @@ impl Arena {
                 let min_dist = self.gravity_wells
                     .iter()
                     .map(|w| (w.position - candidate).length())
-                    .min_by(|a, b| a.partial_cmp(b).unwrap())
+                    .min_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal))
                     .unwrap_or(f32::MAX);
 
                 // If far enough, use it immediately

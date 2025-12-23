@@ -3,6 +3,77 @@
 import { Game, type GamePhase } from './core/Game';
 import { Screens } from './ui/Screens';
 
+// Browser compatibility check
+function checkBrowserCompatibility(): string | null {
+  // Check for WebTransport support (Chrome 97+)
+  if (typeof WebTransport === 'undefined') {
+    return 'Your browser does not support WebTransport. Please use Chrome 97+ or Edge 97+.';
+  }
+
+  // Check for canvas context
+  const testCanvas = document.createElement('canvas');
+  const ctx = testCanvas.getContext('2d');
+  if (!ctx) {
+    return 'Your browser does not support HTML5 Canvas.';
+  }
+
+  // Check for roundRect (Chrome 99+) - provide polyfill if missing
+  if (typeof ctx.roundRect !== 'function') {
+    // Polyfill roundRect for older browsers
+    CanvasRenderingContext2D.prototype.roundRect = function(
+      x: number, y: number, w: number, h: number, radii?: number | number[]
+    ) {
+      const r = typeof radii === 'number' ? radii : (radii?.[0] ?? 0);
+      this.beginPath();
+      this.moveTo(x + r, y);
+      this.lineTo(x + w - r, y);
+      this.quadraticCurveTo(x + w, y, x + w, y + r);
+      this.lineTo(x + w, y + h - r);
+      this.quadraticCurveTo(x + w, y + h, x + w - r, y + h);
+      this.lineTo(x + r, y + h);
+      this.quadraticCurveTo(x, y + h, x, y + h - r);
+      this.lineTo(x, y + r);
+      this.quadraticCurveTo(x, y, x + r, y);
+      this.closePath();
+    };
+  }
+
+  return null; // Compatible
+}
+
+// Show compatibility error using safe DOM methods
+function showCompatibilityError(message: string): void {
+  const container = document.createElement('div');
+  container.style.cssText = 'display:flex;align-items:center;justify-content:center;height:100vh;background:#0a0a1a;color:#ef4444;font-family:system-ui;text-align:center;padding:20px;';
+
+  const content = document.createElement('div');
+
+  const title = document.createElement('h1');
+  title.style.cssText = 'color:#00ffff;margin-bottom:1rem;';
+  title.textContent = 'Browser Not Supported';
+
+  const errorText = document.createElement('p');
+  errorText.textContent = message;
+
+  const hint = document.createElement('p');
+  hint.style.cssText = 'margin-top:1rem;color:#64748b;';
+  hint.textContent = 'Orbit Royale requires a modern browser with WebTransport support.';
+
+  content.appendChild(title);
+  content.appendChild(errorText);
+  content.appendChild(hint);
+  container.appendChild(content);
+
+  document.body.appendChild(container);
+}
+
+// Run compatibility check
+const compatibilityError = checkBrowserCompatibility();
+if (compatibilityError) {
+  showCompatibilityError(compatibilityError);
+  throw new Error(compatibilityError);
+}
+
 // Initialize canvas
 const canvas = document.getElementById('game');
 if (!(canvas instanceof HTMLCanvasElement)) {

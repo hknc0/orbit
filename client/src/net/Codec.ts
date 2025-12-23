@@ -86,7 +86,7 @@ class BinaryWriter {
     // Parse UUID string to 16 bytes
     const hex = uuid.replace(/-/g, '');
     for (let i = 0; i < 16; i++) {
-      this.writeU8(parseInt(hex.substr(i * 2, 2), 16));
+      this.writeU8(parseInt(hex.substring(i * 2, i * 2 + 2), 16));
     }
   }
 

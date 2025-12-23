@@ -266,7 +266,7 @@ fn execute_orbit(ai: &mut AiState, bot: &Player, state: &GameState) {
         .min_by(|a, b| {
             let dist_a = (a.position - bot.position).length_sq();
             let dist_b = (b.position - bot.position).length_sq();
-            dist_a.partial_cmp(&dist_b).unwrap()
+            dist_a.partial_cmp(&dist_b).unwrap_or(std::cmp::Ordering::Equal)
         });
 
     let well_pos = nearest_well.map(|w| w.position).unwrap_or(Vec2::ZERO);
@@ -348,14 +348,14 @@ fn execute_collect(ai: &mut AiState, bot: &Player, state: &GameState) {
         .debris
         .iter()
         .map(|d| (d.position, d.position.distance_to(bot.position)))
-        .min_by(|a, b| a.1.partial_cmp(&b.1).unwrap());
+        .min_by(|a, b| a.1.partial_cmp(&b.1).unwrap_or(std::cmp::Ordering::Equal));
 
     let nearest_proj = state
         .projectiles
         .iter()
         .filter(|p| p.owner_id != bot.id)
         .map(|p| (p.position, p.position.distance_to(bot.position)))
-        .min_by(|a, b| a.1.partial_cmp(&b.1).unwrap());
+        .min_by(|a, b| a.1.partial_cmp(&b.1).unwrap_or(std::cmp::Ordering::Equal));
 
     let target_pos = match (nearest_debris, nearest_proj) {
         (Some((pos_d, dist_d)), Some((pos_p, dist_p))) => {
@@ -456,13 +456,15 @@ fn find_nearest_players(
         let dist = bot.position.distance_to(player.position);
 
         if player.mass > bot.mass * 1.2 {
-            // Threat
-            if nearest_threat.is_none() || dist < nearest_threat.unwrap().1 {
+            // Threat - update if closer than current nearest
+            let dominated = nearest_threat.map_or(true, |(_, d)| dist < d);
+            if dominated {
                 nearest_threat = Some((player.id, dist));
             }
         } else {
-            // Target
-            if nearest_target.is_none() || dist < nearest_target.unwrap().1 {
+            // Target - update if closer than current nearest
+            let dominated = nearest_target.map_or(true, |(_, d)| dist < d);
+            if dominated {
                 nearest_target = Some((player.id, dist));
             }
         }

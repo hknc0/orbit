@@ -43,6 +43,13 @@ export class GameTransport {
             value: this.base64ToArrayBuffer(certHash),
           },
         ];
+      } else {
+        // In production without cert hash, we rely on browser's CA validation
+        // Warn if connecting to localhost without cert hash (likely misconfigured)
+        const isLocalhost = url.includes('localhost') || url.includes('127.0.0.1');
+        if (isLocalhost && import.meta.env.PROD) {
+          console.warn('Connecting to localhost in production without certificate hash. This may fail with self-signed certs.');
+        }
       }
 
       this.transport = new WebTransport(url, options);

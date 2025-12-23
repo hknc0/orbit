@@ -94,8 +94,15 @@ export class Game {
     this.transport.disconnect();
     this.world.reset();
     this.stateSync.reset();
+    this.inputSystem.destroy();
     this.setPhase('menu');
     this.stopGameLoop();
+  }
+
+  // Full cleanup when game instance is disposed
+  destroy(): void {
+    this.disconnect();
+    this.inputSystem.destroy();
   }
 
   // Main game loop

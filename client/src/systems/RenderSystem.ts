@@ -35,7 +35,6 @@ export class RenderSystem {
   private cameraInitialized: boolean = false;
   private gameStartTime: number = 0;
   private readonly CAMERA_SMOOTHING = 0.1;
-  private _densityLogged = false; // Debug flag
 
   // Dynamic zoom based on speed
   private currentZoom: number = 1.0;
@@ -1243,11 +1242,6 @@ export class RenderSystem {
 
     // 1. Density heatmap (16x16 grid showing player concentrations)
     const densityGrid = world.getDensityGrid();
-    // Debug: log density grid once
-    if (densityGrid.length > 0 && !this._densityLogged) {
-      console.log('Density grid:', densityGrid.length, 'cells, sum:', densityGrid.reduce((a, b) => a + b, 0));
-      this._densityLogged = true;
-    }
     // Support both 8x8 (64) and 16x16 (256) grids
     const gridLength = densityGrid.length;
     if (gridLength === 64 || gridLength === 256) {

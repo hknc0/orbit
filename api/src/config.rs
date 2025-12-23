@@ -1,4 +1,4 @@
-use std::net::IpAddr;
+use std::net::{IpAddr, Ipv4Addr};
 
 /// Server configuration
 #[derive(Debug, Clone)]
@@ -24,7 +24,8 @@ pub struct ServerConfig {
 impl Default for ServerConfig {
     fn default() -> Self {
         Self {
-            bind_address: "0.0.0.0".parse().unwrap(),
+            // Use const to avoid runtime parsing
+            bind_address: IpAddr::V4(Ipv4Addr::new(0, 0, 0, 0)),
             port: 4433,
             max_rooms: 100,
             max_players_per_room: 10,
@@ -44,18 +45,32 @@ impl ServerConfig {
         if let Ok(addr) = std::env::var("BIND_ADDRESS") {
             if let Ok(parsed) = addr.parse() {
                 config.bind_address = parsed;
+            } else {
+                tracing::warn!("Invalid BIND_ADDRESS '{}', using default", addr);
             }
         }
 
         if let Ok(port) = std::env::var("PORT") {
-            if let Ok(parsed) = port.parse() {
-                config.port = parsed;
+            if let Ok(parsed) = port.parse::<u16>() {
+                if parsed > 0 {
+                    config.port = parsed;
+                } else {
+                    tracing::warn!("PORT must be > 0, using default");
+                }
+            } else {
+                tracing::warn!("Invalid PORT '{}', using default", port);
             }
         }
 
         if let Ok(max_rooms) = std::env::var("MAX_ROOMS") {
-            if let Ok(parsed) = max_rooms.parse() {
-                config.max_rooms = parsed;
+            if let Ok(parsed) = max_rooms.parse::<usize>() {
+                if parsed > 0 && parsed <= 10000 {
+                    config.max_rooms = parsed;
+                } else {
+                    tracing::warn!("MAX_ROOMS must be 1-10000, using default");
+                }
+            } else {
+                tracing::warn!("Invalid MAX_ROOMS '{}', using default", max_rooms);
             }
         }
 
@@ -68,6 +83,23 @@ impl ServerConfig {
         }
 
         config
+    }
+
+    /// Validate configuration after loading
+    pub fn validate(&self) -> Result<(), String> {
+        if self.port == 0 {
+            return Err("Port cannot be 0".to_string());
+        }
+        if self.max_rooms == 0 {
+            return Err("max_rooms must be at least 1".to_string());
+        }
+        if self.max_players_per_room == 0 {
+            return Err("max_players_per_room must be at least 1".to_string());
+        }
+        if self.max_humans_per_room > self.max_players_per_room {
+            return Err("max_humans_per_room cannot exceed max_players_per_room".to_string());
+        }
+        Ok(())
     }
 }
 
