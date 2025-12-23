@@ -3,6 +3,7 @@
 
 import { World } from '@/core/World';
 import { Vec2 } from '@/utils/Vec2';
+import { ARENA } from '@/utils/Constants';
 import type { GamePhase } from '@/core/Game';
 import type { ConnectionState } from '@/net/Transport';
 
@@ -1038,8 +1039,9 @@ export class RenderSystem {
     const gridLength = densityGrid.length;
     if (gridLength === 64 || gridLength === 256) {
       const GRID_SIZE = Math.sqrt(gridLength);
-      // Grid covers the arena from -safeRadius to +safeRadius
-      const cellWorldSize = (safeRadius * 2) / GRID_SIZE;
+      // Grid covers the full arena from -OUTER_RADIUS to +OUTER_RADIUS
+      const gridRadius = ARENA.OUTER_RADIUS;
+      const cellWorldSize = (gridRadius * 2) / GRID_SIZE;
 
       // Find max density for normalization (use percentile to avoid single hotspots dominating)
       const sortedDensities = densityGrid.filter(d => d > 0).sort((a, b) => b - a);
@@ -1060,9 +1062,9 @@ export class RenderSystem {
           const density = densityGrid[idx];
 
           if (density > 0) {
-            // Convert grid cell to world coordinates (grid covers -safeRadius to +safeRadius)
-            const worldX = -safeRadius + (gx + 0.5) * cellWorldSize;
-            const worldY = -safeRadius + (gy + 0.5) * cellWorldSize;
+            // Convert grid cell to world coordinates (grid covers -gridRadius to +gridRadius)
+            const worldX = -gridRadius + (gx + 0.5) * cellWorldSize;
+            const worldY = -gridRadius + (gy + 0.5) * cellWorldSize;
             const cellPos = worldToMinimap(worldX, worldY);
 
             // Intensity with log scale for better distribution
