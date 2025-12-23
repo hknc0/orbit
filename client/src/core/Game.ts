@@ -216,11 +216,8 @@ export class Game {
     this.world.localPlayerId = playerId;
     this.stateSync.setLocalPlayerId(playerId);
 
-    // Hide UI and show game - server will send PhaseChange to set actual match phase
-    // For now, transition to countdown to hide the connecting screen
-    this.setPhase('countdown');
-
-    // Start game loop
+    // Start game loop but stay in connecting phase until first snapshot arrives
+    // This prevents flicker from showing game before player data is ready
     this.lastTime = performance.now();
     this.animationFrameId = requestAnimationFrame(this.loop.bind(this));
   }

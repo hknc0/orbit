@@ -32,6 +32,7 @@ export class RenderSystem {
   private ctx: CanvasRenderingContext2D;
   private cameraOffset: Vec2 = new Vec2();
   private targetCameraOffset: Vec2 = new Vec2();
+  private cameraInitialized: boolean = false;
   private readonly CAMERA_SMOOTHING = 0.1;
   private _densityLogged = false; // Debug flag
 
@@ -157,6 +158,12 @@ export class RenderSystem {
         centerY - localPlayer.position.y
       );
 
+      // Snap camera on first frame (avoid jump from origin)
+      if (!this.cameraInitialized) {
+        this.cameraOffset.copy(this.targetCameraOffset);
+        this.cameraInitialized = true;
+      }
+
       // Calculate dynamic zoom based on speed
       const speed = localPlayer.velocity.length();
       const speedRatio = Math.min(speed / this.SPEED_FOR_MAX_ZOOM_OUT, 1);
@@ -164,6 +171,7 @@ export class RenderSystem {
     } else {
       this.targetCameraOffset.set(centerX, centerY);
       this.targetZoom = this.ZOOM_MAX;
+      this.cameraInitialized = false; // Reset so next spawn snaps camera
     }
 
     // Smooth camera interpolation
