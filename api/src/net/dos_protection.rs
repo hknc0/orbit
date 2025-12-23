@@ -90,8 +90,6 @@ pub struct DoSProtection {
     banned_ips: HashMap<IpAddr, IpBan>,
     /// Total active connections
     total_connections: usize,
-    /// Next connection ID
-    next_connection_id: u64,
 }
 
 impl DoSProtection {
@@ -102,7 +100,6 @@ impl DoSProtection {
             connection_rates: HashMap::new(),
             banned_ips: HashMap::new(),
             total_connections: 0,
-            next_connection_id: 0,
         }
     }
 
@@ -133,8 +130,13 @@ impl DoSProtection {
     pub fn register_connection(&mut self, ip: IpAddr) -> Result<u64, DoSError> {
         self.check_connection(ip)?;
 
-        let connection_id = self.next_connection_id;
-        self.next_connection_id += 1;
+        // Generate random connection ID (avoid collisions)
+        let connection_id = loop {
+            let id = rand::random::<u64>();
+            if !self.connection_rates.contains_key(&id) {
+                break id;
+            }
+        };
 
         *self.ip_connections.entry(ip).or_insert(0) += 1;
         self.connection_rates
@@ -280,7 +282,8 @@ mod tests {
         let id = dos.register_connection(ip).unwrap();
         assert_eq!(dos.connection_count(), 1);
         assert_eq!(dos.connections_from_ip(ip), 1);
-        assert!(id == 0);
+        // ID is now random, just verify it was assigned
+        assert!(dos.violation_count(id) == 0);
     }
 
     #[test]

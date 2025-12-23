@@ -119,7 +119,6 @@ impl Connection {
 pub struct ConnectionManager {
     connections: std::collections::HashMap<u64, Connection>,
     player_connections: std::collections::HashMap<PlayerId, u64>,
-    next_id: u64,
 }
 
 impl ConnectionManager {
@@ -127,14 +126,18 @@ impl ConnectionManager {
         Self {
             connections: std::collections::HashMap::new(),
             player_connections: std::collections::HashMap::new(),
-            next_id: 0,
         }
     }
 
-    /// Create a new connection
+    /// Create a new connection with random ID
     pub fn create(&mut self, remote_addr: SocketAddr) -> u64 {
-        let id = self.next_id;
-        self.next_id += 1;
+        // Generate random connection ID (avoid collisions)
+        let id = loop {
+            let candidate = rand::random::<u64>();
+            if !self.connections.contains_key(&candidate) {
+                break candidate;
+            }
+        };
 
         let conn = Connection::new(id, remote_addr);
         self.connections.insert(id, conn);
