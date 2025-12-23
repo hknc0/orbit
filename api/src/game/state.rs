@@ -1,3 +1,4 @@
+use hashbrown::HashMap;
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
@@ -376,7 +377,7 @@ pub struct GameState {
     pub tick: u64,
     pub match_state: MatchState,
     pub arena: Arena,
-    pub players: Vec<Player>,
+    pub players: HashMap<PlayerId, Player>,
     pub projectiles: Vec<Projectile>,
     pub debris: Vec<Debris>,
     next_entity_id: EntityId,
@@ -394,43 +395,39 @@ impl GameState {
         id
     }
 
-    /// Get player by ID
+    /// Get player by ID - O(1) with HashMap
     pub fn get_player(&self, id: PlayerId) -> Option<&Player> {
-        self.players.iter().find(|p| p.id == id)
+        self.players.get(&id)
     }
 
-    /// Get mutable player by ID
+    /// Get mutable player by ID - O(1) with HashMap
     pub fn get_player_mut(&mut self, id: PlayerId) -> Option<&mut Player> {
-        self.players.iter_mut().find(|p| p.id == id)
+        self.players.get_mut(&id)
     }
 
     /// Get all alive players
     pub fn alive_players(&self) -> impl Iterator<Item = &Player> {
-        self.players.iter().filter(|p| p.alive)
+        self.players.values().filter(|p| p.alive)
     }
 
     /// Count alive players
     pub fn alive_count(&self) -> usize {
-        self.players.iter().filter(|p| p.alive).count()
+        self.players.values().filter(|p| p.alive).count()
     }
 
     /// Count alive human players
     pub fn alive_human_count(&self) -> usize {
-        self.players.iter().filter(|p| p.alive && !p.is_bot).count()
+        self.players.values().filter(|p| p.alive && !p.is_bot).count()
     }
 
-    /// Add a player to the game
+    /// Add a player to the game - O(1) with HashMap
     pub fn add_player(&mut self, player: Player) {
-        self.players.push(player);
+        self.players.insert(player.id, player);
     }
 
-    /// Remove a player from the game
+    /// Remove a player from the game - O(1) with HashMap
     pub fn remove_player(&mut self, id: PlayerId) -> Option<Player> {
-        if let Some(pos) = self.players.iter().position(|p| p.id == id) {
-            Some(self.players.remove(pos))
-        } else {
-            None
-        }
+        self.players.remove(&id)
     }
 
     /// Add a projectile

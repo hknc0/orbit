@@ -20,6 +20,12 @@ tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 dotenvy = "0.15"
 
+# Performance & Parallelization
+rayon = "1.10"
+parking_lot = "0.12"
+hashbrown = { version = "0.15", features = ["serde", "rayon"] }
+crossbeam-channel = "0.5"
+
 # TLS (required by wtransport)
 rcgen = "0.14"
 ring = "0.17"
@@ -31,3 +37,8 @@ anyhow = "1.0"
 
 [dev-dependencies]
 tokio-test = "0.4"
+criterion = { version = "0.5", features = ["html_reports"] }
+
+[[bench]]
+name = "scalability"
+harness = false

@@ -6,3 +6,4 @@ pub mod dos_protection;
 pub mod transport;
 pub mod connection;
 pub mod game_session;
+pub mod aoi;

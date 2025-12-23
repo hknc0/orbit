@@ -1,3 +1,5 @@
+use rayon::prelude::*;
+
 use crate::game::constants::physics::{DRAG, MAX_VELOCITY};
 use crate::game::state::GameState;
 use crate::net::protocol::PlayerInput;
@@ -5,13 +7,14 @@ use crate::util::vec2::Vec2;
 
 /// Update physics for all entities
 /// CRITICAL: Uses exponential drag (velocity *= 1 - DRAG), NOT linear drag
+/// Uses rayon for parallel iteration over players, projectiles, and debris
 pub fn update(state: &mut GameState, dt: f32) {
     let drag_factor = 1.0 - DRAG;
 
-    // Update players
-    for player in &mut state.players {
+    // Update players in parallel
+    state.players.par_values_mut().for_each(|player| {
         if !player.alive {
-            continue;
+            return;
         }
 
         // Apply exponential drag
@@ -27,10 +30,10 @@ pub fn update(state: &mut GameState, dt: f32) {
         if player.spawn_protection > 0.0 {
             player.spawn_protection = (player.spawn_protection - dt).max(0.0);
         }
-    }
+    });
 
-    // Update projectiles
-    for projectile in &mut state.projectiles {
+    // Update projectiles in parallel
+    state.projectiles.par_iter_mut().for_each(|projectile| {
         // Apply drag
         projectile.velocity *= drag_factor;
 
@@ -39,16 +42,16 @@ pub fn update(state: &mut GameState, dt: f32) {
 
         // Decrease lifetime
         projectile.lifetime -= dt;
-    }
+    });
 
-    // Remove expired projectiles
+    // Remove expired projectiles (sequential - modifies collection)
     state.projectiles.retain(|p| p.lifetime > 0.0);
 
-    // Update debris
-    for debris in &mut state.debris {
+    // Update debris in parallel
+    state.debris.par_iter_mut().for_each(|debris| {
         debris.velocity *= drag_factor;
         debris.position += debris.velocity * dt;
-    }
+    });
 }
 
 /// Apply thrust from player input
@@ -114,10 +117,11 @@ mod tests {
     use crate::game::constants::physics::DT;
     use crate::game::state::Player;
 
-    fn create_test_state() -> GameState {
+    fn create_test_state() -> (GameState, uuid::Uuid) {
         let mut state = GameState::new();
-        state.players.push(Player {
-            id: uuid::Uuid::new_v4(),
+        let player_id = uuid::Uuid::new_v4();
+        let player = Player {
+            id: player_id,
             name: "Test".to_string(),
             position: Vec2::new(100.0, 100.0),
             velocity: Vec2::new(50.0, 0.0),
@@ -130,18 +134,19 @@ mod tests {
             is_bot: false,
             color_index: 0,
             respawn_timer: 0.0,
-        });
-        state
+        };
+        state.add_player(player);
+        (state, player_id)
     }
 
     #[test]
     fn test_exponential_drag() {
-        let mut state = create_test_state();
-        let initial_velocity = state.players[0].velocity.length();
+        let (mut state, player_id) = create_test_state();
+        let initial_velocity = state.get_player(player_id).unwrap().velocity.length();
 
         update(&mut state, DT);
 
-        let new_velocity = state.players[0].velocity.length();
+        let new_velocity = state.get_player(player_id).unwrap().velocity.length();
 
         // Velocity should decrease by drag factor
         let expected = initial_velocity * (1.0 - DRAG);
@@ -159,56 +164,56 @@ mod tests {
 
     #[test]
     fn test_position_integration() {
-        let mut state = create_test_state();
-        let initial_pos = state.players[0].position;
-        let velocity = state.players[0].velocity;
+        let (mut state, player_id) = create_test_state();
+        let initial_pos = state.get_player(player_id).unwrap().position;
+        let velocity = state.get_player(player_id).unwrap().velocity;
 
         update(&mut state, DT);
 
         // Position should change by approximately velocity * dt
         // (slight difference due to drag)
         let expected_delta = velocity * DT;
-        let actual_delta = state.players[0].position - initial_pos;
+        let actual_delta = state.get_player(player_id).unwrap().position - initial_pos;
 
         assert!((actual_delta.x - expected_delta.x).abs() < 1.0);
     }
 
     #[test]
     fn test_velocity_clamping() {
-        let mut state = create_test_state();
-        state.players[0].velocity = Vec2::new(1000.0, 0.0);
+        let (mut state, player_id) = create_test_state();
+        state.get_player_mut(player_id).unwrap().velocity = Vec2::new(1000.0, 0.0);
 
         update(&mut state, DT);
 
-        let velocity = state.players[0].velocity.length();
+        let velocity = state.get_player(player_id).unwrap().velocity.length();
         assert!(velocity <= MAX_VELOCITY);
     }
 
     #[test]
     fn test_dead_players_not_updated() {
-        let mut state = create_test_state();
-        state.players[0].alive = false;
-        let initial_pos = state.players[0].position;
+        let (mut state, player_id) = create_test_state();
+        state.get_player_mut(player_id).unwrap().alive = false;
+        let initial_pos = state.get_player(player_id).unwrap().position;
 
         update(&mut state, DT);
 
-        assert_eq!(state.players[0].position, initial_pos);
+        assert_eq!(state.get_player(player_id).unwrap().position, initial_pos);
     }
 
     #[test]
     fn test_spawn_protection_decay() {
-        let mut state = create_test_state();
-        state.players[0].spawn_protection = 3.0;
+        let (mut state, player_id) = create_test_state();
+        state.get_player_mut(player_id).unwrap().spawn_protection = 3.0;
 
         update(&mut state, DT);
 
-        assert!(state.players[0].spawn_protection < 3.0);
-        assert!(state.players[0].spawn_protection > 0.0);
+        assert!(state.get_player(player_id).unwrap().spawn_protection < 3.0);
+        assert!(state.get_player(player_id).unwrap().spawn_protection > 0.0);
     }
 
     #[test]
     fn test_projectile_lifetime_decay() {
-        let mut state = create_test_state();
+        let (mut state, _) = create_test_state();
         state.add_projectile(
             uuid::Uuid::new_v4(),
             Vec2::new(100.0, 100.0),
@@ -225,7 +230,7 @@ mod tests {
 
     #[test]
     fn test_expired_projectiles_removed() {
-        let mut state = create_test_state();
+        let (mut state, _) = create_test_state();
         state.add_projectile(
             uuid::Uuid::new_v4(),
             Vec2::ZERO,
@@ -241,9 +246,8 @@ mod tests {
 
     #[test]
     fn test_apply_thrust() {
-        let mut state = create_test_state();
-        let player_id = state.players[0].id;
-        let initial_velocity = state.players[0].velocity;
+        let (mut state, player_id) = create_test_state();
+        let initial_velocity = state.get_player(player_id).unwrap().velocity;
 
         let input = PlayerInput {
             sequence: 1,
@@ -258,14 +262,13 @@ mod tests {
         let applied = apply_thrust(&mut state, player_id, &input, DT);
 
         assert!(applied);
-        assert!(state.players[0].velocity.x > initial_velocity.x);
+        assert!(state.get_player(player_id).unwrap().velocity.x > initial_velocity.x);
     }
 
     #[test]
     fn test_thrust_consumes_mass() {
-        let mut state = create_test_state();
-        let player_id = state.players[0].id;
-        let initial_mass = state.players[0].mass;
+        let (mut state, player_id) = create_test_state();
+        let initial_mass = state.get_player(player_id).unwrap().mass;
 
         let input = PlayerInput {
             sequence: 1,
@@ -279,14 +282,13 @@ mod tests {
 
         apply_thrust(&mut state, player_id, &input, DT);
 
-        assert!(state.players[0].mass < initial_mass);
+        assert!(state.get_player(player_id).unwrap().mass < initial_mass);
     }
 
     #[test]
     fn test_thrust_without_boost_flag() {
-        let mut state = create_test_state();
-        let player_id = state.players[0].id;
-        let initial_velocity = state.players[0].velocity;
+        let (mut state, player_id) = create_test_state();
+        let initial_velocity = state.get_player(player_id).unwrap().velocity;
 
         let input = PlayerInput {
             sequence: 1,
@@ -301,7 +303,7 @@ mod tests {
         let applied = apply_thrust(&mut state, player_id, &input, DT);
 
         assert!(!applied);
-        assert_eq!(state.players[0].velocity, initial_velocity);
+        assert_eq!(state.get_player(player_id).unwrap().velocity, initial_velocity);
     }
 
     #[test]
@@ -327,20 +329,20 @@ mod tests {
     #[test]
     fn test_physics_determinism() {
         // Same inputs should produce same outputs
-        let mut state1 = create_test_state();
-        let mut state2 = create_test_state();
+        let (mut state1, player_id1) = create_test_state();
+        let (mut state2, player_id2) = create_test_state();
 
-        state1.players[0].position = Vec2::new(100.0, 100.0);
-        state1.players[0].velocity = Vec2::new(50.0, 25.0);
-        state2.players[0].position = Vec2::new(100.0, 100.0);
-        state2.players[0].velocity = Vec2::new(50.0, 25.0);
+        state1.get_player_mut(player_id1).unwrap().position = Vec2::new(100.0, 100.0);
+        state1.get_player_mut(player_id1).unwrap().velocity = Vec2::new(50.0, 25.0);
+        state2.get_player_mut(player_id2).unwrap().position = Vec2::new(100.0, 100.0);
+        state2.get_player_mut(player_id2).unwrap().velocity = Vec2::new(50.0, 25.0);
 
         for _ in 0..100 {
             update(&mut state1, DT);
             update(&mut state2, DT);
         }
 
-        assert_eq!(state1.players[0].position, state2.players[0].position);
-        assert_eq!(state1.players[0].velocity, state2.players[0].velocity);
+        assert_eq!(state1.get_player(player_id1).unwrap().position, state2.get_player(player_id2).unwrap().position);
+        assert_eq!(state1.get_player(player_id1).unwrap().velocity, state2.get_player(player_id2).unwrap().velocity);
     }
 }

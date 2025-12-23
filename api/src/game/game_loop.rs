@@ -199,7 +199,7 @@ impl GameLoop {
         let bot_ids: Vec<PlayerId> = self
             .state
             .players
-            .iter()
+            .values()
             .filter(|p| p.is_bot && p.alive)
             .map(|p| p.id)
             .collect();
@@ -264,7 +264,7 @@ impl GameLoop {
         let existing_positions: Vec<_> = self
             .state
             .players
-            .iter()
+            .values()
             .filter(|p| p.alive)
             .map(|p| p.position)
             .collect();
@@ -405,7 +405,7 @@ mod tests {
 
         assert_eq!(game_loop.state().players.len(), 5);
         // 1 human + 4 bots
-        let bot_count = game_loop.state().players.iter().filter(|p| p.is_bot).count();
+        let bot_count = game_loop.state().players.values().filter(|p| p.is_bot).count();
         assert_eq!(bot_count, 4);
     }
 

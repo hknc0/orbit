@@ -1,33 +1,36 @@
+use rayon::prelude::*;
+
 use crate::game::constants::physics::{CENTRAL_MASS, G};
 use crate::game::state::{GameState, GravityWell};
 use crate::util::vec2::Vec2;
 
 /// Apply gravity from all gravity wells to all entities
+/// Uses rayon for parallel iteration over players, projectiles, and debris
 pub fn update_central(state: &mut GameState, dt: f32) {
-    // Clone wells to avoid borrow issues
+    // Clone wells to avoid borrow issues (shared across all parallel iterations)
     let wells = state.arena.gravity_wells.clone();
 
-    // Apply gravity to players
-    for player in &mut state.players {
+    // Apply gravity to players in parallel
+    state.players.par_values_mut().for_each(|player| {
         if !player.alive {
-            continue;
+            return;
         }
 
         let gravity = calculate_multi_well_gravity(player.position, &wells);
         player.velocity += gravity * dt;
-    }
+    });
 
-    // Apply gravity to projectiles
-    for projectile in &mut state.projectiles {
+    // Apply gravity to projectiles in parallel
+    state.projectiles.par_iter_mut().for_each(|projectile| {
         let gravity = calculate_multi_well_gravity(projectile.position, &wells);
         projectile.velocity += gravity * dt;
-    }
+    });
 
-    // Apply gravity to debris
-    for debris in &mut state.debris {
+    // Apply gravity to debris in parallel
+    state.debris.par_iter_mut().for_each(|debris| {
         let gravity = calculate_multi_well_gravity(debris.position, &wells);
         debris.velocity += gravity * dt;
-    }
+    });
 }
 
 /// Calculate gravitational acceleration from multiple gravity wells
@@ -97,52 +100,59 @@ pub fn calculate_central_gravity(position: Vec2, _mass: f32) -> Vec2 {
 
 /// Apply inter-entity gravity (entities attract each other)
 /// This is optional and can be disabled for performance
+/// Uses rayon to parallelize gravity calculation per player
 pub fn update_inter_entity(state: &mut GameState, dt: f32) {
-    let player_count = state.players.len();
+    use crate::game::state::PlayerId;
 
-    // Calculate gravitational forces between all player pairs
-    let mut accelerations: Vec<Vec2> = vec![Vec2::ZERO; player_count];
+    // Collect alive player data for calculations
+    let players_data: Vec<(PlayerId, Vec2, f32)> = state
+        .players
+        .values()
+        .filter(|p| p.alive)
+        .map(|p| (p.id, p.position, p.mass))
+        .collect();
 
-    for i in 0..player_count {
-        if !state.players[i].alive {
-            continue;
-        }
+    // Calculate gravitational accelerations for each player in parallel
+    // Each player calculates its own acceleration from all other players
+    let accelerations: Vec<(PlayerId, Vec2)> = players_data
+        .par_iter()
+        .map(|&(id_i, pos_i, mass_i)| {
+            let mut accel = Vec2::ZERO;
 
-        for j in (i + 1)..player_count {
-            if !state.players[j].alive {
-                continue;
+            for &(id_j, pos_j, mass_j) in &players_data {
+                if id_i == id_j {
+                    continue;
+                }
+
+                let delta = pos_j - pos_i;
+                let distance_sq = delta.length_sq();
+
+                // Skip if too close (handled by collision) or too far
+                if distance_sq < 100.0 || distance_sq > 1_000_000.0 {
+                    continue;
+                }
+
+                let distance = distance_sq.sqrt();
+                let direction = delta * (1.0 / distance);
+
+                // Gravitational force: F = G * m1 * m2 / r^2
+                // Scale down inter-entity gravity to be subtle
+                let force_magnitude = G * mass_i * mass_j / distance_sq * 0.01;
+
+                // F = ma, so a = F/m
+                accel += direction * (force_magnitude / mass_i);
             }
 
-            let delta = state.players[j].position - state.players[i].position;
-            let distance_sq = delta.length_sq();
+            (id_i, accel)
+        })
+        .collect();
 
-            // Skip if too close (handled by collision) or too far
-            if distance_sq < 100.0 || distance_sq > 1_000_000.0 {
-                continue;
+    // Apply accumulated accelerations (sequential - requires mutable access)
+    for (player_id, accel) in accelerations {
+        if let Some(player) = state.get_player_mut(player_id) {
+            if player.alive {
+                player.velocity += accel * dt;
             }
-
-            let distance = distance_sq.sqrt();
-            let direction = delta * (1.0 / distance);
-
-            // Mutual gravitational force
-            // F = G * m1 * m2 / r^2
-            // Scale down inter-entity gravity to be subtle
-            let force_magnitude =
-                G * state.players[i].mass * state.players[j].mass / distance_sq * 0.01;
-
-            // F = ma, so a = F/m
-            let accel_i = direction * (force_magnitude / state.players[i].mass);
-            let accel_j = -direction * (force_magnitude / state.players[j].mass);
-
-            accelerations[i] += accel_i;
-            accelerations[j] += accel_j;
-        }
-    }
-
-    // Apply accumulated accelerations
-    for (i, player) in state.players.iter_mut().enumerate() {
-        if player.alive {
-            player.velocity += accelerations[i] * dt;
         }
     }
 }
@@ -191,10 +201,11 @@ mod tests {
     use crate::game::constants::physics::DT;
     use crate::game::state::Player;
 
-    fn create_test_state() -> GameState {
+    fn create_test_state() -> (GameState, uuid::Uuid) {
         let mut state = GameState::new();
-        state.players.push(Player {
-            id: uuid::Uuid::new_v4(),
+        let player_id = uuid::Uuid::new_v4();
+        let player = Player {
+            id: player_id,
             name: "Test".to_string(),
             position: Vec2::new(300.0, 0.0),
             velocity: Vec2::ZERO,
@@ -207,8 +218,9 @@ mod tests {
             is_bot: false,
             color_index: 0,
             respawn_timer: 0.0,
-        });
-        state
+        };
+        state.add_player(player);
+        (state, player_id)
     }
 
     #[test]
@@ -255,24 +267,24 @@ mod tests {
 
     #[test]
     fn test_update_central_applies_to_players() {
-        let mut state = create_test_state();
-        let initial_velocity = state.players[0].velocity;
+        let (mut state, player_id) = create_test_state();
+        let initial_velocity = state.get_player(player_id).unwrap().velocity;
 
         update_central(&mut state, DT);
 
         // Velocity should have changed toward center
-        assert!(state.players[0].velocity.x < initial_velocity.x);
+        assert!(state.get_player(player_id).unwrap().velocity.x < initial_velocity.x);
     }
 
     #[test]
     fn test_dead_players_no_gravity() {
-        let mut state = create_test_state();
-        state.players[0].alive = false;
-        state.players[0].velocity = Vec2::ZERO;
+        let (mut state, player_id) = create_test_state();
+        state.get_player_mut(player_id).unwrap().alive = false;
+        state.get_player_mut(player_id).unwrap().velocity = Vec2::ZERO;
 
         update_central(&mut state, DT);
 
-        assert_eq!(state.players[0].velocity, Vec2::ZERO);
+        assert_eq!(state.get_player(player_id).unwrap().velocity, Vec2::ZERO);
     }
 
     #[test]
@@ -325,36 +337,40 @@ mod tests {
         let mut state = GameState::new();
 
         // Two players at different positions
-        state.players.push(Player {
-            id: uuid::Uuid::new_v4(),
+        let player_a_id = uuid::Uuid::new_v4();
+        let player_a = Player {
+            id: player_a_id,
             name: "A".to_string(),
             position: Vec2::new(100.0, 0.0),
             velocity: Vec2::ZERO,
             mass: 200.0,
             alive: true,
             ..Default::default()
-        });
+        };
+        state.add_player(player_a);
 
-        state.players.push(Player {
-            id: uuid::Uuid::new_v4(),
+        let player_b_id = uuid::Uuid::new_v4();
+        let player_b = Player {
+            id: player_b_id,
             name: "B".to_string(),
             position: Vec2::new(200.0, 0.0),
             velocity: Vec2::ZERO,
             mass: 200.0,
             alive: true,
             ..Default::default()
-        });
+        };
+        state.add_player(player_b);
 
         update_inter_entity(&mut state, DT);
 
         // Players should be attracted toward each other
-        assert!(state.players[0].velocity.x > 0.0); // A moves toward B
-        assert!(state.players[1].velocity.x < 0.0); // B moves toward A
+        assert!(state.get_player(player_a_id).unwrap().velocity.x > 0.0); // A moves toward B
+        assert!(state.get_player(player_b_id).unwrap().velocity.x < 0.0); // B moves toward A
     }
 
     #[test]
     fn test_gravity_applies_to_projectiles() {
-        let mut state = create_test_state();
+        let (mut state, _) = create_test_state();
         state.add_projectile(
             uuid::Uuid::new_v4(),
             Vec2::new(200.0, 0.0),

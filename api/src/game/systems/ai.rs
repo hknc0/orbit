@@ -1,4 +1,5 @@
 use rand::Rng;
+use rayon::prelude::*;
 
 use crate::game::constants::ai::*;
 use crate::game::state::{GameState, Player, PlayerId};
@@ -125,12 +126,27 @@ impl AiManager {
     }
 
     /// Update all AI decisions
+    /// Uses rayon for parallel decision computation, then applies updates sequentially
     pub fn update(&mut self, state: &GameState, dt: f32) {
-        let bot_ids: Vec<PlayerId> = self.states.keys().copied().collect();
+        // Collect current states for parallel processing
+        let states_snapshot: Vec<(PlayerId, AiState)> = self.states
+            .iter()
+            .map(|(&id, state)| (id, state.clone()))
+            .collect();
 
-        for bot_id in bot_ids {
+        // Compute decisions in parallel
+        let decisions: Vec<(PlayerId, AiState)> = states_snapshot
+            .into_par_iter()
+            .map(|(bot_id, mut ai_state)| {
+                update_ai_decision(&mut ai_state, bot_id, state, dt);
+                (bot_id, ai_state)
+            })
+            .collect();
+
+        // Apply decisions (sequential - requires mutable access)
+        for (bot_id, new_state) in decisions {
             if let Some(ai_state) = self.states.get_mut(&bot_id) {
-                update_ai_decision(ai_state, bot_id, state, dt);
+                *ai_state = new_state;
             }
         }
     }
@@ -432,7 +448,7 @@ fn find_nearest_players(
     let mut nearest_threat: Option<(PlayerId, f32)> = None;
     let mut nearest_target: Option<(PlayerId, f32)> = None;
 
-    for player in &state.players {
+    for player in state.players.values() {
         if player.id == bot.id || !player.alive || player.is_bot {
             continue;
         }
@@ -580,6 +596,7 @@ mod tests {
         let mut ai = AiState::default();
 
         let bot = create_bot(Vec2::new(100.0, 0.0), 50.0);
+        let bot_id = bot.id;
         let threat = create_bot(Vec2::new(150.0, 0.0), 200.0);
         let threat_id = threat.id;
 
@@ -589,7 +606,7 @@ mod tests {
         ai.behavior = AiBehavior::Flee;
         ai.target_id = Some(threat_id);
 
-        let bot_ref = state.get_player(state.players[0].id).unwrap();
+        let bot_ref = state.get_player(bot_id).unwrap();
         execute_flee(&mut ai, bot_ref, &state);
 
         assert!(ai.wants_boost);

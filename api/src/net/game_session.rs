@@ -7,12 +7,12 @@ use tokio::io::AsyncWriteExt;
 use tokio::sync::RwLock;
 use tokio::time::{interval, Instant};
 use tracing::{debug, info, warn};
-use uuid::Uuid;
 
 use crate::game::constants::{ai, physics};
 use crate::game::game_loop::{GameLoop, GameLoopConfig, GameLoopEvent};
 use crate::game::performance::{PerformanceMonitor, PerformanceStatus};
 use crate::game::state::{MatchPhase, Player, PlayerId};
+use crate::net::aoi::{AOIConfig, AOIManager};
 use crate::net::protocol::{encode, GameSnapshot, PlayerInput, ServerMessage};
 
 /// A connected player's stream writer for sending messages
@@ -27,6 +27,7 @@ pub struct GameSession {
     pub game_loop: GameLoop,
     pub players: HashMap<PlayerId, PlayerConnection>,
     pub performance: PerformanceMonitor,
+    pub aoi_manager: AOIManager,
     last_snapshot_tick: u64,
     bot_count: usize,
 }
@@ -47,13 +48,32 @@ impl GameSession {
         game_loop.state_mut().match_state.phase = MatchPhase::Playing;
         game_loop.state_mut().match_state.countdown_time = 0.0;
 
+        // CRITICAL: Update arena scale BEFORE spawning bots
+        // This creates appropriate gravity wells for the target player count
+        // Without this, all bots spawn near a single well and immediately kill each other
+        game_loop.state_mut().arena.update_for_player_count(bot_count);
+        info!(
+            "Arena configured: {} gravity wells, escape_radius={}",
+            game_loop.state().arena.gravity_wells.len(),
+            game_loop.state().arena.escape_radius
+        );
+
         // Fill with bots initially
         game_loop.fill_with_bots(bot_count);
+
+        // Create AOI manager with performance-tuned settings
+        let aoi_config = AOIConfig {
+            full_detail_radius: 500.0,   // Full detail for nearby entities
+            extended_radius: 1200.0,     // Extended radius for medium distance
+            max_entities: 100,           // Cap per client
+            always_include_top_n: 5,     // Always show top 5 players
+        };
 
         Self {
             game_loop,
             players: HashMap::new(),
             performance: PerformanceMonitor::new(physics::TICK_RATE),
+            aoi_manager: AOIManager::new(aoi_config),
             last_snapshot_tick: 0,
             bot_count,
         }
@@ -188,7 +208,7 @@ impl GameSession {
             .game_loop
             .state()
             .players
-            .iter()
+            .values()
             .filter(|p| p.is_bot)
             .min_by_key(|p| if p.alive { 1 } else { 0 })
             .map(|p| p.id);
@@ -214,9 +234,22 @@ impl GameSession {
         self.last_snapshot_tick = self.game_loop.state().tick;
     }
 
-    /// Get current game snapshot
+    /// Get current game snapshot (full, unfiltered)
     pub fn get_snapshot(&self) -> GameSnapshot {
         GameSnapshot::from_game_state(self.game_loop.state())
+    }
+
+    /// Get a filtered snapshot for a specific player using AOI
+    pub fn get_filtered_snapshot(&self, player_id: PlayerId) -> GameSnapshot {
+        let full_snapshot = self.get_snapshot();
+
+        // Get player position for AOI filtering
+        let player_position = self.game_loop.state()
+            .get_player(player_id)
+            .map(|p| p.position)
+            .unwrap_or(crate::util::vec2::Vec2::ZERO);
+
+        self.aoi_manager.filter_for_player(player_id, player_position, &full_snapshot)
     }
 
     /// Respawn dead players after respawn delay
@@ -231,7 +264,7 @@ impl GameSession {
 
         // First, decrement respawn timers for all dead players
         let dt = physics::DT;
-        for player in &mut self.game_loop.state_mut().players {
+        for player in self.game_loop.state_mut().players.values_mut() {
             if !player.alive && player.respawn_timer > 0.0 {
                 player.respawn_timer -= dt;
             }
@@ -242,7 +275,7 @@ impl GameSession {
             .game_loop
             .state()
             .players
-            .iter()
+            .values()
             .filter(|p| !p.alive && p.respawn_timer <= 0.0)
             .map(|p| (p.id, p.is_bot))
             .collect();
@@ -274,7 +307,7 @@ impl GameSession {
                     .game_loop
                     .state()
                     .players
-                    .iter()
+                    .values()
                     .filter(|p| p.alive && p.id != player_id)
                     .map(|p| p.position)
                     .collect();
@@ -324,7 +357,7 @@ impl Default for GameSession {
     }
 }
 
-/// Broadcast a message to all connected players
+/// Broadcast a message to all connected players (same message to all)
 pub async fn broadcast_message(
     session: &GameSession,
     message: &ServerMessage,
@@ -370,6 +403,67 @@ pub async fn broadcast_message(
     }
 }
 
+/// Broadcast AOI-filtered snapshots to each player (per-client filtering)
+/// Each player receives only entities relevant to their position
+pub async fn broadcast_filtered_snapshots(session: &GameSession) {
+    use rayon::prelude::*;
+
+    // Get full snapshot once
+    let full_snapshot = session.get_snapshot();
+
+    // Prepare per-client data in parallel
+    let client_data: Vec<(PlayerId, Arc<RwLock<Option<wtransport::SendStream>>>, Vec<u8>)> =
+        session.players.iter()
+            .filter_map(|(&player_id, conn)| {
+                // Get player position for filtering
+                let player_position = session.game_loop.state()
+                    .get_player(player_id)
+                    .map(|p| p.position)
+                    .unwrap_or(crate::util::vec2::Vec2::ZERO);
+
+                // Filter snapshot for this player
+                let filtered = session.aoi_manager.filter_for_player(
+                    player_id,
+                    player_position,
+                    &full_snapshot,
+                );
+
+                // Encode the message
+                let message = ServerMessage::Snapshot(filtered);
+                match encode(&message) {
+                    Ok(encoded) => Some((player_id, conn.writer.clone(), encoded)),
+                    Err(e) => {
+                        warn!("Failed to encode snapshot for {}: {}", player_id, e);
+                        None
+                    }
+                }
+            })
+            .collect();
+
+    // Send to each client in parallel
+    for (player_id, writer, encoded) in client_data {
+        let len_bytes = (encoded.len() as u32).to_le_bytes();
+        let msg_len = encoded.len();
+
+        tokio::spawn(async move {
+            if let Some(writer) = &mut *writer.write().await {
+                if let Err(e) = writer.write_all(&len_bytes).await {
+                    warn!("AOI broadcast to {}: failed to write length: {}", player_id, e);
+                    return;
+                }
+                match writer.write_all(&encoded).await {
+                    Ok(_) => {
+                        debug!("AOI broadcast to {}: sent {} bytes", player_id, msg_len);
+                    }
+                    Err(e) => {
+                        warn!("AOI broadcast to {}: failed to write data: {}", player_id, e);
+                    }
+                }
+            }
+        });
+    }
+}
+
 /// Send a message to a specific player
 pub async fn send_to_player(
     writer: &Arc<RwLock<Option<wtransport::SendStream>>>,
@@ -395,7 +489,7 @@ pub async fn send_to_player(
 
 /// Sanitize player state to prevent NaN/Infinity corruption
 fn sanitize_game_state(session: &mut GameSession) {
-    for player in &mut session.game_loop.state_mut().players {
+    for player in session.game_loop.state_mut().players.values_mut() {
         // Fix NaN/Infinity positions
         if !player.position.x.is_finite() || !player.position.y.is_finite() {
             warn!("Fixed NaN position for player {}", player.id);
@@ -465,13 +559,13 @@ pub fn start_game_loop(session: Arc<RwLock<GameSession>>) {
                 }
             }
 
-            // Broadcast snapshot if needed (with timeout to prevent blocking)
-            if let Some(snapshot) = snapshot {
+            // Broadcast AOI-filtered snapshots if needed (each player gets their own filtered view)
+            if snapshot.is_some() {
                 let session_clone = session.clone();
                 tokio::spawn(async move {
                     let session_guard = session_clone.read().await;
-                    let message = ServerMessage::Snapshot(snapshot);
-                    broadcast_message(&session_guard, &message).await;
+                    // Use AOI filtering for per-client snapshots
+                    broadcast_filtered_snapshots(&session_guard).await;
                 });
             }
 
@@ -480,7 +574,7 @@ pub fn start_game_loop(session: Arc<RwLock<GameSession>>) {
                 let session_guard = session.read().await;
                 let elapsed = start.elapsed().as_secs();
                 let human_count = session_guard.players.len();
-                let bot_count = session_guard.game_loop.state().players.iter().filter(|p| p.is_bot).count();
+                let bot_count = session_guard.game_loop.state().players.values().filter(|p| p.is_bot).count();
                 let well_count = session_guard.game_loop.state().arena.gravity_wells.len();
                 let perf_status = session_guard.performance.status();
                 let perf_budget = session_guard.performance.budget_usage_percent();
