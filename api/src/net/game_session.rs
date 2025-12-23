@@ -1,6 +1,7 @@
 //! Game session manager - runs the game loop and broadcasts state to players
 
 use std::collections::HashMap;
+use std::sync::atomic::Ordering;
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::io::AsyncWriteExt;
@@ -12,6 +13,7 @@ use crate::game::constants::{ai, physics};
 use crate::game::game_loop::{GameLoop, GameLoopConfig, GameLoopEvent};
 use crate::game::performance::{PerformanceMonitor, PerformanceStatus};
 use crate::game::state::{MatchPhase, Player, PlayerId};
+use crate::metrics::Metrics;
 use crate::net::aoi::{AOIConfig, AOIManager};
 use crate::net::protocol::{encode, GameSnapshot, PlayerInput, ServerMessage};
 
@@ -28,12 +30,23 @@ pub struct GameSession {
     pub players: HashMap<PlayerId, PlayerConnection>,
     pub performance: PerformanceMonitor,
     pub aoi_manager: AOIManager,
+    pub metrics: Option<Arc<Metrics>>,
     last_snapshot_tick: u64,
     bot_count: usize,
 }
 
 impl GameSession {
+    /// Create a new game session without metrics
     pub fn new() -> Self {
+        Self::new_with_metrics_opt(None)
+    }
+
+    /// Create a new game session with metrics collection
+    pub fn new_with_metrics(metrics: Arc<Metrics>) -> Self {
+        Self::new_with_metrics_opt(Some(metrics))
+    }
+
+    fn new_with_metrics_opt(metrics: Option<Arc<Metrics>>) -> Self {
         // Read bot count from environment, default to ai::COUNT
         let bot_count = std::env::var("BOT_COUNT")
             .ok()
@@ -69,11 +82,23 @@ impl GameSession {
             always_include_top_n: 5,     // Always show top 5 players
         };
 
+        // Initialize metrics with current state
+        if let Some(ref m) = metrics {
+            m.total_players.store(bot_count as u64, Ordering::Relaxed);
+            m.bot_players.store(bot_count as u64, Ordering::Relaxed);
+            m.alive_players.store(bot_count as u64, Ordering::Relaxed);
+            m.gravity_well_count.store(
+                game_loop.state().arena.gravity_wells.len() as u64,
+                Ordering::Relaxed,
+            );
+        }
+
         Self {
             game_loop,
             players: HashMap::new(),
             performance: PerformanceMonitor::new(physics::TICK_RATE),
             aoi_manager: AOIManager::new(aoi_config),
+            metrics,
             last_snapshot_tick: 0,
             bot_count,
         }
@@ -168,6 +193,7 @@ impl GameSession {
     /// Run a game tick and return events
     pub fn tick(&mut self) -> Vec<GameLoopEvent> {
         // Start performance timing
+        let tick_start = std::time::Instant::now();
         self.performance.tick_start();
 
         let events = self.game_loop.tick();
@@ -197,6 +223,60 @@ impl GameSession {
         let entity_count = self.game_loop.state().players.len()
             + self.game_loop.state().projectiles.len();
         self.performance.tick_end(entity_count);
+
+        // Update metrics
+        if let Some(ref metrics) = self.metrics {
+            let tick_duration = tick_start.elapsed();
+            metrics.record_tick_time(tick_duration);
+
+            let state = self.game_loop.state();
+
+            // Player counts
+            let total = state.players.len() as u64;
+            let bots = state.players.values().filter(|p| p.is_bot).count() as u64;
+            let humans = total - bots;
+            let alive = state.players.values().filter(|p| p.alive).count() as u64;
+
+            metrics.total_players.store(total, Ordering::Relaxed);
+            metrics.human_players.store(humans, Ordering::Relaxed);
+            metrics.bot_players.store(bots, Ordering::Relaxed);
+            metrics.alive_players.store(alive, Ordering::Relaxed);
+
+            // Entity counts
+            metrics.projectile_count.store(state.projectiles.len() as u64, Ordering::Relaxed);
+            metrics.debris_count.store(state.debris.len() as u64, Ordering::Relaxed);
+            metrics.gravity_well_count.store(
+                state.arena.gravity_wells.len() as u64,
+                Ordering::Relaxed,
+            );
+
+            // Performance status
+            let status = match self.performance.status() {
+                PerformanceStatus::Excellent => 0,
+                PerformanceStatus::Good => 1,
+                PerformanceStatus::Warning => 2,
+                PerformanceStatus::Critical => 3,
+                PerformanceStatus::Catastrophic => 4,
+            };
+            metrics.performance_status.store(status, Ordering::Relaxed);
+            metrics.budget_usage_percent.store(
+                self.performance.budget_usage_percent() as u64,
+                Ordering::Relaxed,
+            );
+
+            // Game state
+            metrics.match_time_seconds.store(
+                state.match_state.match_time as u64,
+                Ordering::Relaxed,
+            );
+            metrics.arena_scale.store(
+                (state.arena.scale * 100.0) as u64,
+                Ordering::Relaxed,
+            );
+
+            // Network (connection count)
+            metrics.connections_active.store(self.players.len() as u64, Ordering::Relaxed);
+        }
 
         events
     }

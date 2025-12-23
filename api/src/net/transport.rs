@@ -11,6 +11,7 @@ use crate::anticheat::sanctions::BanList;
 use crate::config::ServerConfig;
 use crate::game::state::PlayerId;
 use crate::lobby::manager::LobbyManager;
+use crate::metrics::Metrics;
 use crate::net::dos_protection::DoSProtection;
 use crate::net::game_session::{start_game_loop, send_to_player, GameSession};
 use crate::net::protocol::{decode, encode, ClientMessage, ServerMessage};
@@ -24,6 +25,7 @@ pub struct WebTransportServer {
     ban_list: Arc<RwLock<BanList>>,
     dos_protection: Arc<RwLock<DoSProtection>>,
     game_session: Arc<RwLock<GameSession>>,
+    metrics: Arc<Metrics>,
 }
 
 impl WebTransportServer {
@@ -32,10 +34,11 @@ impl WebTransportServer {
         config: ServerConfig,
         lobby_manager: Arc<RwLock<LobbyManager>>,
         ban_list: Arc<RwLock<BanList>>,
+        metrics: Arc<Metrics>,
     ) -> anyhow::Result<Self> {
         let tls_config = TlsConfig::generate_self_signed().await?;
         let dos_protection = Arc::new(RwLock::new(DoSProtection::default()));
-        let game_session = Arc::new(RwLock::new(GameSession::new()));
+        let game_session = Arc::new(RwLock::new(GameSession::new_with_metrics(metrics.clone())));
 
         Ok(Self {
             config,
@@ -44,6 +47,7 @@ impl WebTransportServer {
             ban_list,
             dos_protection,
             game_session,
+            metrics,
         })
     }
 
@@ -367,8 +371,9 @@ mod tests {
         let config = ServerConfig::default();
         let lobby = Arc::new(RwLock::new(LobbyManager::new(10)));
         let bans = Arc::new(RwLock::new(BanList::new()));
+        let metrics = Arc::new(Metrics::new());
 
-        let result = WebTransportServer::new(config, lobby, bans).await;
+        let result = WebTransportServer::new(config, lobby, bans, metrics).await;
         assert!(result.is_ok());
     }
 
@@ -377,8 +382,9 @@ mod tests {
         let config = ServerConfig::default();
         let lobby = Arc::new(RwLock::new(LobbyManager::new(10)));
         let bans = Arc::new(RwLock::new(BanList::new()));
+        let metrics = Arc::new(Metrics::new());
 
-        let server = WebTransportServer::new(config, lobby, bans).await.unwrap();
+        let server = WebTransportServer::new(config, lobby, bans, metrics).await.unwrap();
         let hash = server.cert_hash();
 
         assert!(!hash.is_empty());

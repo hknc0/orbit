@@ -2,6 +2,7 @@ mod anticheat;
 mod config;
 mod game;
 mod lobby;
+mod metrics;
 mod net;
 mod util;
 
@@ -12,6 +13,7 @@ use tracing::{error, info, Level};
 use crate::anticheat::sanctions::BanList;
 use crate::config::ServerConfig;
 use crate::lobby::manager::LobbyManager;
+use crate::metrics::Metrics;
 use crate::net::transport::WebTransportServer;
 
 #[tokio::main]
@@ -37,13 +39,34 @@ async fn main() -> anyhow::Result<()> {
         config.bind_address, config.port, config.max_rooms
     );
 
+    // Initialize metrics
+    let metrics = Arc::new(Metrics::new());
+
+    // Start metrics server on port 9090 (configurable via METRICS_PORT)
+    let metrics_port: u16 = std::env::var("METRICS_PORT")
+        .ok()
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(9090);
+
+    let metrics_clone = metrics.clone();
+    tokio::spawn(async move {
+        if let Err(e) = metrics::start_metrics_server(metrics_clone, metrics_port).await {
+            error!("Metrics server error: {}", e);
+        }
+    });
+
     // Initialize shared state
     let lobby_manager = Arc::new(RwLock::new(LobbyManager::new(config.max_rooms)));
     let ban_list = Arc::new(RwLock::new(BanList::new()));
 
     // Create WebTransport server
-    let server = WebTransportServer::new(config.clone(), lobby_manager.clone(), ban_list.clone())
-        .await?;
+    let server = WebTransportServer::new(
+        config.clone(),
+        lobby_manager.clone(),
+        ban_list.clone(),
+        metrics.clone(),
+    )
+    .await?;
 
     info!(
         "Server ready on https://{}:{}",

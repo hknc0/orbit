@@ -4,3 +4,4 @@ pub mod game;
 pub mod net;
 pub mod lobby;
 pub mod anticheat;
+pub mod metrics;
