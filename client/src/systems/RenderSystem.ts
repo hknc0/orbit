@@ -120,6 +120,38 @@ export class RenderSystem {
     }
   }
 
+  // Velocity-based trail for other players (no history tracking needed)
+  private renderVelocityTrail(
+    position: Vec2,
+    velocity: Vec2,
+    radius: number,
+    color: string
+  ): void {
+    const speed = velocity.length();
+    if (speed < 20) return; // Only show trail when moving
+
+    const trailLength = Math.min(8, Math.floor(speed / 25)); // 1-8 points based on speed
+    if (trailLength < 1) return;
+
+    const dirX = -velocity.x / speed;
+    const dirY = -velocity.y / speed;
+    const spacing = radius * 0.8;
+
+    for (let i = 1; i <= trailLength; i++) {
+      const t = i / trailLength;
+      const alpha = (1 - t) * 0.35;
+      const trailRadius = radius * (0.6 - t * 0.4);
+
+      const x = position.x + dirX * spacing * i;
+      const y = position.y + dirY * spacing * i;
+
+      this.ctx.fillStyle = this.colorWithAlpha(color, alpha);
+      this.ctx.beginPath();
+      this.ctx.arc(x, y, Math.max(trailRadius, 2), 0, Math.PI * 2);
+      this.ctx.fill();
+    }
+  }
+
   render(world: World, state: RenderState): void {
     const canvas = this.ctx.canvas;
     const centerX = canvas.width / 2;
@@ -395,6 +427,11 @@ export class RenderSystem {
 
       if (showFlame) {
         this.renderBoostFlame(player.position, player.velocity, radius);
+      }
+
+      // Velocity-based trail for other players (local player has full trail)
+      if (!isLocal) {
+        this.renderVelocityTrail(player.position, player.velocity, radius, color);
       }
 
       // Kill effect - golden pulsing glow when player gets a kill
