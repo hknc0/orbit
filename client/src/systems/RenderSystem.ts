@@ -36,6 +36,9 @@ export class RenderSystem {
   private readonly CAMERA_SMOOTHING = 0.1;
   private _densityLogged = false; // Debug flag
 
+  // Track previous speeds to detect acceleration (for other players' boost flames)
+  private previousSpeeds: Map<string, number> = new Map();
+
   // Trail for local player
   private localPlayerTrail: TrailPoint[] = [];
   private readonly TRAIL_MAX_LENGTH = 50;
@@ -356,18 +359,40 @@ export class RenderSystem {
   }
 
   private renderPlayers(world: World, localPlayerBoosting: boolean): void {
-    for (const player of world.getPlayers().values()) {
+    const players = world.getPlayers();
+
+    // Clean up stale speed tracking (players who left) - runs every ~60 frames
+    if (this.previousSpeeds.size > players.size + 10) {
+      for (const id of this.previousSpeeds.keys()) {
+        if (!players.has(id)) this.previousSpeeds.delete(id);
+      }
+    }
+
+    for (const player of players.values()) {
       if (!player.alive) continue;
 
       const radius = world.massToRadius(player.mass);
       const color = world.getPlayerColor(player.colorIndex);
       const isLocal = player.id === world.localPlayerId;
 
-      // Render boost flame based on velocity
-      // For local player: show when boosting input is active
-      // For other players: infer from velocity (speed > 50 indicates likely boosting)
+      // Render boost flame based on velocity/acceleration
       const speed = player.velocity.length();
-      const showFlame = isLocal ? localPlayerBoosting : speed > 50;
+      let showFlame = false;
+
+      if (isLocal) {
+        // Local player: show when boosting input is active
+        showFlame = localPlayerBoosting;
+      } else {
+        // Other players: detect acceleration (speed increasing) to infer boosting
+        const prevSpeed = this.previousSpeeds.get(player.id) ?? 0;
+        const isAccelerating = speed > prevSpeed + 2; // Speed increasing by at least 2
+        const hasHighSpeed = speed > 80; // Also show if very fast and recently accelerated
+        showFlame = isAccelerating || (hasHighSpeed && speed > prevSpeed);
+      }
+
+      // Track speed for next frame
+      this.previousSpeeds.set(player.id, speed);
+
       if (showFlame) {
         this.renderBoostFlame(player.position, player.velocity, radius);
       }
