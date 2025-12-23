@@ -33,7 +33,6 @@ export class RenderSystem {
   private cameraOffset: Vec2 = new Vec2();
   private targetCameraOffset: Vec2 = new Vec2();
   private readonly CAMERA_SMOOTHING = 0.1;
-  private _densityLogged = false; // Debug flag
 
   // Track previous speeds to detect acceleration (for other players' boost flames)
   private previousSpeeds: Map<string, number> = new Map();
@@ -1035,17 +1034,12 @@ export class RenderSystem {
 
     // 1. Density heatmap (16x16 grid showing player concentrations)
     const densityGrid = world.getDensityGrid();
-    // Debug: log density grid once
-    if (densityGrid.length > 0 && !this._densityLogged) {
-      console.log('Density grid:', densityGrid.length, 'cells, sum:', densityGrid.reduce((a, b) => a + b, 0));
-      this._densityLogged = true;
-    }
     // Support both 8x8 (64) and 16x16 (256) grids
     const gridLength = densityGrid.length;
     if (gridLength === 64 || gridLength === 256) {
       const GRID_SIZE = Math.sqrt(gridLength);
-      const gridPixelSize = minimapSize - 8;
-      const cellPixelSize = gridPixelSize / GRID_SIZE;
+      // Grid covers the arena from -safeRadius to +safeRadius
+      const cellWorldSize = (safeRadius * 2) / GRID_SIZE;
 
       // Find max density for normalization (use percentile to avoid single hotspots dominating)
       const sortedDensities = densityGrid.filter(d => d > 0).sort((a, b) => b - a);
@@ -1066,9 +1060,10 @@ export class RenderSystem {
           const density = densityGrid[idx];
 
           if (density > 0) {
-            // Cell center position on minimap
-            const cellCenterX = centerX - gridPixelSize / 2 + (gx + 0.5) * cellPixelSize;
-            const cellCenterY = centerY - gridPixelSize / 2 + (gy + 0.5) * cellPixelSize;
+            // Convert grid cell to world coordinates (grid covers -safeRadius to +safeRadius)
+            const worldX = -safeRadius + (gx + 0.5) * cellWorldSize;
+            const worldY = -safeRadius + (gy + 0.5) * cellWorldSize;
+            const cellPos = worldToMinimap(worldX, worldY);
 
             // Intensity with log scale for better distribution
             const rawIntensity = Math.min(density / maxDensity, 1);
@@ -1090,11 +1085,11 @@ export class RenderSystem {
               b = Math.floor(150 - 130 * t);
             }
 
-            // Radial gradient for soft blob effect
-            const blobRadius = cellPixelSize * 1.2;
+            // Radial gradient for soft blob effect - scale with zoom
+            const blobRadius = (cellWorldSize * scale) * 1.2;
             const gradient = this.ctx.createRadialGradient(
-              cellCenterX, cellCenterY, 0,
-              cellCenterX, cellCenterY, blobRadius
+              cellPos.x, cellPos.y, 0,
+              cellPos.x, cellPos.y, blobRadius
             );
 
             const alpha = 0.15 + intensity * 0.4;
@@ -1104,7 +1099,7 @@ export class RenderSystem {
 
             this.ctx.fillStyle = gradient;
             this.ctx.beginPath();
-            this.ctx.arc(cellCenterX, cellCenterY, blobRadius, 0, Math.PI * 2);
+            this.ctx.arc(cellPos.x, cellPos.y, blobRadius, 0, Math.PI * 2);
             this.ctx.fill();
           }
         }
