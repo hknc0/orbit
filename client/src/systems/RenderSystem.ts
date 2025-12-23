@@ -357,28 +357,90 @@ export class RenderSystem {
   }
 
   private renderGravityWell(x: number, y: number, coreRadius: number, mass: number): void {
-    // Outer glow based on mass
-    const glowRadius = coreRadius * (1.5 + Math.log10(mass) * 0.1);
-    const outerGlow = this.ctx.createRadialGradient(x, y, coreRadius * 0.5, x, y, glowRadius);
-    outerGlow.addColorStop(0, 'rgba(255, 150, 50, 0.3)');
-    outerGlow.addColorStop(0.5, 'rgba(255, 100, 30, 0.15)');
-    outerGlow.addColorStop(1, 'rgba(255, 50, 0, 0)');
-    this.ctx.fillStyle = outerGlow;
-    this.ctx.beginPath();
-    this.ctx.arc(x, y, glowRadius, 0, Math.PI * 2);
-    this.ctx.fill();
+    // Check if this is the central supermassive black hole (at origin, larger core)
+    const isCentral = Math.abs(x) < 10 && Math.abs(y) < 10 && coreRadius > 80;
 
-    // Core death zone gradient
-    const gradient = this.ctx.createRadialGradient(x, y, 0, x, y, coreRadius);
-    gradient.addColorStop(0, 'rgba(255, 200, 100, 0.9)');
-    gradient.addColorStop(0.3, 'rgba(255, 150, 50, 0.8)');
-    gradient.addColorStop(0.7, 'rgba(200, 80, 30, 0.6)');
-    gradient.addColorStop(1, 'rgba(150, 40, 20, 0.3)');
+    if (isCentral) {
+      // === SUPERMASSIVE BLACK HOLE ===
+      // Deep purple/violet colors with intense glow
 
-    this.ctx.fillStyle = gradient;
-    this.ctx.beginPath();
-    this.ctx.arc(x, y, coreRadius, 0, Math.PI * 2);
-    this.ctx.fill();
+      // Accretion disk effect (spinning ring)
+      const diskRadius = coreRadius * 2.5;
+      const time = Date.now() / 1000;
+      this.ctx.save();
+      this.ctx.translate(x, y);
+
+      // Outer accretion glow
+      const accretionGlow = this.ctx.createRadialGradient(0, 0, coreRadius, 0, 0, diskRadius);
+      accretionGlow.addColorStop(0, 'rgba(180, 100, 255, 0.4)');
+      accretionGlow.addColorStop(0.3, 'rgba(120, 50, 200, 0.3)');
+      accretionGlow.addColorStop(0.6, 'rgba(80, 20, 150, 0.15)');
+      accretionGlow.addColorStop(1, 'rgba(40, 0, 100, 0)');
+      this.ctx.fillStyle = accretionGlow;
+      this.ctx.beginPath();
+      this.ctx.arc(0, 0, diskRadius, 0, Math.PI * 2);
+      this.ctx.fill();
+
+      // Spinning accretion streaks
+      for (let i = 0; i < 6; i++) {
+        const angle = (i / 6) * Math.PI * 2 + time * 0.3;
+        const streakGrad = this.ctx.createRadialGradient(0, 0, coreRadius * 1.2, 0, 0, diskRadius * 0.9);
+        streakGrad.addColorStop(0, 'rgba(200, 150, 255, 0.2)');
+        streakGrad.addColorStop(1, 'rgba(100, 50, 200, 0)');
+        this.ctx.fillStyle = streakGrad;
+        this.ctx.beginPath();
+        this.ctx.moveTo(0, 0);
+        this.ctx.arc(0, 0, diskRadius * 0.9, angle - 0.15, angle + 0.15);
+        this.ctx.closePath();
+        this.ctx.fill();
+      }
+
+      this.ctx.restore();
+
+      // Event horizon (the black core)
+      const eventHorizon = this.ctx.createRadialGradient(x, y, 0, x, y, coreRadius);
+      eventHorizon.addColorStop(0, 'rgba(0, 0, 0, 1)');
+      eventHorizon.addColorStop(0.7, 'rgba(20, 0, 40, 0.95)');
+      eventHorizon.addColorStop(0.9, 'rgba(80, 30, 120, 0.7)');
+      eventHorizon.addColorStop(1, 'rgba(150, 80, 200, 0.3)');
+      this.ctx.fillStyle = eventHorizon;
+      this.ctx.beginPath();
+      this.ctx.arc(x, y, coreRadius, 0, Math.PI * 2);
+      this.ctx.fill();
+
+      // Bright ring at event horizon edge
+      this.ctx.strokeStyle = 'rgba(200, 150, 255, 0.6)';
+      this.ctx.lineWidth = 3;
+      this.ctx.beginPath();
+      this.ctx.arc(x, y, coreRadius, 0, Math.PI * 2);
+      this.ctx.stroke();
+    } else {
+      // === NORMAL GRAVITY WELL (star/sun) ===
+      // Orange/yellow colors, size varies with coreRadius
+
+      // Outer glow based on mass
+      const glowRadius = coreRadius * (1.5 + Math.log10(mass) * 0.1);
+      const outerGlow = this.ctx.createRadialGradient(x, y, coreRadius * 0.5, x, y, glowRadius);
+      outerGlow.addColorStop(0, 'rgba(255, 150, 50, 0.3)');
+      outerGlow.addColorStop(0.5, 'rgba(255, 100, 30, 0.15)');
+      outerGlow.addColorStop(1, 'rgba(255, 50, 0, 0)');
+      this.ctx.fillStyle = outerGlow;
+      this.ctx.beginPath();
+      this.ctx.arc(x, y, glowRadius, 0, Math.PI * 2);
+      this.ctx.fill();
+
+      // Core death zone gradient
+      const gradient = this.ctx.createRadialGradient(x, y, 0, x, y, coreRadius);
+      gradient.addColorStop(0, 'rgba(255, 200, 100, 0.9)');
+      gradient.addColorStop(0.3, 'rgba(255, 150, 50, 0.8)');
+      gradient.addColorStop(0.7, 'rgba(200, 80, 30, 0.6)');
+      gradient.addColorStop(1, 'rgba(150, 40, 20, 0.3)');
+
+      this.ctx.fillStyle = gradient;
+      this.ctx.beginPath();
+      this.ctx.arc(x, y, coreRadius, 0, Math.PI * 2);
+      this.ctx.fill();
+    }
   }
 
   private renderProjectiles(world: World): void {
@@ -1200,18 +1262,31 @@ export class RenderSystem {
       this.ctx.restore();
     }
 
-    // 1b. Gravity wells - tiny orange dots (sun color)
+    // 1b. Gravity wells - central black hole (purple) and stars (orange)
     for (const well of world.arena.gravityWells) {
       const wellX = centerX + well.position.x * scale;
       const wellY = centerY + well.position.y * scale;
 
+      // Check if central supermassive black hole
+      const isCentral = Math.abs(well.position.x) < 10 && Math.abs(well.position.y) < 10 && well.coreRadius > 80;
+
       // Only draw if within minimap bounds
       const dist = Math.sqrt(Math.pow(wellX - centerX, 2) + Math.pow(wellY - centerY, 2));
       if (dist < minimapSize / 2 - 2) {
-        this.ctx.fillStyle = '#ff9944';
-        this.ctx.beginPath();
-        this.ctx.arc(wellX, wellY, 1.5, 0, Math.PI * 2);
-        this.ctx.fill();
+        if (isCentral) {
+          // Purple dot for supermassive black hole
+          this.ctx.fillStyle = '#b366ff';
+          this.ctx.beginPath();
+          this.ctx.arc(wellX, wellY, 3, 0, Math.PI * 2);
+          this.ctx.fill();
+        } else {
+          // Orange dot for normal stars, size based on core radius
+          const dotSize = Math.max(1.5, well.coreRadius / 35);
+          this.ctx.fillStyle = '#ff9944';
+          this.ctx.beginPath();
+          this.ctx.arc(wellX, wellY, dotSize, 0, Math.PI * 2);
+          this.ctx.fill();
+        }
       }
     }
 
