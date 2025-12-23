@@ -204,16 +204,24 @@ pub fn safe_spawn_position(existing_positions: &[crate::util::vec2::Vec2]) -> cr
 /// Calculate a spawn position near a random gravity well
 pub fn spawn_near_well(wells: &[crate::game::state::GravityWell]) -> crate::util::vec2::Vec2 {
     use crate::game::constants::spawn::{ZONE_MAX, ZONE_MIN};
+    use crate::game::constants::arena::CORE_RADIUS;
     use rand::Rng;
 
-    if wells.is_empty() {
+    // Filter out the central supermassive black hole (at origin with large core)
+    // to distribute players across orbital wells instead of clustering at center
+    let orbital_wells: Vec<_> = wells
+        .iter()
+        .filter(|w| w.position.length() > 10.0 || w.core_radius <= CORE_RADIUS * 1.5)
+        .collect();
+
+    if orbital_wells.is_empty() {
         return random_spawn_position();
     }
 
     let mut rng = rand::thread_rng();
 
-    // Pick a random well
-    let well = &wells[rng.gen_range(0..wells.len())];
+    // Pick a random orbital well (not the central black hole)
+    let well = orbital_wells[rng.gen_range(0..orbital_wells.len())];
 
     // Spawn in orbit zone around that well
     let angle = rng.gen_range(0.0..std::f32::consts::TAU);
