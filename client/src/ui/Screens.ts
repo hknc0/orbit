@@ -3,16 +3,26 @@
 
 // Player colors (must match Constants.ts PLAYER_COLORS)
 const PLAYER_COLORS = [
-  '#3b82f6', // blue
   '#ef4444', // red
-  '#22c55e', // green
-  '#f59e0b', // amber
-  '#8b5cf6', // purple
-  '#ec4899', // pink
-  '#06b6d4', // cyan
   '#f97316', // orange
+  '#f59e0b', // amber
+  '#eab308', // yellow
   '#84cc16', // lime
+  '#22c55e', // green
+  '#10b981', // emerald
+  '#14b8a6', // teal
+  '#06b6d4', // cyan
+  '#0ea5e9', // sky
+  '#3b82f6', // blue
   '#6366f1', // indigo
+  '#8b5cf6', // violet
+  '#a855f7', // purple
+  '#d946ef', // fuchsia
+  '#ec4899', // pink
+  '#f43f5e', // rose
+  '#78716c', // stone
+  '#64748b', // slate
+  '#ffffff', // white
 ];
 
 const STORAGE_KEY_NAME = 'orbit-royale-player-name';
@@ -31,7 +41,6 @@ export class Screens {
   private errorMessage: HTMLElement | null = null;
 
   private selectedColorIndex: number = 0;
-  private colorSwatches: HTMLElement[] = [];
 
   constructor() {
     // Load saved preferences
@@ -83,28 +92,52 @@ export class Screens {
     const screen = this.createElement('div', 'screen');
     screen.id = 'menu-screen';
 
+    // Animated background stars
+    const starsContainer = this.createElement('div', 'stars-container');
+    for (let i = 0; i < 50; i++) {
+      const star = this.createElement('div', 'star');
+      star.style.left = `${Math.random() * 100}%`;
+      star.style.top = `${Math.random() * 100}%`;
+      star.style.animationDelay = `${Math.random() * 3}s`;
+      star.style.animationDuration = `${2 + Math.random() * 3}s`;
+      starsContainer.appendChild(star);
+    }
+    screen.appendChild(starsContainer);
+
     const container = this.createElement('div', 'menu-container');
 
-    // Title section
-    const titleSection = this.createElement('div', 'title-section');
-    const title = this.createElement('h1', 'game-title');
-    const titleOrbit = this.createElement('span', 'title-orbit', 'ORBIT');
-    const titleRoyale = this.createElement('span', 'title-royale', 'ROYALE');
-    title.appendChild(titleOrbit);
-    title.appendChild(titleRoyale);
-    const subtitle = this.createElement('p', 'game-subtitle', 'MULTIPLAYER BATTLE ROYALE');
-    titleSection.appendChild(title);
-    titleSection.appendChild(subtitle);
+    // Logo/Title - minimal and elegant
+    const logoSection = this.createElement('div', 'logo-section');
+    const logoIcon = this.createElement('div', 'logo-icon');
+    // Create orbital rings
+    for (let i = 0; i < 3; i++) {
+      const ring = this.createElement('div', 'orbit-ring');
+      logoIcon.appendChild(ring);
+    }
+    const logoDot = this.createElement('div', 'logo-dot');
+    logoIcon.appendChild(logoDot);
+    logoSection.appendChild(logoIcon);
 
-    // Name input
+    const titleGroup = this.createElement('div', 'title-group');
+    const title = this.createElement('h1', 'game-title', 'ORBIT');
+    const titleAccent = this.createElement('span', 'title-accent', 'ROYALE');
+    titleGroup.appendChild(title);
+    titleGroup.appendChild(titleAccent);
+    logoSection.appendChild(titleGroup);
+
+    // Main form area
+    const formArea = this.createElement('div', 'form-area');
+
+    // Name input - minimal underline style
     const nameContainer = this.createElement('div', 'name-input-container');
     const nameInput = document.createElement('input');
     nameInput.type = 'text';
     nameInput.id = 'player-name';
     nameInput.className = 'name-input';
-    nameInput.placeholder = 'Enter your name';
+    nameInput.placeholder = 'Your name';
     nameInput.maxLength = 16;
-    // Load saved name
+    nameInput.autocomplete = 'off';
+    nameInput.spellcheck = false;
     try {
       const savedName = localStorage.getItem(STORAGE_KEY_NAME);
       if (savedName) nameInput.value = savedName;
@@ -112,79 +145,81 @@ export class Screens {
     nameContainer.appendChild(nameInput);
     this.playerNameInput = nameInput;
 
-    // Color picker
+    // Color picker - slider with preview
     const colorContainer = this.createElement('div', 'color-picker-container');
-    const colorLabel = this.createElement('span', 'color-label', 'COLOR');
-    colorContainer.appendChild(colorLabel);
-    const colorSwatchesContainer = this.createElement('div', 'color-swatches');
-    PLAYER_COLORS.forEach((color, index) => {
-      const swatch = this.createElement('div', 'color-swatch');
-      swatch.style.backgroundColor = color;
-      if (index === this.selectedColorIndex) {
-        swatch.classList.add('selected');
-      }
-      swatch.addEventListener('click', () => this.selectColor(index));
-      colorSwatchesContainer.appendChild(swatch);
-      this.colorSwatches.push(swatch);
+
+    const colorPreview = this.createElement('div', 'color-preview');
+    colorPreview.style.backgroundColor = PLAYER_COLORS[this.selectedColorIndex];
+
+    const sliderWrapper = this.createElement('div', 'slider-wrapper');
+    const colorSlider = document.createElement('input');
+    colorSlider.type = 'range';
+    colorSlider.min = '0';
+    colorSlider.max = String(PLAYER_COLORS.length - 1);
+    colorSlider.value = String(this.selectedColorIndex);
+    colorSlider.className = 'color-slider';
+    // Create gradient background with hard color stops (no blending)
+    const gradientStops = PLAYER_COLORS.map((c, i) => {
+      const start = (i / PLAYER_COLORS.length) * 100;
+      const end = ((i + 1) / PLAYER_COLORS.length) * 100;
+      return `${c} ${start}%, ${c} ${end}%`;
+    }).join(', ');
+    colorSlider.style.setProperty('--slider-gradient', `linear-gradient(to right, ${gradientStops})`);
+
+    colorSlider.addEventListener('input', () => {
+      const index = parseInt(colorSlider.value, 10);
+      this.selectedColorIndex = index;
+      colorPreview.style.backgroundColor = PLAYER_COLORS[index];
     });
-    colorContainer.appendChild(colorSwatchesContainer);
 
-    // Play button
-    const playBtn = this.createElement('button', 'btn-primary');
+    sliderWrapper.appendChild(colorSlider);
+    colorContainer.appendChild(colorPreview);
+    colorContainer.appendChild(sliderWrapper);
+
+    // Play button - clean and prominent
+    const playBtn = this.createElement('button', 'btn-play');
     playBtn.id = 'play-btn';
-    const btnText = this.createElement('span', 'btn-text', 'CONNECT');
-    const btnIcon = this.createElement('span', 'btn-icon', '\u25B6');
-    playBtn.appendChild(btnText);
-    playBtn.appendChild(btnIcon);
+    playBtn.textContent = 'PLAY';
 
-    // Controls panel
-    const controlsPanel = this.createElement('div', 'controls-panel');
-    const controlsTitle = this.createElement('div', 'controls-title', 'CONTROLS');
-    controlsPanel.appendChild(controlsTitle);
+    formArea.appendChild(nameContainer);
+    formArea.appendChild(colorContainer);
+    formArea.appendChild(playBtn);
+
+    // Controls section - minimal but complete
+    const controlsSection = this.createElement('div', 'controls-section');
 
     const controls = [
-      { key: 'LMB / W', desc: 'Boost thrust' },
-      { key: 'SPACE', desc: 'Hold to charge, release to eject' },
+      { keys: ['W', 'A', 'S', 'D'], desc: 'Move' },
+      { keys: ['Click', 'W'], desc: 'Boost thrust' },
+      { keys: ['Space'], desc: 'Hold to charge, release to eject' },
     ];
 
-    controls.forEach(({ key, desc }) => {
+    controls.forEach(({ keys, desc }) => {
       const row = this.createElement('div', 'control-row');
-      const keyEl = this.createElement('span', 'control-key', key);
+      const keysContainer = this.createElement('div', 'control-keys');
+      keys.forEach((key, i) => {
+        if (i > 0) keysContainer.appendChild(document.createTextNode(' '));
+        const kbd = this.createElement('kbd', undefined, key);
+        keysContainer.appendChild(kbd);
+      });
       const descEl = this.createElement('span', 'control-desc', desc);
-      row.appendChild(keyEl);
+      row.appendChild(keysContainer);
       row.appendChild(descEl);
-      controlsPanel.appendChild(row);
+      controlsSection.appendChild(row);
     });
 
-    // Objective row
-    const objectiveRow = this.createElement('div', 'control-row objective');
-    const objectiveKey = this.createElement('span', 'control-key', 'OBJECTIVE');
-    const objectiveDesc = this.createElement('span', 'control-desc', 'Be the last one standing');
-    objectiveRow.appendChild(objectiveKey);
-    objectiveRow.appendChild(objectiveDesc);
-    controlsPanel.appendChild(objectiveRow);
+    // Objective
+    const objective = this.createElement('div', 'objective-text', 'Be the last one standing');
+    controlsSection.appendChild(objective);
 
-    // Version tag
-    const versionTag = this.createElement('div', 'version-tag', 'v0.1.0 Multiplayer');
-
-    container.appendChild(titleSection);
-    container.appendChild(nameContainer);
-    container.appendChild(colorContainer);
-    container.appendChild(playBtn);
-    container.appendChild(controlsPanel);
-    container.appendChild(versionTag);
+    container.appendChild(logoSection);
+    container.appendChild(formArea);
+    container.appendChild(controlsSection);
     screen.appendChild(container);
 
     return screen;
   }
 
-  private selectColor(index: number): void {
-    // Remove selection from previous
-    this.colorSwatches[this.selectedColorIndex]?.classList.remove('selected');
-    // Add selection to new
-    this.selectedColorIndex = index;
-    this.colorSwatches[index]?.classList.add('selected');
-  }
 
   private createEndScreen(): HTMLElement {
     const screen = this.createElement('div', 'screen hidden');
@@ -284,36 +319,49 @@ export class Screens {
         flex-direction: column;
         align-items: center;
         justify-content: center;
-        background: radial-gradient(ellipse at center, #15152a 0%, #0a0a1a 50%, #050510 100%);
-        color: #f0f4ff;
+        background: radial-gradient(ellipse at center, #0f172a 0%, #0a1020 50%, #050810 100%);
+        color: #e0e8f0;
         font-family: 'Inter', system-ui, sans-serif;
         z-index: 100;
         overflow: hidden;
-      }
-
-      .screen::before {
-        content: '';
-        position: absolute;
-        top: 0;
-        left: 0;
-        right: 0;
-        bottom: 0;
-        background:
-          repeating-linear-gradient(
-            0deg,
-            transparent,
-            transparent 2px,
-            rgba(0, 0, 0, 0.03) 2px,
-            rgba(0, 0, 0, 0.03) 4px
-          );
-        pointer-events: none;
       }
 
       .screen.hidden {
         display: none;
       }
 
-      .menu-container, .end-container, .connecting-container, .error-container {
+      /* Animated stars background */
+      .stars-container {
+        position: absolute;
+        top: 0;
+        left: 0;
+        right: 0;
+        bottom: 0;
+        overflow: hidden;
+        pointer-events: none;
+      }
+
+      .star {
+        position: absolute;
+        width: 2px;
+        height: 2px;
+        background: #fff;
+        border-radius: 50%;
+        opacity: 0;
+        animation: twinkle 3s ease-in-out infinite;
+      }
+
+      .star:nth-child(3n) { width: 3px; height: 3px; }
+      .star:nth-child(5n) { background: #00ffff; }
+      .star:nth-child(7n) { background: #fbbf24; }
+
+      @keyframes twinkle {
+        0%, 100% { opacity: 0; transform: scale(0.5); }
+        50% { opacity: 0.6; transform: scale(1); }
+      }
+
+      /* Menu container */
+      .menu-container {
         display: flex;
         flex-direction: column;
         align-items: center;
@@ -322,76 +370,148 @@ export class Screens {
         z-index: 1;
       }
 
-      .title-section {
+      .end-container, .connecting-container, .error-container {
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        gap: 2rem;
+        position: relative;
+        z-index: 1;
+      }
+
+      /* Logo section */
+      .logo-section {
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        gap: 1rem;
+      }
+
+      .logo-icon {
+        position: relative;
+        width: 100px;
+        height: 100px;
+      }
+
+      .orbit-ring {
+        position: absolute;
+        top: 50%;
+        left: 50%;
+        border: 2px solid rgba(0, 255, 255, 0.5);
+        border-radius: 50%;
+        animation: orbit-spin 20s linear infinite;
+        box-shadow: 0 0 8px rgba(0, 255, 255, 0.2);
+      }
+
+      .orbit-ring:nth-child(1) {
+        width: 50px;
+        height: 50px;
+        margin: -25px 0 0 -25px;
+        border-color: rgba(0, 255, 255, 0.6);
+      }
+
+      .orbit-ring:nth-child(2) {
+        width: 75px;
+        height: 75px;
+        margin: -37.5px 0 0 -37.5px;
+        animation-duration: 30s;
+        animation-direction: reverse;
+        border-color: rgba(0, 255, 255, 0.45);
+      }
+
+      .orbit-ring:nth-child(3) {
+        width: 100px;
+        height: 100px;
+        margin: -50px 0 0 -50px;
+        animation-duration: 45s;
+        border-color: rgba(0, 255, 255, 0.3);
+      }
+
+      .logo-dot {
+        position: absolute;
+        top: 50%;
+        left: 50%;
+        width: 14px;
+        height: 14px;
+        margin: -7px 0 0 -7px;
+        background: #00ffff;
+        border-radius: 50%;
+        box-shadow: 0 0 20px rgba(0, 255, 255, 0.6), 0 0 40px rgba(0, 255, 255, 0.3);
+      }
+
+      @keyframes orbit-spin {
+        to { transform: rotate(360deg); }
+      }
+
+      .title-group {
         text-align: center;
-        margin-bottom: 1rem;
       }
 
       .game-title {
         font-family: 'Orbitron', sans-serif;
-        font-size: clamp(2.5rem, 10vw, 4.5rem);
+        font-size: clamp(2rem, 8vw, 3rem);
         font-weight: 700;
+        font-style: normal;
+        letter-spacing: 0.15em;
         margin: 0;
-        line-height: 1.1;
-        text-shadow:
-          0 0 20px rgba(0, 255, 255, 0.5),
-          0 0 40px rgba(0, 255, 255, 0.3);
+        color: #00ffff;
+        text-shadow: 0 0 30px rgba(0, 255, 255, 0.4);
       }
 
-      .title-orbit {
+      .title-accent {
         display: block;
-        background: linear-gradient(180deg, #00ffff, #0088ff);
-        -webkit-background-clip: text;
-        -webkit-text-fill-color: transparent;
-        background-clip: text;
-      }
-
-      .title-royale {
-        display: block;
-        background: linear-gradient(180deg, #ff00ff, #8b5cf6);
-        -webkit-background-clip: text;
-        -webkit-text-fill-color: transparent;
-        background-clip: text;
-        font-size: clamp(2rem, 8vw, 3.5rem);
-        letter-spacing: 0.3em;
-        margin-left: 0.3em;
-      }
-
-      .game-subtitle {
-        font-size: clamp(0.65rem, 2vw, 0.9rem);
-        color: #d0d0e8;
+        font-family: 'Orbitron', sans-serif;
+        font-size: 0.9rem;
+        font-weight: 400;
+        font-style: normal;
         letter-spacing: 0.4em;
-        margin-top: 1rem;
-        text-transform: uppercase;
-        text-shadow: 0 0 10px rgba(208, 208, 232, 0.3);
+        color: #00ffff;
+        opacity: 0.6;
+        margin-top: 0.25rem;
+        margin-left: 0.4em;
+        text-shadow: 0 0 20px rgba(0, 255, 255, 0.3);
+      }
+
+      /* Form area - HUD panel style */
+      .form-area {
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        gap: 1.25rem;
+        width: 100%;
+        max-width: 320px;
+        padding: 1.5rem;
+        background: rgba(15, 23, 42, 0.85);
+        border: 1px solid rgba(100, 150, 255, 0.15);
+        border-radius: 4px;
+        box-shadow: 0 0 20px rgba(0, 0, 0, 0.3);
       }
 
       .name-input-container {
         width: 100%;
-        max-width: 300px;
       }
 
       .name-input {
         width: 100%;
-        padding: 1rem 1.5rem;
+        padding: 0.75rem 1rem;
         font-family: 'Inter', sans-serif;
-        font-size: 1.1rem;
-        background: rgba(10, 10, 30, 0.8);
-        border: 2px solid rgba(100, 150, 255, 0.3);
-        border-radius: 4px;
-        color: #f0f4ff;
+        font-size: 1rem;
+        background: rgba(0, 0, 0, 0.3);
+        border: 1px solid rgba(100, 150, 255, 0.2);
+        border-radius: 3px;
+        color: #fff;
         text-align: center;
         outline: none;
-        transition: border-color 0.3s ease;
+        transition: all 0.2s ease;
       }
 
       .name-input:focus {
-        border-color: #00ffff;
-        box-shadow: 0 0 10px rgba(0, 255, 255, 0.3);
+        border-color: rgba(100, 150, 255, 0.5);
+        box-shadow: 0 0 10px rgba(100, 150, 255, 0.15);
       }
 
       .name-input::placeholder {
-        color: #606080;
+        color: rgba(255, 255, 255, 0.35);
       }
 
       .name-input.error {
@@ -409,187 +529,215 @@ export class Screens {
         75% { transform: translateX(5px); }
       }
 
+      /* Color picker - slider */
       .color-picker-container {
         display: flex;
         align-items: center;
-        gap: 1rem;
+        gap: 0.75rem;
+        width: 100%;
       }
 
-      .color-label {
-        font-family: 'Orbitron', sans-serif;
-        font-size: 0.75rem;
-        color: #606080;
-        letter-spacing: 0.15em;
+      .color-preview {
+        width: 32px;
+        height: 32px;
+        border-radius: 50%;
+        border: 2px solid rgba(255, 255, 255, 0.3);
+        box-shadow: 0 0 12px currentColor;
+        flex-shrink: 0;
+        transition: background-color 0.15s ease;
       }
 
-      .color-swatches {
+      .slider-wrapper {
+        flex: 1;
         display: flex;
-        gap: 0.5rem;
+        align-items: center;
       }
 
-      .color-swatch {
-        width: 28px;
-        height: 28px;
+      .color-slider {
+        -webkit-appearance: none;
+        appearance: none;
+        width: 100%;
+        height: 8px;
+        background: var(--slider-gradient);
+        border-radius: 4px;
+        outline: none;
+        cursor: pointer;
+      }
+
+      .color-slider::-webkit-slider-thumb {
+        -webkit-appearance: none;
+        appearance: none;
+        width: 18px;
+        height: 18px;
+        background: #fff;
         border-radius: 50%;
         cursor: pointer;
-        border: 2px solid transparent;
-        transition: all 0.2s ease;
-        box-shadow: 0 2px 8px rgba(0, 0, 0, 0.3);
+        box-shadow: 0 0 6px rgba(0, 0, 0, 0.4);
+        border: 2px solid rgba(255, 255, 255, 0.9);
+        transition: transform 0.1s ease;
       }
 
-      .color-swatch:hover {
-        transform: scale(1.15);
-        box-shadow: 0 0 12px currentColor;
-      }
-
-      .color-swatch.selected {
-        border-color: #fff;
-        box-shadow: 0 0 15px currentColor, 0 0 5px #fff;
+      .color-slider::-webkit-slider-thumb:hover {
         transform: scale(1.1);
       }
 
-      .btn-primary {
-        display: flex;
-        align-items: center;
-        gap: 1rem;
-        padding: 1rem 2.5rem;
-        font-family: 'Orbitron', sans-serif;
-        font-size: clamp(1rem, 3vw, 1.3rem);
-        font-weight: 700;
-        letter-spacing: 0.2em;
-        background: linear-gradient(135deg, rgba(0, 255, 255, 0.15) 0%, rgba(139, 92, 246, 0.15) 100%);
-        color: #00ffff;
-        border: 2px solid #00ffff;
-        border-radius: 4px;
+      .color-slider::-moz-range-thumb {
+        width: 18px;
+        height: 18px;
+        background: #fff;
+        border-radius: 50%;
         cursor: pointer;
-        transition: all 0.3s ease;
-        position: relative;
-        overflow: hidden;
-        box-shadow:
-          0 0 20px rgba(0, 255, 255, 0.3),
-          0 0 40px rgba(0, 255, 255, 0.15),
-          inset 0 0 15px rgba(0, 255, 255, 0.1);
+        box-shadow: 0 0 6px rgba(0, 0, 0, 0.4);
+        border: 2px solid rgba(255, 255, 255, 0.9);
+      }
+
+      /* Play button - HUD style */
+      .btn-play {
+        width: 100%;
+        padding: 0.875rem 2rem;
+        font-family: 'Orbitron', sans-serif;
+        font-size: 1rem;
+        font-weight: 600;
+        letter-spacing: 0.2em;
+        background: linear-gradient(180deg, rgba(0, 255, 255, 0.15) 0%, rgba(0, 255, 255, 0.05) 100%);
+        color: #00ffff;
+        border: 1px solid #00ffff;
+        border-radius: 3px;
+        cursor: pointer;
+        transition: all 0.2s ease;
+        text-shadow: 0 0 10px rgba(0, 255, 255, 0.5);
+        box-shadow: 0 0 15px rgba(0, 255, 255, 0.2), inset 0 0 15px rgba(0, 255, 255, 0.05);
+      }
+
+      .btn-play:hover {
+        background: linear-gradient(180deg, rgba(0, 255, 255, 0.25) 0%, rgba(0, 255, 255, 0.1) 100%);
+        box-shadow: 0 0 25px rgba(0, 255, 255, 0.35), inset 0 0 20px rgba(0, 255, 255, 0.1);
+        transform: translateY(-1px);
+      }
+
+      .btn-play:active {
+        transform: translateY(0);
+      }
+
+      /* btn-primary for end/error screens */
+      .btn-primary {
+        padding: 0.875rem 2rem;
+        font-family: 'Orbitron', sans-serif;
+        font-size: 0.875rem;
+        font-weight: 600;
+        letter-spacing: 0.15em;
+        background: linear-gradient(180deg, rgba(0, 255, 255, 0.15) 0%, rgba(0, 255, 255, 0.05) 100%);
+        color: #00ffff;
+        border: 1px solid #00ffff;
+        border-radius: 3px;
+        cursor: pointer;
+        transition: all 0.2s ease;
+        box-shadow: 0 0 15px rgba(0, 255, 255, 0.2);
       }
 
       .btn-primary:hover {
-        background: linear-gradient(135deg, rgba(0, 255, 255, 0.2) 0%, rgba(139, 92, 246, 0.2) 100%);
-        transform: scale(1.02);
+        background: linear-gradient(180deg, rgba(0, 255, 255, 0.25) 0%, rgba(0, 255, 255, 0.1) 100%);
+        box-shadow: 0 0 25px rgba(0, 255, 255, 0.35);
       }
 
       .btn-primary:active {
-        transform: scale(0.98);
+        transform: translateY(0);
       }
 
-      .btn-primary:disabled {
-        opacity: 0.5;
-        cursor: not-allowed;
-        transform: none;
-      }
-
-      .controls-panel {
-        background: rgba(10, 10, 30, 0.8);
-        border: 1px solid rgba(100, 150, 255, 0.3);
+      /* Controls section - HUD panel style */
+      .controls-section {
+        display: flex;
+        flex-direction: column;
+        gap: 0.6rem;
+        padding: 1.25rem 1.5rem;
+        background: rgba(15, 23, 42, 0.75);
+        border: 1px solid rgba(100, 150, 255, 0.15);
         border-radius: 4px;
-        padding: clamp(1rem, 3vw, 1.5rem) clamp(1rem, 4vw, 2rem);
-        min-width: min(320px, 85vw);
-        max-width: 90vw;
-      }
-
-      .controls-title {
-        font-family: 'Orbitron', sans-serif;
-        font-size: 0.75rem;
-        color: #a0a0c0;
-        letter-spacing: 0.3em;
-        margin-bottom: 1rem;
-        text-align: center;
+        min-width: 300px;
       }
 
       .control-row {
-        display: grid;
-        grid-template-columns: auto 1fr;
-        gap: 1rem;
+        display: flex;
         align-items: center;
-        padding: 0.6rem 0;
-        border-bottom: 1px solid rgba(100, 150, 255, 0.1);
+        gap: 1rem;
       }
 
-      .control-row:last-child {
-        border-bottom: none;
+      .control-keys {
+        display: flex;
+        gap: 0.3rem;
+        min-width: 110px;
       }
 
-      .control-row.objective {
-        margin-top: 0.5rem;
-        padding-top: 1rem;
-        border-top: 1px solid rgba(100, 150, 255, 0.2);
-        border-bottom: none;
-      }
-
-      .control-key {
+      .control-keys kbd {
         font-family: 'Orbitron', monospace;
-        font-size: 0.75rem;
-        color: #fbbf24;
+        font-size: 0.65rem;
+        padding: 0.3rem 0.5rem;
         background: rgba(251, 191, 36, 0.1);
-        padding: 0.3rem 0.6rem;
-        border-radius: 3px;
         border: 1px solid rgba(251, 191, 36, 0.3);
-        min-width: 90px;
-        text-align: center;
+        border-radius: 3px;
+        color: #fbbf24;
       }
 
       .control-desc {
-        font-size: 0.85rem;
-        color: #c8c8e0;
-        text-align: left;
+        font-size: 0.8rem;
+        color: rgba(200, 210, 230, 0.7);
       }
 
-      .version-tag {
-        font-family: 'Orbitron', monospace;
+      .objective-text {
+        font-family: 'Orbitron', sans-serif;
         font-size: 0.7rem;
-        color: #606080;
-        letter-spacing: 0.2em;
-        position: fixed;
-        bottom: 1rem;
-        right: 1rem;
-        z-index: 101;
+        font-weight: 400;
+        color: #4ade80;
+        text-align: center;
+        margin-top: 0.5rem;
+        padding-top: 0.75rem;
+        border-top: 1px solid rgba(100, 150, 255, 0.1);
+        letter-spacing: 0.1em;
+        text-shadow: 0 0 10px rgba(74, 222, 128, 0.3);
       }
 
+      /* End screen */
       .end-title {
         font-family: 'Orbitron', sans-serif;
-        font-size: 4rem;
+        font-size: clamp(2.5rem, 8vw, 4rem);
         font-weight: 700;
+        letter-spacing: 0.1em;
         margin: 0 0 1rem 0;
-        text-shadow: 0 0 30px currentColor;
       }
 
       .end-title.victory {
         color: #4ade80;
+        text-shadow: 0 0 30px rgba(74, 222, 128, 0.5);
       }
 
       .end-title.defeat {
         color: #ef4444;
+        text-shadow: 0 0 30px rgba(239, 68, 68, 0.5);
       }
 
       .end-stats {
         display: flex;
         gap: 2rem;
-        margin-bottom: 1rem;
+        margin-bottom: 1.5rem;
       }
 
       .stat-box {
-        background: rgba(10, 10, 30, 0.8);
-        border: 1px solid rgba(100, 150, 255, 0.3);
-        border-radius: 4px;
-        padding: 1.5rem 2rem;
         text-align: center;
-        min-width: 140px;
+        min-width: 100px;
+        padding: 1rem 1.5rem;
+        background: rgba(10, 14, 20, 0.8);
+        border: 1px solid rgba(0, 255, 255, 0.2);
+        border-radius: 4px;
       }
 
       .stat-label {
         display: block;
-        font-size: 0.7rem;
-        color: #a0a0c0;
-        letter-spacing: 0.2em;
+        font-family: 'Orbitron', sans-serif;
+        font-size: 0.6rem;
+        color: rgba(160, 180, 200, 0.7);
+        letter-spacing: 0.15em;
         margin-bottom: 0.5rem;
+        text-transform: uppercase;
       }
 
       .stat-value {
@@ -604,13 +752,15 @@ export class Screens {
         color: #fbbf24;
       }
 
+      /* Connecting screen */
       .spinner {
         width: 50px;
         height: 50px;
-        border: 3px solid rgba(0, 255, 255, 0.3);
+        border: 2px solid rgba(0, 255, 255, 0.2);
         border-top-color: #00ffff;
         border-radius: 50%;
-        animation: spin 1s linear infinite;
+        animation: spin 0.8s linear infinite;
+        box-shadow: 0 0 15px rgba(0, 255, 255, 0.2);
       }
 
       @keyframes spin {
@@ -618,22 +768,30 @@ export class Screens {
       }
 
       .connecting-text {
-        font-size: 1.2rem;
-        color: #a0a0c0;
+        font-family: 'Orbitron', sans-serif;
+        font-size: 0.9rem;
+        font-weight: 400;
+        color: rgba(0, 255, 255, 0.7);
+        letter-spacing: 0.15em;
       }
 
+      /* Error screen */
       .error-title {
         font-family: 'Orbitron', sans-serif;
-        font-size: 2rem;
+        font-size: 1.5rem;
+        font-weight: 600;
         color: #ef4444;
         margin: 0;
+        letter-spacing: 0.1em;
+        text-shadow: 0 0 20px rgba(239, 68, 68, 0.4);
       }
 
       .error-message {
-        font-size: 1rem;
-        color: #a0a0c0;
-        max-width: 400px;
+        font-size: 0.875rem;
+        color: rgba(200, 210, 230, 0.7);
+        max-width: 320px;
         text-align: center;
+        line-height: 1.6;
       }
     `;
     document.head.appendChild(style);

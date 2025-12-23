@@ -222,8 +222,8 @@ async fn handle_connection(
                                             continue;
                                         }
 
-                                        // Clamp color index to valid range (0-9)
-                                        let safe_color_index = color_index.min(9);
+                                        // Clamp color index to valid range (0-19)
+                                        let safe_color_index = color_index.min(19);
 
                                         tracing::info!("Received JoinRequest from '{}' with color {}", sanitized_name, safe_color_index);
 

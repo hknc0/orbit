@@ -863,7 +863,7 @@ export class RenderSystem {
       this.ctx.font = '9px Inter, system-ui, sans-serif';
       this.ctx.textAlign = 'left';
       this.ctx.fillText('MASS', Math.round(panelX + 14), Math.round(panelY + 52));
-      this.ctx.fillStyle = '#00d4ff';
+      this.ctx.fillStyle = '#00ffff';
       this.ctx.font = 'bold 15px monospace';
       this.ctx.fillText(Math.floor(localPlayer.mass).toString(), Math.round(panelX + 14), Math.round(panelY + 70));
       this.drawProgressBarEnhanced(barStartX, Math.round(panelY + 58), barWidth, 10, massPercent, '#3b82f6', massPercent > 0.5);
@@ -950,7 +950,7 @@ export class RenderSystem {
       const statSpacing = 60;
 
       // Best Mass (cyan)
-      this.ctx.fillStyle = '#00d4ff';
+      this.ctx.fillStyle = '#00ffff';
       this.ctx.font = 'bold 14px monospace';
       this.ctx.textAlign = 'center';
       this.ctx.fillText(Math.floor(sessionStats.bestMass).toString(), Math.round(panelX + 30), statsY);
