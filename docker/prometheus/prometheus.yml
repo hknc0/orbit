@@ -1,0 +1,56 @@
+# Prometheus Configuration for Orbit Royale
+global:
+  scrape_interval: 5s          # Scrape every 5 seconds for real-time game metrics
+  evaluation_interval: 5s
+  external_labels:
+    monitor: 'orbit-royale'
+
+# Alerting configuration (optional, for future use)
+alerting:
+  alertmanagers: []
+
+# Scrape configurations
+scrape_configs:
+  # =============================================================================
+  # Prometheus self-monitoring
+  # =============================================================================
+  - job_name: 'prometheus'
+    static_configs:
+      - targets: ['localhost:9090']
+    scrape_interval: 15s
+
+  # =============================================================================
+  # Orbit Royale Game Server Metrics
+  # =============================================================================
+  - job_name: 'orbit-royale-api'
+    static_configs:
+      - targets: ['api:9090']
+        labels:
+          service: 'game-server'
+          environment: 'docker'
+    scrape_interval: 2s          # Fast scrape for real-time game metrics
+    metrics_path: /metrics
+
+  # =============================================================================
+  # cAdvisor - Container Metrics (CPU, Memory, Network, Disk)
+  # =============================================================================
+  - job_name: 'cadvisor'
+    static_configs:
+      - targets: ['cadvisor:8080']
+    scrape_interval: 5s
+    # Relabel to keep only orbit containers
+    metric_relabel_configs:
+      - source_labels: [container_label_com_docker_compose_service]
+        regex: 'orbit-.*|api|client'
+        action: keep
+
+  # =============================================================================
+  # Additional API instances (for scaling)
+  # =============================================================================
+  - job_name: 'orbit-royale-api-discovery'
+    dns_sd_configs:
+      - names:
+          - 'api'
+        type: 'A'
+        port: 9090
+    scrape_interval: 2s

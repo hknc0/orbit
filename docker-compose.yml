@@ -1,0 +1,151 @@
+version: '3.8'
+
+# Orbit Royale - Docker Compose with Resource Limits and Monitoring
+# Usage:
+#   docker-compose up -d              # Start all services
+#   docker-compose logs -f api        # View API logs
+#   docker-compose down               # Stop all services
+#
+# Note: Each API instance runs an independent galaxy. For shared game state,
+# you'd need Redis/database and cross-server message passing.
+
+services:
+  # =============================================================================
+  # Game API Server (Rust WebTransport)
+  # =============================================================================
+  api:
+    build:
+      context: .
+      dockerfile: docker/api/Dockerfile
+    container_name: orbit-api
+    ports:
+      - "4433:4433/udp"   # WebTransport (QUIC/UDP)
+      - "9090:9090"        # Metrics endpoint
+    environment:
+      - RUST_LOG=info
+      - HOST=0.0.0.0
+      - PORT=4433
+      - METRICS_PORT=9090
+      - BOT_COUNT=20
+    volumes:
+      - api-certs:/app/certs
+    networks:
+      - orbit-network
+    # Resource limits for testing
+    deploy:
+      resources:
+        limits:
+          cpus: '1.0'           # Max 1 CPU core
+          memory: 512M          # Max 512MB RAM
+        reservations:
+          cpus: '0.5'           # Guaranteed 0.5 CPU
+          memory: 256M          # Guaranteed 256MB RAM
+    healthcheck:
+      test: ["CMD", "wget", "--quiet", "--tries=1", "--spider", "http://localhost:9090/health"]
+      interval: 10s
+      timeout: 3s
+      retries: 3
+      start_period: 10s
+    restart: unless-stopped
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+  # =============================================================================
+  # Prometheus - Metrics Collection
+  # =============================================================================
+  prometheus:
+    image: prom/prometheus:v2.48.0
+    container_name: orbit-prometheus
+    ports:
+      - "9091:9090"
+    volumes:
+      - ./docker/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - prometheus-data:/prometheus
+    command:
+      - '--config.file=/etc/prometheus/prometheus.yml'
+      - '--storage.tsdb.path=/prometheus'
+      - '--storage.tsdb.retention.time=7d'
+      - '--web.enable-lifecycle'
+      - '--web.enable-admin-api'
+    networks:
+      - orbit-network
+    deploy:
+      resources:
+        limits:
+          cpus: '0.5'
+          memory: 256M
+        reservations:
+          cpus: '0.1'
+          memory: 128M
+    restart: unless-stopped
+
+  # =============================================================================
+  # Grafana - Metrics Visualization
+  # =============================================================================
+  grafana:
+    image: grafana/grafana:10.2.2
+    container_name: orbit-grafana
+    ports:
+      - "3000:3000"
+    environment:
+      - GF_SECURITY_ADMIN_USER=admin
+      - GF_SECURITY_ADMIN_PASSWORD=orbit123
+      - GF_USERS_ALLOW_SIGN_UP=false
+      - GF_SERVER_ROOT_URL=http://localhost:3000
+      - GF_DASHBOARDS_DEFAULT_HOME_DASHBOARD_PATH=/var/lib/grafana/dashboards/orbit-royale.json
+    volumes:
+      - ./docker/grafana/provisioning/datasources:/etc/grafana/provisioning/datasources:ro
+      - ./docker/grafana/provisioning/dashboards:/etc/grafana/provisioning/dashboards:ro
+      - ./docker/grafana/dashboards:/var/lib/grafana/dashboards:ro
+      - grafana-data:/var/lib/grafana
+    networks:
+      - orbit-network
+    deploy:
+      resources:
+        limits:
+          cpus: '0.5'
+          memory: 256M
+        reservations:
+          cpus: '0.1'
+          memory: 128M
+    depends_on:
+      - prometheus
+    restart: unless-stopped
+
+  # =============================================================================
+  # cAdvisor - Container Resource Monitoring
+  # =============================================================================
+  cadvisor:
+    image: gcr.io/cadvisor/cadvisor:v0.47.2
+    container_name: orbit-cadvisor
+    ports:
+      - "8081:8080"
+    volumes:
+      - /:/rootfs:ro
+      - /var/run:/var/run:ro
+      - /sys:/sys:ro
+      - /var/lib/docker/:/var/lib/docker:ro
+      - /dev/disk/:/dev/disk:ro
+    privileged: true
+    devices:
+      - /dev/kmsg
+    networks:
+      - orbit-network
+    deploy:
+      resources:
+        limits:
+          cpus: '0.25'
+          memory: 128M
+    restart: unless-stopped
+
+networks:
+  orbit-network:
+    driver: bridge
+
+volumes:
+  api-certs:
+  prometheus-data:
+  grafana-data:
