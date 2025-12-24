@@ -13,7 +13,8 @@ mod ai_manager;
 
 use std::sync::Arc;
 use tokio::sync::RwLock;
-use tracing::{error, info, Level};
+use tracing::{error, info};
+use tracing_subscriber::EnvFilter;
 
 use crate::config::ServerConfig;
 use crate::metrics::Metrics;
@@ -29,9 +30,14 @@ async fn main() -> anyhow::Result<()> {
     // Load .env file if present
     dotenvy::dotenv().ok();
 
-    // Initialize logging
+    // Initialize logging with RUST_LOG support
+    // Default: info level, but can be overridden via RUST_LOG env var
+    // Examples: RUST_LOG=debug, RUST_LOG=warn, RUST_LOG=orbit_royale_server=debug
+    let env_filter = EnvFilter::try_from_default_env()
+        .unwrap_or_else(|_| EnvFilter::new("info"));
+
     tracing_subscriber::fmt()
-        .with_max_level(Level::INFO)
+        .with_env_filter(env_filter)
         .with_target(false)
         .init();
 

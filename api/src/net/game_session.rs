@@ -358,7 +358,7 @@ impl GameSession {
         color_index: u8,
         writer: Arc<RwLock<Option<wtransport::SendStream>>>,
     ) -> PlayerId {
-        info!("Adding player {} ({}) to game session", player_name, player_id);
+        info!("Player joined: {} ({})", player_name, player_id);
 
         // Create player entity with their selected color
         let player = Player::new(player_id, player_name.clone(), false, color_index);
@@ -396,7 +396,7 @@ impl GameSession {
 
     /// Remove a player from the game session
     pub fn remove_player(&mut self, player_id: PlayerId) {
-        info!("Removing player {} from game session", player_id);
+        info!("Player left: {}", player_id);
         self.game_loop.remove_player(player_id);
         self.players.remove(&player_id); // Dropping sender closes the channel, ending writer task
         self.last_client_times.remove(&player_id);
@@ -1326,8 +1326,12 @@ pub fn start_game_loop(session: Arc<RwLock<GameSession>>) {
                 });
             }
 
-            // Log stats periodically (every 30 seconds)
-            if tick_count % (physics::TICK_RATE as u64 * 30) == 0 {
+            // Log stats periodically (every 60 seconds by default, configurable via LOG_STATUS_INTERVAL_SECS)
+            let log_interval = std::env::var("LOG_STATUS_INTERVAL_SECS")
+                .ok()
+                .and_then(|s| s.parse::<u64>().ok())
+                .unwrap_or(60);
+            if log_interval > 0 && tick_count % (physics::TICK_RATE as u64 * log_interval) == 0 {
                 let session_guard = session.read().await;
                 let elapsed = start.elapsed().as_secs();
                 let human_count = session_guard.players.len();

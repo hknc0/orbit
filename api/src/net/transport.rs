@@ -174,7 +174,7 @@ async fn handle_connection(
         }
     };
 
-    tracing::info!(
+    tracing::debug!(
         "New connection from: {:?}, path: {}, conn_id: {}",
         session_request.authority(),
         session_request.path(),
@@ -183,7 +183,7 @@ async fn handle_connection(
 
     let connection = session_request.accept().await?;
 
-    tracing::info!("Connection accepted (conn_id: {})", connection_id);
+    tracing::debug!("Connection accepted (conn_id: {})", connection_id);
 
     // Store connection info for cleanup
     let dos_for_cleanup = dos_protection.clone();
@@ -205,7 +205,7 @@ async fn handle_connection(
             stream = connection.accept_bi() => {
                 match stream {
                     Ok((send, mut recv)) => {
-                        tracing::info!("Accepted bidirectional stream");
+                        tracing::debug!("Accepted bidirectional stream");
 
                         // Wrap send stream in Arc<RwLock> for sharing
                         let writer = Arc::new(RwLock::new(Some(send)));
@@ -320,7 +320,7 @@ async fn handle_connection(
                                         // Clamp color index to valid range (0-19)
                                         let safe_color_index = color_index.min(19);
 
-                                        tracing::info!("Received JoinRequest from '{}' with color {}", sanitized_name, safe_color_index);
+                                        tracing::debug!("Received JoinRequest from '{}' with color {}", sanitized_name, safe_color_index);
 
                                         // Check if server can accept new players (performance-based)
                                         let can_accept = {
@@ -373,7 +373,7 @@ async fn handle_connection(
                                             tracing::warn!("Failed to send JoinAccepted: {}", e);
                                             break;
                                         }
-                                        tracing::info!("Sent JoinAccepted (player_id: {})", new_player_id);
+                                        tracing::debug!("Sent JoinAccepted (player_id: {})", new_player_id);
 
                                         // Send initial snapshot
                                         let snapshot = {
@@ -384,7 +384,7 @@ async fn handle_connection(
                                         if let Err(e) = send_to_player(&writer, &snapshot_msg).await {
                                             tracing::warn!("Failed to send initial snapshot: {}", e);
                                         } else {
-                                            tracing::info!("Sent initial snapshot to player {}", new_player_id);
+                                            tracing::debug!("Sent initial snapshot to player {}", new_player_id);
                                         }
 
                                         // Send PhaseChange to let client know game is playing
@@ -406,7 +406,7 @@ async fn handle_connection(
                                     }
 
                                     ClientMessage::Leave => {
-                                        tracing::info!("Player requested to leave");
+                                        tracing::debug!("Player requested to leave");
                                         if let Some(pid) = *player_id.read().await {
                                             let mut session = game_session.write().await;
                                             session.remove_player(pid);
@@ -436,7 +436,7 @@ async fn handle_connection(
 
                             // Clean up: remove player from session when stream closes
                             if let Some(pid) = *player_id.read().await {
-                                tracing::info!("Player {} stream closed, removing from game", pid);
+                                tracing::debug!("Player {} stream closed, removing from game", pid);
                                 let mut session = game_session.write().await;
                                 session.remove_player(pid);
                             }
@@ -496,7 +496,7 @@ async fn handle_connection(
 
     // Clean up on disconnect
     if let Some(pid) = *player_id.read().await {
-        tracing::info!("Connection closed, removing player {}", pid);
+        tracing::debug!("Connection closed, removing player {}", pid);
         let mut session = game_session.write().await;
         session.remove_player(pid);
     }
@@ -507,7 +507,7 @@ async fn handle_connection(
         dos.unregister_connection(connection_id, client_ip);
     }
 
-    tracing::info!("Connection closed (conn_id: {})", connection_id);
+    tracing::debug!("Connection closed (conn_id: {})", connection_id);
     Ok(())
 }
 
