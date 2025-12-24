@@ -488,6 +488,371 @@ impl DebrisSpawnConfig {
     }
 }
 
+/// Arena scaling configuration
+/// Controls dynamic arena sizing based on player count and simulation mode
+/// All values can be overridden via ARENA_* environment variables
+#[derive(Debug, Clone)]
+pub struct ArenaScalingConfig {
+    // Growth/Shrink behavior
+    /// How fast arena grows towards target (0.01-0.1)
+    pub grow_lerp: f32,
+    /// How fast arena shrinks towards target (0.001-0.05)
+    pub shrink_lerp: f32,
+    /// Ticks to wait before shrinking (0-300)
+    pub shrink_delay_ticks: u32,
+
+    // Size limits
+    /// Minimum arena escape radius (500-2000)
+    pub min_escape_radius: f32,
+    /// Maximum arena scale multiplier (5-20)
+    pub max_escape_multiplier: f32,
+    /// Arena growth units per player (5-50)
+    pub growth_per_player: f32,
+    /// Player count before arena starts growing (1-50)
+    pub player_threshold: usize,
+
+    // Well positioning
+    /// Minimum well distance ratio from center (0.1-0.4)
+    pub well_min_ratio: f32,
+    /// Maximum well distance ratio from center (0.6-0.95)
+    pub well_max_ratio: f32,
+    /// Additional wells per 50 players (1-5)
+    pub wells_per_50_players: usize,
+    /// Maximum gravity wells (5-50)
+    pub max_wells: usize,
+
+    // Well ring distribution (percentages of escape_radius)
+    pub ring_inner_min: f32,
+    pub ring_inner_max: f32,
+    pub ring_middle_min: f32,
+    pub ring_middle_max: f32,
+    pub ring_outer_min: f32,
+    pub ring_outer_max: f32,
+
+    // Supermassive black hole
+    pub supermassive_mass_mult: f32,
+    pub supermassive_core_mult: f32,
+}
+
+impl Default for ArenaScalingConfig {
+    fn default() -> Self {
+        Self {
+            grow_lerp: 0.02,
+            shrink_lerp: 0.005,
+            shrink_delay_ticks: 150,
+            min_escape_radius: 800.0,
+            max_escape_multiplier: 10.0,
+            growth_per_player: 10.0,
+            player_threshold: 10,
+            well_min_ratio: 0.20,
+            well_max_ratio: 0.85,
+            wells_per_50_players: 1,
+            max_wells: 20,
+            ring_inner_min: 0.25,
+            ring_inner_max: 0.40,
+            ring_middle_min: 0.45,
+            ring_middle_max: 0.65,
+            ring_outer_min: 0.70,
+            ring_outer_max: 0.90,
+            supermassive_mass_mult: 3.0,
+            supermassive_core_mult: 2.5,
+        }
+    }
+}
+
+impl ArenaScalingConfig {
+    /// Load config from environment variables, falling back to defaults
+    pub fn from_env() -> Self {
+        let mut config = Self::default();
+
+        // Growth/Shrink behavior
+        if let Ok(val) = std::env::var("ARENA_GROW_LERP") {
+            if let Ok(parsed) = val.parse::<f32>() {
+                if parsed >= 0.01 && parsed <= 0.1 {
+                    config.grow_lerp = parsed;
+                } else {
+                    tracing::warn!("ARENA_GROW_LERP must be 0.01-0.1, using default");
+                }
+            }
+        }
+
+        if let Ok(val) = std::env::var("ARENA_SHRINK_LERP") {
+            if let Ok(parsed) = val.parse::<f32>() {
+                if parsed >= 0.001 && parsed <= 0.05 {
+                    config.shrink_lerp = parsed;
+                } else {
+                    tracing::warn!("ARENA_SHRINK_LERP must be 0.001-0.05, using default");
+                }
+            }
+        }
+
+        if let Ok(val) = std::env::var("ARENA_SHRINK_DELAY_TICKS") {
+            if let Ok(parsed) = val.parse::<u32>() {
+                if parsed <= 300 {
+                    config.shrink_delay_ticks = parsed;
+                } else {
+                    tracing::warn!("ARENA_SHRINK_DELAY_TICKS must be 0-300, using default");
+                }
+            }
+        }
+
+        // Size limits
+        if let Ok(val) = std::env::var("ARENA_MIN_RADIUS") {
+            if let Ok(parsed) = val.parse::<f32>() {
+                if parsed >= 500.0 && parsed <= 2000.0 {
+                    config.min_escape_radius = parsed;
+                } else {
+                    tracing::warn!("ARENA_MIN_RADIUS must be 500-2000, using default");
+                }
+            }
+        }
+
+        if let Ok(val) = std::env::var("ARENA_MAX_MULTIPLIER") {
+            if let Ok(parsed) = val.parse::<f32>() {
+                if parsed >= 5.0 && parsed <= 20.0 {
+                    config.max_escape_multiplier = parsed;
+                } else {
+                    tracing::warn!("ARENA_MAX_MULTIPLIER must be 5-20, using default");
+                }
+            }
+        }
+
+        if let Ok(val) = std::env::var("ARENA_GROWTH_PER_PLAYER") {
+            if let Ok(parsed) = val.parse::<f32>() {
+                if parsed >= 5.0 && parsed <= 50.0 {
+                    config.growth_per_player = parsed;
+                } else {
+                    tracing::warn!("ARENA_GROWTH_PER_PLAYER must be 5-50, using default");
+                }
+            }
+        }
+
+        if let Ok(val) = std::env::var("ARENA_PLAYER_THRESHOLD") {
+            if let Ok(parsed) = val.parse::<usize>() {
+                if parsed >= 1 && parsed <= 50 {
+                    config.player_threshold = parsed;
+                } else {
+                    tracing::warn!("ARENA_PLAYER_THRESHOLD must be 1-50, using default");
+                }
+            }
+        }
+
+        // Well positioning
+        if let Ok(val) = std::env::var("ARENA_WELL_MIN_RATIO") {
+            if let Ok(parsed) = val.parse::<f32>() {
+                if parsed >= 0.1 && parsed <= 0.4 {
+                    config.well_min_ratio = parsed;
+                } else {
+                    tracing::warn!("ARENA_WELL_MIN_RATIO must be 0.1-0.4, using default");
+                }
+            }
+        }
+
+        if let Ok(val) = std::env::var("ARENA_WELL_MAX_RATIO") {
+            if let Ok(parsed) = val.parse::<f32>() {
+                if parsed >= 0.6 && parsed <= 0.95 {
+                    config.well_max_ratio = parsed;
+                } else {
+                    tracing::warn!("ARENA_WELL_MAX_RATIO must be 0.6-0.95, using default");
+                }
+            }
+        }
+
+        if let Ok(val) = std::env::var("ARENA_MAX_WELLS") {
+            if let Ok(parsed) = val.parse::<usize>() {
+                if parsed >= 5 && parsed <= 50 {
+                    config.max_wells = parsed;
+                } else {
+                    tracing::warn!("ARENA_MAX_WELLS must be 5-50, using default");
+                }
+            }
+        }
+
+        // Ring distribution
+        if let Ok(val) = std::env::var("ARENA_RING_INNER_MIN") {
+            if let Ok(parsed) = val.parse::<f32>() {
+                config.ring_inner_min = parsed.clamp(0.1, 0.5);
+            }
+        }
+        if let Ok(val) = std::env::var("ARENA_RING_INNER_MAX") {
+            if let Ok(parsed) = val.parse::<f32>() {
+                config.ring_inner_max = parsed.clamp(config.ring_inner_min, 0.6);
+            }
+        }
+        if let Ok(val) = std::env::var("ARENA_RING_MIDDLE_MIN") {
+            if let Ok(parsed) = val.parse::<f32>() {
+                config.ring_middle_min = parsed.clamp(0.3, 0.7);
+            }
+        }
+        if let Ok(val) = std::env::var("ARENA_RING_MIDDLE_MAX") {
+            if let Ok(parsed) = val.parse::<f32>() {
+                config.ring_middle_max = parsed.clamp(config.ring_middle_min, 0.8);
+            }
+        }
+        if let Ok(val) = std::env::var("ARENA_RING_OUTER_MIN") {
+            if let Ok(parsed) = val.parse::<f32>() {
+                config.ring_outer_min = parsed.clamp(0.5, 0.9);
+            }
+        }
+        if let Ok(val) = std::env::var("ARENA_RING_OUTER_MAX") {
+            if let Ok(parsed) = val.parse::<f32>() {
+                config.ring_outer_max = parsed.clamp(config.ring_outer_min, 0.95);
+            }
+        }
+
+        // Supermassive black hole
+        if let Ok(val) = std::env::var("ARENA_SUPERMASSIVE_MASS") {
+            if let Ok(parsed) = val.parse::<f32>() {
+                if parsed >= 1.0 && parsed <= 10.0 {
+                    config.supermassive_mass_mult = parsed;
+                }
+            }
+        }
+        if let Ok(val) = std::env::var("ARENA_SUPERMASSIVE_CORE") {
+            if let Ok(parsed) = val.parse::<f32>() {
+                if parsed >= 1.0 && parsed <= 5.0 {
+                    config.supermassive_core_mult = parsed;
+                }
+            }
+        }
+
+        tracing::info!(
+            "Arena scaling: grow_lerp={}, shrink_lerp={}, delay={}, max_wells={}",
+            config.grow_lerp,
+            config.shrink_lerp,
+            config.shrink_delay_ticks,
+            config.max_wells
+        );
+
+        config
+    }
+}
+
+/// AI Simulation Manager configuration
+/// Controls the autonomous AI that monitors and adjusts simulation parameters
+/// All values can be overridden via AI_* environment variables
+#[derive(Debug, Clone)]
+pub struct AIManagerConfig {
+    /// Master switch - when false, AI manager is disabled
+    pub enabled: bool,
+    /// Claude API key (required if enabled)
+    pub api_key: Option<String>,
+    /// Minutes between AI evaluations (1-60)
+    pub eval_interval_minutes: u32,
+    /// Maximum decisions to keep in history (10-1000)
+    pub max_history: usize,
+    /// Minimum confidence to act on recommendations (0.0-1.0)
+    pub confidence_threshold: f32,
+    /// Claude model to use
+    pub model: String,
+    /// Path to decision history file
+    pub history_file: String,
+}
+
+impl Default for AIManagerConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            api_key: None,
+            eval_interval_minutes: 2,
+            max_history: 100,
+            confidence_threshold: 0.7,
+            model: "claude-sonnet-4-5".to_string(),
+            history_file: "data/ai_decisions.json".to_string(),
+        }
+    }
+}
+
+impl AIManagerConfig {
+    /// Load config from environment variables, falling back to defaults
+    pub fn from_env() -> Self {
+        let mut config = Self::default();
+
+        // Feature flag
+        if let Ok(val) = std::env::var("AI_ENABLED") {
+            config.enabled = val.to_lowercase() == "true" || val == "1";
+        }
+
+        // API key (required if enabled) - use ORBIT_API_KEY for the Anthropic API key
+        if let Ok(val) = std::env::var("ORBIT_API_KEY") {
+            if !val.is_empty() {
+                config.api_key = Some(val);
+            }
+        }
+
+        // Evaluation interval
+        if let Ok(val) = std::env::var("AI_EVAL_INTERVAL_MINUTES") {
+            if let Ok(parsed) = val.parse::<u32>() {
+                if parsed >= 1 && parsed <= 60 {
+                    config.eval_interval_minutes = parsed;
+                } else {
+                    tracing::warn!("AI_EVAL_INTERVAL_MINUTES must be 1-60, using default");
+                }
+            }
+        }
+
+        // Max history
+        if let Ok(val) = std::env::var("AI_MAX_HISTORY") {
+            if let Ok(parsed) = val.parse::<usize>() {
+                if parsed >= 10 && parsed <= 1000 {
+                    config.max_history = parsed;
+                } else {
+                    tracing::warn!("AI_MAX_HISTORY must be 10-1000, using default");
+                }
+            }
+        }
+
+        // Confidence threshold
+        if let Ok(val) = std::env::var("AI_CONFIDENCE_THRESHOLD") {
+            if let Ok(parsed) = val.parse::<f32>() {
+                if parsed >= 0.0 && parsed <= 1.0 {
+                    config.confidence_threshold = parsed;
+                } else {
+                    tracing::warn!("AI_CONFIDENCE_THRESHOLD must be 0.0-1.0, using default");
+                }
+            }
+        }
+
+        // Model
+        if let Ok(val) = std::env::var("AI_MODEL") {
+            if !val.is_empty() {
+                config.model = val;
+            }
+        }
+
+        // History file path
+        if let Ok(val) = std::env::var("AI_HISTORY_FILE") {
+            if !val.is_empty() {
+                config.history_file = val;
+            }
+        }
+
+        // Validate configuration
+        if config.enabled {
+            if config.api_key.is_none() {
+                tracing::error!("AI_ENABLED=true but ORBIT_API_KEY not set, disabling AI manager");
+                config.enabled = false;
+            } else {
+                tracing::info!(
+                    "AI manager enabled: interval={}min, model={}, threshold={}",
+                    config.eval_interval_minutes,
+                    config.model,
+                    config.confidence_threshold
+                );
+            }
+        } else {
+            tracing::info!("AI manager disabled");
+        }
+
+        config
+    }
+
+    /// Check if AI manager should be active
+    pub fn is_active(&self) -> bool {
+        self.enabled && self.api_key.is_some()
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -543,5 +908,41 @@ mod tests {
         let config = DebrisSpawnConfig::default();
         let inner_total = config.total_spawn_rate("inner");
         assert!((inner_total - 2.6).abs() < 0.01); // 2.0 + 0.5 + 0.1 = 2.6
+    }
+
+    #[test]
+    fn test_arena_scaling_config_defaults() {
+        let config = ArenaScalingConfig::default();
+        assert_eq!(config.grow_lerp, 0.02);
+        assert_eq!(config.shrink_lerp, 0.005);
+        assert_eq!(config.shrink_delay_ticks, 150);
+        assert_eq!(config.min_escape_radius, 800.0);
+        assert_eq!(config.max_wells, 20);
+        assert_eq!(config.ring_inner_min, 0.25);
+        assert_eq!(config.ring_outer_max, 0.90);
+    }
+
+    #[test]
+    fn test_ai_manager_config_defaults() {
+        let config = AIManagerConfig::default();
+        assert!(!config.enabled);
+        assert!(config.api_key.is_none());
+        assert_eq!(config.eval_interval_minutes, 2);
+        assert_eq!(config.max_history, 100);
+        assert_eq!(config.confidence_threshold, 0.7);
+        assert_eq!(config.model, "claude-sonnet-4-5");
+        assert!(!config.is_active());
+    }
+
+    #[test]
+    fn test_ai_manager_is_active() {
+        let mut config = AIManagerConfig::default();
+        assert!(!config.is_active());
+
+        config.enabled = true;
+        assert!(!config.is_active()); // Still false, no API key
+
+        config.api_key = Some("test-key".to_string());
+        assert!(config.is_active()); // Now active
     }
 }

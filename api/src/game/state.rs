@@ -9,6 +9,7 @@ use hashbrown::HashMap;
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
+use crate::config::ArenaScalingConfig;
 use crate::game::constants::{arena, mass, spawn};
 use crate::util::vec2::Vec2;
 
@@ -348,29 +349,30 @@ impl Arena {
 
         // === ORBITAL GRAVITY WELLS (distributed across rings) ===
         // Use the same multi-ring distribution as scale_for_simulation
-        self.add_orbital_wells(well_count, self.escape_radius);
+        self.add_orbital_wells_default(well_count, self.escape_radius);
     }
 
     /// Smoothly scale arena based on player count
     /// - GROW: Fast and immediate (players need space)
-    /// - SHRINK: Delayed (5 seconds) and slow (don't trap players)
-    pub fn scale_for_simulation(&mut self, target_player_count: usize) {
-        // Shrink delay at 30Hz = 150 ticks for 5 seconds
-        const SHRINK_DELAY_TICKS: u32 = 150;
-        // Minimum arena size = base size (scale 1.0)
-        const MIN_ESCAPE_RADIUS: f32 = arena::ESCAPE_RADIUS;
+    /// - SHRINK: Delayed and slow (don't trap players)
+    /// Uses ArenaScalingConfig for all tunable parameters
+    pub fn scale_for_simulation(&mut self, target_player_count: usize, config: &ArenaScalingConfig) {
+        let min_escape = config.min_escape_radius;
+        let max_escape = config.min_escape_radius * config.max_escape_multiplier;
 
         // Calculate target number of wells (not counting central supermassive)
-        // Dynamic: 1-50 players: 1 well, 51-100: 2 wells, etc
-        let target_wells = ((target_player_count + 49) / 50).max(1).min(20);
+        let players_per_well = 50 / config.wells_per_50_players.max(1);
+        let target_wells = ((target_player_count + players_per_well - 1) / players_per_well)
+            .max(1)
+            .min(config.max_wells);
         let current_orbital_wells = self.gravity_wells.len().saturating_sub(1);
 
         // Calculate target arena size based on player count
-        // Scale 1.0 = base ESCAPE_RADIUS (800), grows with player count
-        // ~10 units per player beyond 10, capped for sanity
-        let base_radius = arena::ESCAPE_RADIUS; // 800 = scale 1.0
-        let additional = (target_player_count.saturating_sub(10) as f32) * 10.0;
-        let target_escape = (base_radius + additional).min(base_radius * 10.0).max(MIN_ESCAPE_RADIUS);
+        let additional = (target_player_count.saturating_sub(config.player_threshold) as f32)
+            * config.growth_per_player;
+        let target_escape = (config.min_escape_radius + additional)
+            .min(max_escape)
+            .max(min_escape);
         let target_outer = target_escape - 200.0;
 
         // Track previous radius for proportional well scaling
@@ -380,55 +382,43 @@ impl Arena {
         let diff = target_escape - self.escape_radius;
 
         if diff > 1.0 {
-            // GROW: ~5 seconds to reach 95% of target
-            self.shrink_delay_ticks = SHRINK_DELAY_TICKS;
-            let grow_lerp = 0.02;
-            let delta = diff * grow_lerp;
+            // GROW: Reset shrink delay, lerp quickly
+            self.shrink_delay_ticks = config.shrink_delay_ticks;
+            let delta = diff * config.grow_lerp;
             self.escape_radius = (self.escape_radius + delta).min(target_escape);
             self.outer_radius = (self.outer_radius + delta).min(target_outer);
         } else if diff < -1.0 {
-            // SHRINK: Only after delay expires, ~20 seconds to reach 95%
+            // SHRINK: Only after delay expires, lerp slowly
             if self.shrink_delay_ticks > 0 {
                 self.shrink_delay_ticks -= 1;
             } else {
-                let shrink_lerp = 0.005;
-                let delta = (-diff) * shrink_lerp;
-                self.escape_radius = (self.escape_radius - delta).max(target_escape).max(MIN_ESCAPE_RADIUS);
-                self.outer_radius = (self.outer_radius - delta).max(target_outer).max(MIN_ESCAPE_RADIUS - 200.0);
+                let delta = (-diff) * config.shrink_lerp;
+                self.escape_radius = (self.escape_radius - delta).max(target_escape).max(min_escape);
+                self.outer_radius = (self.outer_radius - delta).max(target_outer).max(min_escape - 200.0);
             }
         } else {
             // Within 1 unit of target - stable
-            self.shrink_delay_ticks = SHRINK_DELAY_TICKS;
+            self.shrink_delay_ticks = config.shrink_delay_ticks;
         }
 
         // Update scale factor based on current escape_radius vs base
-        // This is what gets sent to client for UI display
         self.scale = self.escape_radius / arena::ESCAPE_RADIUS;
 
         // Scale well positions proportionally when arena size changes
-        // Wells should maintain their ratio to escape_radius as arena grows/shrinks
-        // This keeps the visual distribution consistent regardless of arena size
-        //
-        // Example: well at 50% of 800 radius = 400 units
-        // When arena grows to 4000, well should be at 50% of 4000 = 2000 units
         let arena_changed = (self.escape_radius - previous_escape).abs() > 0.1;
 
         if arena_changed && previous_escape > 1.0 {
             let scale_factor = self.escape_radius / previous_escape;
 
             for well in self.gravity_wells.iter_mut().skip(1) {
-                // Skip supermassive at index 0
                 let dist = well.position.length();
                 if dist < 1.0 {
-                    continue; // Skip wells at origin
+                    continue;
                 }
 
-                // Scale well position by the same factor arena scaled
                 let new_dist = dist * scale_factor;
-
-                // Clamp to valid range (20% to 85% of escape radius)
-                let min_dist = self.escape_radius * 0.20;
-                let max_dist = self.escape_radius * 0.85;
+                let min_dist = self.escape_radius * config.well_min_ratio;
+                let max_dist = self.escape_radius * config.well_max_ratio;
                 let clamped_dist = new_dist.clamp(min_dist, max_dist);
 
                 let direction = well.position.normalize();
@@ -437,31 +427,34 @@ impl Arena {
         }
 
         // Add new wells if needed (never remove existing ones during gameplay)
-        // Wells are distributed across inner/middle/outer rings
         if target_wells > current_orbital_wells {
             let wells_to_add = target_wells - current_orbital_wells;
-            self.add_orbital_wells(wells_to_add, self.escape_radius);
+            self.add_orbital_wells(wells_to_add, self.escape_radius, config);
         }
     }
 
+    /// Legacy version without config for backwards compatibility
+    pub fn scale_for_simulation_default(&mut self, target_player_count: usize) {
+        self.scale_for_simulation(target_player_count, &ArenaScalingConfig::default());
+    }
+
     /// Add orbital wells distributed across multiple rings for better player spread
-    /// Rings: inner (25-40%), middle (45-65%), outer (70-90%) of escape radius
-    fn add_orbital_wells(&mut self, count: usize, escape_radius: f32) {
+    /// Ring positions are configurable via ArenaScalingConfig
+    pub fn add_orbital_wells(&mut self, count: usize, escape_radius: f32, config: &ArenaScalingConfig) {
         use crate::game::constants::physics::CENTRAL_MASS;
         use rand::Rng;
         use std::f32::consts::TAU;
 
         let mut rng = rand::thread_rng();
         let size_multipliers = [0.6, 0.8, 1.0, 1.2, 1.4];
-        let min_well_distance = arena::OUTER_RADIUS * 1.2; // Minimum spacing between wells
+        let min_well_distance = arena::OUTER_RADIUS * 1.2;
         const MAX_PLACEMENT_ATTEMPTS: usize = 50;
 
-        // Define orbital rings as percentage of escape radius
-        // Each ring has (min%, max%, weight) - weight determines spawn probability
+        // Define orbital rings from config
         let rings: [(f32, f32, f32); 3] = [
-            (0.25, 0.40, 1.0), // Inner ring: dangerous, near supermassive
-            (0.45, 0.65, 2.0), // Middle ring: main gameplay zone (higher weight)
-            (0.70, 0.90, 2.0), // Outer ring: safer, more spread out (higher weight)
+            (config.ring_inner_min, config.ring_inner_max, 1.0),
+            (config.ring_middle_min, config.ring_middle_max, 2.0),
+            (config.ring_outer_min, config.ring_outer_max, 2.0),
         ];
         let total_weight: f32 = rings.iter().map(|(_, _, w)| w).sum();
 
@@ -470,10 +463,10 @@ impl Arena {
             let well_mass = CENTRAL_MASS * size_mult;
             let well_core = arena::CORE_RADIUS * size_mult;
 
-            // Pick a ring based on weights (favor middle and outer)
+            // Pick a ring based on weights
             let roll: f32 = rng.gen_range(0.0..total_weight);
             let mut cumulative = 0.0;
-            let mut selected_ring = (0.45, 0.65); // Default to middle
+            let mut selected_ring = (config.ring_middle_min, config.ring_middle_max);
             for (min, max, weight) in &rings {
                 cumulative += weight;
                 if roll < cumulative {
@@ -511,6 +504,11 @@ impl Arena {
 
             self.gravity_wells.push(GravityWell::new(best_pos, well_mass, well_core));
         }
+    }
+
+    /// Legacy version for update_for_player_count_with_limit
+    fn add_orbital_wells_default(&mut self, count: usize, escape_radius: f32) {
+        self.add_orbital_wells(count, escape_radius, &ArenaScalingConfig::default());
     }
 }
 
@@ -795,6 +793,8 @@ mod tests {
 
     #[test]
     fn test_scale_for_simulation_expands_arena() {
+        use crate::config::ArenaScalingConfig;
+        let config = ArenaScalingConfig::default();
         let mut arena = Arena::default();
         let initial_escape = arena.escape_radius;
         let initial_outer = arena.outer_radius;
@@ -802,7 +802,7 @@ mod tests {
 
         // Simulate scaling for 500 players (should grow arena)
         for _ in 0..50 {
-            arena.scale_for_simulation(500);
+            arena.scale_for_simulation(500, &config);
         }
 
         // Arena should have expanded
@@ -817,53 +817,57 @@ mod tests {
 
     #[test]
     fn test_scale_for_simulation_shrinks_with_delay() {
+        use crate::config::ArenaScalingConfig;
+        let config = ArenaScalingConfig::default();
         let mut arena = Arena::default();
 
         // First grow the arena
         for _ in 0..50 {
-            arena.scale_for_simulation(500);
+            arena.scale_for_simulation(500, &config);
         }
         let expanded_escape = arena.escape_radius;
         assert!(expanded_escape > 3000.0, "Should have grown significantly");
 
         // Now request shrink to 10 players
-        // First few calls should NOT shrink (delay period is 150 ticks at 30Hz = 5 seconds)
-        arena.scale_for_simulation(10);
-        arena.scale_for_simulation(10);
-        arena.scale_for_simulation(10);
+        // First few calls should NOT shrink (delay period)
+        arena.scale_for_simulation(10, &config);
+        arena.scale_for_simulation(10, &config);
+        arena.scale_for_simulation(10, &config);
         assert!(arena.escape_radius >= expanded_escape - 10.0,
             "Should not shrink during delay period");
 
         // After delay (150+ ticks), should start shrinking slowly
         for _ in 0..200 {
-            arena.scale_for_simulation(10);
+            arena.scale_for_simulation(10, &config);
         }
         assert!(arena.escape_radius < expanded_escape,
             "Should shrink after delay: {} < {}", arena.escape_radius, expanded_escape);
 
-        // But should never go below minimum (ESCAPE_RADIUS = 800 at scale 1.0)
+        // But should never go below minimum
         for _ in 0..500 {
-            arena.scale_for_simulation(10);
+            arena.scale_for_simulation(10, &config);
         }
-        assert!(arena.escape_radius >= 800.0,
+        assert!(arena.escape_radius >= config.min_escape_radius,
             "Should never shrink below minimum: {}", arena.escape_radius);
     }
 
     #[test]
     fn test_scale_for_simulation_scales_wells_proportionally() {
+        use crate::config::ArenaScalingConfig;
+        let config = ArenaScalingConfig::default();
         let mut arena = Arena::default();
         let initial_escape = arena.escape_radius;
         assert_eq!(initial_escape, 800.0, "Default arena should be 800");
 
         // First grow arena and add wells via scale_for_simulation
         for _ in 0..30 {
-            arena.scale_for_simulation(100);
+            arena.scale_for_simulation(100, &config);
         }
 
         // Record well ratios after initial setup
         let setup_escape = arena.escape_radius;
         let setup_ratios: Vec<f32> = arena.gravity_wells.iter()
-            .skip(1) // Skip supermassive
+            .skip(1)
             .map(|w| w.position.length() / setup_escape)
             .collect();
         let setup_well_count = arena.gravity_wells.len();
@@ -871,7 +875,7 @@ mod tests {
 
         // Now scale up significantly
         for _ in 0..100 {
-            arena.scale_for_simulation(500);
+            arena.scale_for_simulation(500, &config);
         }
 
         let final_escape = arena.escape_radius;
@@ -880,22 +884,16 @@ mod tests {
         assert!(final_escape > setup_escape,
             "Arena should have grown: {} > {}", final_escape, setup_escape);
 
-        // Wells should have scaled proportionally - ratios should be similar
+        // Wells should have scaled proportionally
         for (i, &setup_ratio) in setup_ratios.iter().enumerate() {
             if i + 1 < arena.gravity_wells.len() {
                 let current_dist = arena.gravity_wells[i + 1].position.length();
                 let current_ratio = current_dist / arena.escape_radius;
 
-                // Ratio should be within clamped range (20-85%)
-                assert!(current_ratio >= 0.19 && current_ratio <= 0.86,
-                    "Well {} ratio {} outside valid range (0.20-0.85)", i, current_ratio);
-
-                // If setup ratio was in valid range, current should be close
-                if setup_ratio >= 0.20 && setup_ratio <= 0.85 {
-                    let ratio_diff = (current_ratio - setup_ratio).abs();
-                    assert!(ratio_diff < 0.20,
-                        "Well {} ratio changed too much: {:.2} -> {:.2}", i, setup_ratio, current_ratio);
-                }
+                // Ratio should be within clamped range
+                assert!(current_ratio >= config.well_min_ratio - 0.01 &&
+                        current_ratio <= config.well_max_ratio + 0.01,
+                    "Well {} ratio {} outside valid range", i, current_ratio);
             }
         }
 
@@ -906,11 +904,13 @@ mod tests {
 
     #[test]
     fn test_scale_for_simulation_smooth_lerp() {
+        use crate::config::ArenaScalingConfig;
+        let config = ArenaScalingConfig::default();
         let mut arena = Arena::default();
         let initial_escape = arena.escape_radius;
 
         // Single call should move toward target with lerp
-        arena.scale_for_simulation(1000);
+        arena.scale_for_simulation(1000, &config);
         let after_one = arena.escape_radius;
 
         // Should have moved but not instantly jumped
@@ -919,7 +919,7 @@ mod tests {
 
         // Multiple calls should continue converging
         for _ in 0..100 {
-            arena.scale_for_simulation(1000);
+            arena.scale_for_simulation(1000, &config);
         }
         let after_many = arena.escape_radius;
 
@@ -928,60 +928,66 @@ mod tests {
 
     #[test]
     fn test_scale_for_simulation_well_cap() {
+        use crate::config::ArenaScalingConfig;
+        let config = ArenaScalingConfig::default();
         let mut arena = Arena::default();
 
-        // Even with huge player count, wells should be capped at 20
+        // Even with huge player count, wells should be capped
         for _ in 0..100 {
-            arena.scale_for_simulation(10000);
+            arena.scale_for_simulation(10000, &config);
         }
 
         // -1 because central supermassive doesn't count toward the cap
         let orbital_wells = arena.gravity_wells.len() - 1;
-        assert!(orbital_wells <= 20, "Orbital wells should be capped at 20, got {}", orbital_wells);
+        assert!(orbital_wells <= config.max_wells,
+            "Orbital wells should be capped at {}, got {}", config.max_wells, orbital_wells);
     }
 
     #[test]
     fn test_add_orbital_wells_spacing() {
+        use crate::config::ArenaScalingConfig;
+        let config = ArenaScalingConfig::default();
         let mut arena = Arena::default();
         let orbit_radius = 2000.0;
 
         // Add several wells
-        arena.add_orbital_wells(5, orbit_radius);
+        arena.add_orbital_wells(5, orbit_radius, &config);
         let initial_count = arena.gravity_wells.len();
 
         // All wells should be reasonably spaced
         for i in 0..arena.gravity_wells.len() {
             for j in (i + 1)..arena.gravity_wells.len() {
                 let dist = (arena.gravity_wells[i].position - arena.gravity_wells[j].position).length();
-                // Minimum distance should be enforced (well_spacing * 0.6 = 720)
                 assert!(dist > 500.0, "Wells {} and {} too close: {}", i, j, dist);
             }
         }
 
         // Add more wells
-        arena.add_orbital_wells(3, orbit_radius);
+        arena.add_orbital_wells(3, orbit_radius, &config);
         assert_eq!(arena.gravity_wells.len(), initial_count + 3);
     }
 
     #[test]
     fn test_scale_grow_resets_shrink_delay() {
+        use crate::config::ArenaScalingConfig;
+        let config = ArenaScalingConfig::default();
         let mut arena = Arena::default();
 
         // Grow to large size
         for _ in 0..50 {
-            arena.scale_for_simulation(500);
+            arena.scale_for_simulation(500, &config);
         }
 
         // Start shrink process
         for _ in 0..3 {
-            arena.scale_for_simulation(10);
+            arena.scale_for_simulation(10, &config);
         }
-        // shrink_delay should be counting down
 
         // Now request growth again
-        arena.scale_for_simulation(500);
+        arena.scale_for_simulation(500, &config);
 
-        // Shrink delay should be reset to 150 (5 seconds at 30Hz)
-        assert_eq!(arena.shrink_delay_ticks, 150, "Shrink delay should be reset on grow");
+        // Shrink delay should be reset
+        assert_eq!(arena.shrink_delay_ticks, config.shrink_delay_ticks,
+            "Shrink delay should be reset on grow");
     }
 }

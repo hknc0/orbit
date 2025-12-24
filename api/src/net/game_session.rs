@@ -83,7 +83,7 @@ pub fn return_buffer(buf: Vec<u8>) {
     get_encode_pool().put(buf);
 }
 
-use crate::config::{DebrisSpawnConfig, GravityWaveConfig};
+use crate::config::{ArenaScalingConfig, DebrisSpawnConfig, GravityWaveConfig};
 use crate::game::constants::{ai, physics};
 use crate::game::game_loop::{GameLoop, GameLoopConfig, GameLoopEvent};
 use crate::game::performance::{PerformanceMonitor, PerformanceStatus};
@@ -95,6 +95,10 @@ use crate::net::protocol::{GameEvent, GameSnapshot, PlayerInput, ServerMessage};
 // Feature-gated anticheat integration
 #[cfg(feature = "anticheat")]
 use crate::anticheat::validator::{sanitize_input, InputValidator};
+
+// Feature-gated AI manager integration
+#[cfg(feature = "ai_manager")]
+use crate::config::AIManagerConfig;
 
 /// Simulation mode configuration for load testing
 /// Scales bots up and down over time in a sinusoidal pattern
@@ -179,6 +183,8 @@ pub struct GameSession {
     bot_count: usize,
     /// Simulation mode configuration
     simulation_config: SimulationConfig,
+    /// Arena scaling configuration (shared with AI manager)
+    arena_config: Arc<parking_lot::RwLock<ArenaScalingConfig>>,
     /// When the session started (for simulation timing)
     session_start: std::time::Instant,
     /// Last tick when simulation target was updated (rate limiting)
@@ -234,6 +240,7 @@ impl GameSession {
         // Load configs from environment
         let gravity_wave_config = GravityWaveConfig::from_env();
         let debris_spawn_config = DebrisSpawnConfig::from_env();
+        let arena_config = Arc::new(parking_lot::RwLock::new(ArenaScalingConfig::from_env()));
 
         let mut game_loop = GameLoop::new(GameLoopConfig {
             gravity_wave_config,
@@ -306,6 +313,7 @@ impl GameSession {
             last_snapshot_tick: 0,
             bot_count,
             simulation_config,
+            arena_config,
             session_start: std::time::Instant::now(),
             last_simulation_update_tick: 0,
             last_client_times: HashMap::new(),
@@ -334,6 +342,11 @@ impl GameSession {
     /// Get current player count
     pub fn player_count(&self) -> usize {
         self.game_loop.state().players.len()
+    }
+
+    /// Get shared arena config for AI manager
+    pub fn arena_config(&self) -> Arc<parking_lot::RwLock<ArenaScalingConfig>> {
+        Arc::clone(&self.arena_config)
     }
 
     /// Add a player to the game session
@@ -400,11 +413,12 @@ impl GameSession {
     /// Uses smooth scaling to avoid regenerating all wells and causing chaos
     fn update_arena_scale(&mut self) {
         let player_count = self.game_loop.state().players.len();
+        let config = self.arena_config.read();
         // Use smooth scaling that only adds wells incrementally (never removes/moves existing)
         self.game_loop
             .state_mut()
             .arena
-            .scale_for_simulation(player_count);
+            .scale_for_simulation(player_count, &config);
     }
 
     /// Queue input for a player with deduplication and validation
@@ -660,10 +674,11 @@ impl GameSession {
 
         // Smoothly scale arena for current target (runs every update for smooth lerping)
         // This adjusts radii smoothly and adds wells incrementally without chaos
+        let config = self.arena_config.read();
         self.game_loop
             .state_mut()
             .arena
-            .scale_for_simulation(self.bot_count);
+            .scale_for_simulation(self.bot_count, &config);
     }
 
     /// Scale down bots if current count exceeds target (used during simulation scale-down phase)
@@ -1300,5 +1315,46 @@ pub fn start_game_loop(session: Arc<RwLock<GameSession>>) {
                 }
             }
         }
+    });
+}
+
+/// Start the AI manager for autonomous parameter tuning (if enabled)
+/// This runs alongside the game loop and periodically analyzes metrics
+#[cfg(feature = "ai_manager")]
+pub fn start_ai_manager(session: Arc<RwLock<GameSession>>) {
+    use crate::ai_manager::AIManager;
+
+    // Load AI manager config
+    let config = AIManagerConfig::from_env();
+
+    // Skip if not enabled or no API key
+    if !config.is_active() {
+        info!("AI Manager disabled (AI_ENABLED=false or ORBIT_API_KEY not set)");
+        return;
+    }
+
+    // Get references needed by AI manager
+    let metrics = {
+        let session_guard = session.blocking_read();
+        match &session_guard.metrics {
+            Some(m) => Arc::clone(m),
+            None => {
+                warn!("AI Manager requires metrics to be enabled");
+                return;
+            }
+        }
+    };
+
+    let arena_config = {
+        let session_guard = session.blocking_read();
+        session_guard.arena_config()
+    };
+
+    // Create and spawn the AI manager
+    let manager = AIManager::new(config);
+
+    tokio::spawn(async move {
+        info!("Starting AI Simulation Manager");
+        manager.run(metrics, arena_config).await;
     });
 }

@@ -20,3 +20,7 @@ pub mod lobby;
 
 #[cfg(feature = "anticheat")]
 pub mod anticheat;
+
+// AI Simulation Manager (optional, requires API key)
+#[cfg(feature = "ai_manager")]
+pub mod ai_manager;

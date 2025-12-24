@@ -50,6 +50,28 @@ services:
       # - DEBRIS_SPAWN_RATE_INNER_SMALL=2.0  # Small debris per second in inner zone
       # - DEBRIS_SPAWN_RATE_MIDDLE_SMALL=1.0 # Small debris per second in middle zone
       # - DEBRIS_SPAWN_RATE_OUTER_SMALL=0.5  # Small debris per second in outer zone
+      #
+      # Arena Scaling (dynamic arena size based on player count)
+      # - ARENA_GROW_LERP=0.02              # Growth speed (0.01-0.1)
+      # - ARENA_SHRINK_LERP=0.005           # Shrink speed (0.001-0.05)
+      # - ARENA_SHRINK_DELAY_TICKS=150      # Delay before shrink (0-300)
+      # - ARENA_MIN_RADIUS=800              # Minimum arena size (500-2000)
+      # - ARENA_MAX_MULTIPLIER=10.0         # Max size multiplier (5-20)
+      # - ARENA_GROWTH_PER_PLAYER=10.0      # Units per player (5-50)
+      # - ARENA_PLAYER_THRESHOLD=10         # Players before growth (1-50)
+      # - ARENA_MAX_WELLS=20                # Maximum gravity wells (5-50)
+      # - ARENA_WELL_MIN_RATIO=0.20         # Min well distance ratio (0.1-0.4)
+      # - ARENA_WELL_MAX_RATIO=0.85         # Max well distance ratio (0.6-0.95)
+      #
+      # AI Simulation Manager (autonomous parameter tuning via Claude API)
+      # Requires: cargo build --features ai_manager
+      - AI_ENABLED=true                  # Enable/disable AI manager (default: false)
+      - ORBIT_API_KEY=${ORBIT_API_KEY}          # Claude API key (required if enabled)
+      # - AI_EVAL_INTERVAL_MINUTES=2        # Minutes between evaluations (1-60)
+      # - AI_MAX_HISTORY=100                # Max decisions to keep (10-1000)
+      # - AI_CONFIDENCE_THRESHOLD=0.7       # Min confidence to act (0.0-1.0)
+      # - AI_MODEL=claude-sonnet-4-5        # Model to use
+      # - AI_HISTORY_FILE=data/ai_decisions.json  # Where to persist decisions
     volumes:
       - api-certs:/app/certs
     networks:

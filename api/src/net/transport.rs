@@ -12,6 +12,8 @@ use crate::game::state::PlayerId;
 use crate::metrics::Metrics;
 use crate::net::dos_protection::DoSProtection;
 use crate::net::game_session::{start_game_loop, send_to_player, GameSession};
+#[cfg(feature = "ai_manager")]
+use crate::net::game_session::start_ai_manager;
 use crate::net::protocol::{decode, ClientMessage, ServerMessage};
 use crate::net::tls::TlsConfig;
 
@@ -101,6 +103,10 @@ impl WebTransportServer {
 
         // Start the game loop background task
         start_game_loop(self.game_session.clone());
+
+        // Start AI manager for autonomous parameter tuning (if enabled)
+        #[cfg(feature = "ai_manager")]
+        start_ai_manager(self.game_session.clone());
 
         // Accept connections
         loop {

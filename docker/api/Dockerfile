@@ -16,13 +16,13 @@ COPY api/benches ./benches
 
 # Create dummy src to cache dependencies
 RUN mkdir -p src && echo "fn main() {}" > src/main.rs
-RUN cargo build --release && rm -rf src target/release/orbit-royale-server*
+RUN cargo build --release --features ai_manager && rm -rf src target/release/orbit-royale-server*
 
 # Copy actual source code
 COPY api/src ./src
 
-# Build release binary
-RUN cargo build --release
+# Build release binary with AI manager feature
+RUN cargo build --release --features ai_manager
 
 # Stage 2: Build cert generator
 FROM rust:1.85-slim-bookworm AS cert-builder
@@ -79,6 +79,10 @@ ENV METRICS_PORT=9090
 # SIMULATION_MIN_BOTS=5        # Minimum bots at cycle trough
 # SIMULATION_MAX_BOTS=100      # Maximum bots at cycle peak
 # SIMULATION_CYCLE_MINUTES=5   # Duration of one min→max→min cycle
+
+# AI Manager (autonomous parameter tuning via Claude API)
+# AI_ENABLED=false             # Enable AI manager
+# ORBIT_API_KEY=sk-ant-...     # Claude API key (required if enabled)
 
 # Expose ports
 EXPOSE 4433/udp

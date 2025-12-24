@@ -1,13 +1,16 @@
 //! Prometheus-compatible metrics endpoint
 //!
 //! Exposes game server metrics in Prometheus format for Grafana dashboards.
-//! Default endpoint: http://localhost:9090/metrics
+//! - /metrics: Prometheus format for Grafana scraping
+//! - /json: Simple JSON format for direct API access
+//! - /health: Health check endpoint
 
 use std::collections::VecDeque;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 use parking_lot::RwLock;
+use serde::Serialize;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpListener;
 use tracing::{info, debug};
@@ -79,6 +82,13 @@ pub struct Metrics {
     pub dos_messages_rate_limited: AtomicU64,  // Messages dropped by rate limit
     pub dos_active_bans: AtomicU64,            // Currently banned IPs
 
+    // AI Manager metrics (feature-gated)
+    pub ai_enabled: AtomicU64,                 // AI manager enabled (0/1)
+    pub ai_decisions_total: AtomicU64,         // Total decisions made
+    pub ai_decisions_successful: AtomicU64,    // Successful decisions
+    pub ai_last_confidence: AtomicU64,         // Last confidence level (0-100)
+    pub ai_pending_evaluations: AtomicU64,     // Decisions awaiting outcome evaluation
+
     // Rolling tick times for percentile calculation (VecDeque for O(1) pop_front)
     tick_history: RwLock<VecDeque<u64>>,
 }
@@ -128,6 +138,12 @@ impl Metrics {
             dos_connections_rejected: AtomicU64::new(0),
             dos_messages_rate_limited: AtomicU64::new(0),
             dos_active_bans: AtomicU64::new(0),
+            // AI Manager metrics
+            ai_enabled: AtomicU64::new(0),
+            ai_decisions_total: AtomicU64::new(0),
+            ai_decisions_successful: AtomicU64::new(0),
+            ai_last_confidence: AtomicU64::new(0),
+            ai_pending_evaluations: AtomicU64::new(0),
             tick_history: RwLock::new(VecDeque::with_capacity(1000)),
         }
     }
@@ -295,6 +311,27 @@ impl Metrics {
                 self.dos_active_bans.load(Ordering::Relaxed));
         }
 
+        // AI Manager metrics
+        #[cfg(feature = "ai_manager")]
+        {
+            metric!("orbit_royale_ai_enabled", "AI manager enabled (0/1)", "gauge",
+                self.ai_enabled.load(Ordering::Relaxed));
+            metric!("orbit_royale_ai_decisions_total", "Total AI decisions made", "counter",
+                self.ai_decisions_total.load(Ordering::Relaxed));
+            metric!("orbit_royale_ai_decisions_successful", "Successful AI decisions", "counter",
+                self.ai_decisions_successful.load(Ordering::Relaxed));
+            metric!("orbit_royale_ai_last_confidence", "Last AI decision confidence (0-100)", "gauge",
+                self.ai_last_confidence.load(Ordering::Relaxed));
+            metric!("orbit_royale_ai_pending_evaluations", "Decisions awaiting outcome evaluation", "gauge",
+                self.ai_pending_evaluations.load(Ordering::Relaxed));
+
+            // Success rate as percentage (calculated)
+            let total = self.ai_decisions_total.load(Ordering::Relaxed);
+            let successful = self.ai_decisions_successful.load(Ordering::Relaxed);
+            let success_rate = if total > 0 { (successful * 100) / total } else { 0 };
+            metric!("orbit_royale_ai_success_rate_percent", "AI decision success rate", "gauge", success_rate);
+        }
+
         output
     }
 
@@ -366,6 +403,50 @@ impl Metrics {
             self.uptime_seconds(),
         )
     }
+
+}
+
+/// AI Manager metrics for JSON endpoint
+#[derive(Debug, Clone, Serialize)]
+pub struct AIManagerMetrics {
+    pub enabled: bool,
+    pub status: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub last_evaluation: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub next_evaluation: Option<String>,
+    pub decisions_made: u64,
+    pub success_rate: f32,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub current_confidence: Option<f32>,
+    pub recent_decisions: Vec<AIDecisionSummary>,
+    pub pending_evaluations: u64,
+}
+
+/// Summary of an AI decision for metrics display
+#[derive(Debug, Clone, Serialize)]
+pub struct AIDecisionSummary {
+    pub id: String,
+    pub timestamp: String,
+    pub analysis: String,
+    pub actions: Vec<AIActionSummary>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub outcome: Option<AIOutcomeSummary>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct AIActionSummary {
+    pub parameter: String,
+    pub old_value: f32,
+    pub new_value: f32,
+    pub reason: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct AIOutcomeSummary {
+    pub success: bool,
+    pub performance_delta_us: i64,
+    pub player_delta: i32,
 }
 
 impl Default for Metrics {
@@ -489,5 +570,52 @@ mod tests {
         let metrics = Metrics::new();
         std::thread::sleep(Duration::from_millis(10));
         assert!(metrics.uptime_seconds() >= 0);
+    }
+
+    #[test]
+    fn test_ai_manager_metrics() {
+        let metrics = Metrics::new();
+
+        // Initially all AI metrics should be zero
+        assert_eq!(metrics.ai_enabled.load(Ordering::Relaxed), 0);
+        assert_eq!(metrics.ai_decisions_total.load(Ordering::Relaxed), 0);
+        assert_eq!(metrics.ai_decisions_successful.load(Ordering::Relaxed), 0);
+        assert_eq!(metrics.ai_last_confidence.load(Ordering::Relaxed), 0);
+        assert_eq!(metrics.ai_pending_evaluations.load(Ordering::Relaxed), 0);
+
+        // Simulate AI manager enabling
+        metrics.ai_enabled.store(1, Ordering::Relaxed);
+        assert_eq!(metrics.ai_enabled.load(Ordering::Relaxed), 1);
+
+        // Simulate a decision being made
+        metrics.ai_decisions_total.fetch_add(1, Ordering::Relaxed);
+        metrics.ai_last_confidence.store(85, Ordering::Relaxed); // 85% confidence
+        assert_eq!(metrics.ai_decisions_total.load(Ordering::Relaxed), 1);
+        assert_eq!(metrics.ai_last_confidence.load(Ordering::Relaxed), 85);
+
+        // Simulate successful outcome
+        metrics.ai_decisions_successful.fetch_add(1, Ordering::Relaxed);
+        assert_eq!(metrics.ai_decisions_successful.load(Ordering::Relaxed), 1);
+    }
+
+    #[test]
+    fn test_ai_metrics_in_prometheus() {
+        let metrics = Metrics::new();
+        metrics.ai_enabled.store(1, Ordering::Relaxed);
+        metrics.ai_decisions_total.store(10, Ordering::Relaxed);
+        metrics.ai_decisions_successful.store(8, Ordering::Relaxed);
+        metrics.ai_last_confidence.store(92, Ordering::Relaxed);
+
+        let output = metrics.to_prometheus();
+
+        // AI metrics should appear in Prometheus output (when feature enabled)
+        #[cfg(feature = "ai_manager")]
+        {
+            assert!(output.contains("orbit_royale_ai_enabled 1"));
+            assert!(output.contains("orbit_royale_ai_decisions_total 10"));
+            assert!(output.contains("orbit_royale_ai_decisions_successful 8"));
+            assert!(output.contains("orbit_royale_ai_last_confidence 92"));
+            assert!(output.contains("orbit_royale_ai_success_rate_percent 80")); // 8/10 = 80%
+        }
     }
 }

@@ -8,6 +8,8 @@ mod util;
 mod anticheat;
 #[cfg(feature = "lobby")]
 mod lobby;
+#[cfg(feature = "ai_manager")]
+mod ai_manager;
 
 use std::sync::Arc;
 use tokio::sync::RwLock;

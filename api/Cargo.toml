@@ -23,6 +23,9 @@ metrics_extended = []
 # Advanced physics: momentum-based collision, kinetic energy calculations
 advanced_physics = []
 
+# AI Simulation Manager: autonomous parameter tuning via Claude API
+ai_manager = ["reqwest", "chrono"]
+
 # Minimal build without optional features (for testing/debugging)
 minimal = []
 
@@ -56,6 +59,11 @@ base64 = "0.22"
 # Error handling
 thiserror = "2.0"
 anyhow = "1.0"
+
+# AI Manager dependencies
+reqwest = { version = "0.12", features = ["json"], optional = true }
+chrono = { version = "0.4", features = ["serde"], optional = true }
+serde_json = "1.0"
 
 [dev-dependencies]
 tokio-test = "0.4"
