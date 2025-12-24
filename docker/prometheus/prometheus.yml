@@ -38,3 +38,10 @@ scrape_configs:
     static_configs:
       - targets: ['cadvisor:8080']
     scrape_interval: 5s
+    # Extract short container ID for easier identification
+    # Run `docker ps` to map IDs to names
+    metric_relabel_configs:
+      - source_labels: [id]
+        regex: '/docker/([a-f0-9]{12}).*'
+        target_label: short_id
+        replacement: '${1}'

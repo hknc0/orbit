@@ -347,8 +347,8 @@
         "legend": { "calcs": ["mean", "max"], "displayMode": "table", "placement": "bottom", "showLegend": true },
         "tooltip": { "mode": "multi", "sort": "desc" }
       },
-      "targets": [{ "expr": "sum by (name) (rate(container_cpu_usage_seconds_total{job=\"cadvisor\", id=~\"/docker/.*\"}[1m])) * 100", "legendFormat": "{{name}}", "refId": "A" }],
-      "title": "Container CPU Usage %",
+      "targets": [{ "expr": "sum by (short_id) (rate(container_cpu_usage_seconds_total{job=\"cadvisor\", id=~\"/docker/[a-f0-9]+\"}[1m])) * 100", "legendFormat": "{{short_id}}", "refId": "A" }],
+      "title": "Container CPU Usage % (run 'docker ps' for ID→name)",
       "type": "timeseries"
     },
     {
@@ -375,8 +375,8 @@
         "legend": { "calcs": ["mean", "max"], "displayMode": "table", "placement": "bottom", "showLegend": true },
         "tooltip": { "mode": "multi", "sort": "desc" }
       },
-      "targets": [{ "expr": "container_memory_usage_bytes{job=\"cadvisor\", id=~\"/docker/.*\"}", "legendFormat": "{{name}}", "refId": "A" }],
-      "title": "Container Memory Usage",
+      "targets": [{ "expr": "container_memory_usage_bytes{job=\"cadvisor\", id=~\"/docker/[a-f0-9]+\"}", "legendFormat": "{{short_id}}", "refId": "A" }],
+      "title": "Container Memory Usage (run 'docker ps' for ID→name)",
       "type": "timeseries"
     },
     {
