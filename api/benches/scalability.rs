@@ -220,6 +220,197 @@ fn bench_tick_budget(c: &mut Criterion) {
     group.finish();
 }
 
+/// Benchmark AOI filtering at various player counts
+fn bench_aoi_filtering(c: &mut Criterion) {
+    use orbit_royale_server::net::aoi::{AOIConfig, AOIManager};
+    use orbit_royale_server::game::state::MatchPhase;
+    use orbit_royale_server::net::protocol::{GameSnapshot, PlayerSnapshot};
+
+    let mut group = c.benchmark_group("aoi");
+    group.sample_size(50);
+
+    for count in [50, 100, 250, 500] {
+        let aoi = AOIManager::new(AOIConfig::default());
+        let mut rng = rand::thread_rng();
+
+        // Create a test snapshot with many players
+        let players: Vec<PlayerSnapshot> = (0..count)
+            .map(|i| {
+                let angle = rng.gen_range(0.0..std::f32::consts::TAU);
+                let radius = rng.gen_range(100.0..800.0);
+                PlayerSnapshot {
+                    id: Uuid::new_v4(),
+                    name: format!("P{}", i),
+                    position: Vec2::new(angle.cos() * radius, angle.sin() * radius),
+                    velocity: Vec2::new(rng.gen_range(-50.0..50.0), rng.gen_range(-50.0..50.0)),
+                    rotation: 0.0,
+                    mass: 100.0,
+                    alive: true,
+                    kills: rng.gen_range(0..10),
+                    deaths: 0,
+                    spawn_protection: false,
+                    is_bot: true,
+                    color_index: 0,
+                }
+            })
+            .collect();
+
+        let player_id = players[0].id;
+        let player_pos = players[0].position;
+        let player_vel = players[0].velocity;
+
+        let snapshot = GameSnapshot {
+            tick: 100,
+            match_phase: MatchPhase::Playing,
+            match_time: 60.0,
+            countdown: 0.0,
+            players,
+            projectiles: vec![],
+            debris: vec![],
+            arena_collapse_phase: 0,
+            arena_safe_radius: 800.0,
+            arena_scale: 1.0,
+            gravity_wells: vec![],
+            total_players: count as u32,
+            total_alive: count as u32,
+            density_grid: vec![],
+            notable_players: vec![],
+            echo_client_time: 0,
+        };
+
+        group.throughput(Throughput::Elements(count as u64));
+        group.bench_with_input(
+            BenchmarkId::new("filter", count),
+            &count,
+            |b, _| {
+                b.iter(|| {
+                    black_box(aoi.filter_for_player(player_id, player_pos, player_vel, &snapshot))
+                })
+            },
+        );
+    }
+    group.finish();
+}
+
+/// Benchmark protocol encoding performance
+fn bench_encoding(c: &mut Criterion) {
+    use orbit_royale_server::net::game_session::encode_pooled;
+    use orbit_royale_server::net::protocol::{GameSnapshot, PlayerSnapshot, ServerMessage};
+    use orbit_royale_server::game::state::MatchPhase;
+
+    let mut group = c.benchmark_group("encoding");
+    group.sample_size(100);
+
+    // Create snapshots of various sizes
+    for count in [10, 50, 100, 200] {
+        let mut rng = rand::thread_rng();
+
+        let players: Vec<PlayerSnapshot> = (0..count)
+            .map(|i| {
+                PlayerSnapshot {
+                    id: Uuid::new_v4(),
+                    name: format!("Player{}", i),
+                    position: Vec2::new(rng.gen_range(-500.0..500.0), rng.gen_range(-500.0..500.0)),
+                    velocity: Vec2::new(rng.gen_range(-50.0..50.0), rng.gen_range(-50.0..50.0)),
+                    rotation: rng.gen_range(0.0..6.28),
+                    mass: rng.gen_range(50.0..200.0),
+                    alive: true,
+                    kills: rng.gen_range(0..20),
+                    deaths: rng.gen_range(0..5),
+                    spawn_protection: false,
+                    is_bot: rng.gen_bool(0.5),
+                    color_index: rng.gen_range(0..8),
+                }
+            })
+            .collect();
+
+        let snapshot = GameSnapshot {
+            tick: 100,
+            match_phase: MatchPhase::Playing,
+            match_time: 60.0,
+            countdown: 0.0,
+            players,
+            projectiles: vec![],
+            debris: vec![],
+            arena_collapse_phase: 0,
+            arena_safe_radius: 800.0,
+            arena_scale: 1.0,
+            gravity_wells: vec![],
+            total_players: count as u32,
+            total_alive: count as u32,
+            density_grid: vec![],
+            notable_players: vec![],
+            echo_client_time: 0,
+        };
+
+        let message = ServerMessage::Snapshot(snapshot);
+
+        group.throughput(Throughput::Elements(count as u64));
+        group.bench_with_input(
+            BenchmarkId::new("pooled", count),
+            &count,
+            |b, _| {
+                b.iter(|| {
+                    let encoded = encode_pooled(&message).unwrap();
+                    black_box(encoded.len())
+                })
+            },
+        );
+    }
+    group.finish();
+}
+
+/// Benchmark input validation (anticheat)
+#[cfg(feature = "anticheat")]
+fn bench_input_validation(c: &mut Criterion) {
+    use orbit_royale_server::anticheat::validator::InputValidator;
+    use orbit_royale_server::net::protocol::PlayerInput;
+
+    let mut group = c.benchmark_group("anticheat");
+    group.sample_size(1000);
+
+    let validator = InputValidator::default();
+    let mut rng = rand::thread_rng();
+
+    // Create a batch of valid inputs
+    let inputs: Vec<PlayerInput> = (0..100)
+        .map(|i| PlayerInput {
+            sequence: i,
+            tick: 100 + i,
+            client_time: 0,
+            thrust: Vec2::new(rng.gen_range(-1.0..1.0), rng.gen_range(-1.0..1.0)).normalize(),
+            aim: Vec2::new(rng.gen_range(-1.0..1.0), rng.gen_range(-1.0..1.0)).normalize(),
+            boost: rng.gen_bool(0.1),
+            fire: rng.gen_bool(0.1),
+            fire_released: false,
+        })
+        .collect();
+
+    group.bench_function("validate_input", |b| {
+        let mut idx = 0;
+        b.iter(|| {
+            let input = &inputs[idx % inputs.len()];
+            idx += 1;
+            black_box(validator.validate_input(input))
+        })
+    });
+
+    group.bench_function("validate_sequence", |b| {
+        let mut prev_seq = 0u64;
+        b.iter(|| {
+            prev_seq += 1;
+            black_box(validator.validate_sequence(prev_seq - 1, prev_seq))
+        })
+    });
+
+    group.finish();
+}
+
+#[cfg(not(feature = "anticheat"))]
+fn bench_input_validation(_c: &mut Criterion) {
+    // No-op when anticheat is disabled
+}
+
 criterion_group!(
     benches,
     bench_collision,
@@ -228,6 +419,9 @@ criterion_group!(
     bench_full_tick,
     bench_spatial_grid,
     bench_tick_budget,
+    bench_aoi_filtering,
+    bench_encoding,
+    bench_input_validation,
 );
 
 criterion_main!(benches);
