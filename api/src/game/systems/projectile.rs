@@ -1,13 +1,20 @@
+//! Projectile system for player mass ejection
+//!
+//! Provides charge-based firing mechanics with event tracking.
+//! The `fire_direct` function is available for AI/scripted firing.
+
+#![allow(dead_code)] // API functions kept for future use
+
 use crate::game::constants::eject::*;
 use crate::game::constants::mass::MINIMUM;
 use crate::game::state::{GameState, PlayerId};
 use crate::net::protocol::PlayerInput;
 use crate::util::vec2::Vec2;
 
-/// Projectile events
+/// Projectile events for game event system
 #[derive(Debug, Clone)]
 pub enum ProjectileEvent {
-    /// Projectile was fired
+    /// Projectile was fired - fields available for event handlers
     Fired {
         owner_id: PlayerId,
         projectile_id: u64,

@@ -130,6 +130,7 @@ pub mod game {
 }
 
 /// Networking constants
+#[allow(dead_code)] // Constants for client reference and future use
 pub mod net {
     /// Maximum reliable message size
     pub const MAX_MESSAGE_SIZE: usize = 65536;
@@ -144,6 +145,7 @@ pub mod net {
 /// Debris (collectible particle) spawning constants
 /// Debris spawns randomly across zones for players to collect and gain mass
 /// All values can be overridden via DEBRIS_* environment variables
+#[allow(dead_code)] // Constants for configuration reference
 pub mod debris_spawning {
     /// Master switch to enable/disable debris spawning
     /// When false, no debris will spawn (useful for testing)
@@ -256,8 +258,10 @@ pub fn mass_to_radius(mass: f32) -> f32 {
     mass.sqrt() * mass::RADIUS_SCALE
 }
 
-/// Calculate mass from radius
+/// Calculate mass from radius (inverse of mass_to_radius)
+/// Available for spawning entities with specific visual sizes
 #[inline]
+#[allow(dead_code)]
 pub fn radius_to_mass(radius: f32) -> f32 {
     (radius / mass::RADIUS_SCALE).powi(2)
 }

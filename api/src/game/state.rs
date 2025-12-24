@@ -1,3 +1,10 @@
+//! Game state definitions and structures
+//!
+//! Contains all entities (players, projectiles, debris) and arena state.
+
+// Allow dead_code for utility methods that are part of the public API
+#![allow(dead_code)]
+
 use hashbrown::HashMap;
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;

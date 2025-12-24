@@ -1,3 +1,9 @@
+//! Match result and ranking system
+//!
+//! Computes final match results and player rankings.
+
+#![allow(dead_code)] // Match result fields for UI/API consumption
+
 use crate::game::state::{GameState, MatchPhase, PlayerId};
 
 /// Match result information

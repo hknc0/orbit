@@ -5,6 +5,8 @@
 //! - Bot scaling (reduce bots when struggling)
 //! - Gravity well scaling (limit wells based on performance)
 
+#![allow(dead_code)] // Performance utilities and status fields
+
 use std::collections::VecDeque;
 use std::time::{Duration, Instant};
 

@@ -3,6 +3,8 @@
 //! Divides the game world into cells and stores entities in each cell.
 //! Collision queries only check the current cell and neighbors.
 
+#![allow(dead_code)] // Utility methods for spatial queries
+
 use crate::util::vec2::Vec2;
 use hashbrown::HashMap;
 

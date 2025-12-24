@@ -1,3 +1,9 @@
+//! Arena management system
+//!
+//! Handles zone collapse, player boundary checks, and arena events.
+
+#![allow(dead_code)] // Arena utilities and event variants
+
 use crate::game::constants::arena::*;
 use crate::game::constants::spawn::RESPAWN_DELAY;
 use crate::game::state::{GameState, MatchPhase};

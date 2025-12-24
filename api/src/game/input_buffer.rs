@@ -3,6 +3,8 @@
 //! Uses crossbeam-channel for lock-free MPSC communication from
 //! connection handlers to the game loop.
 
+#![allow(dead_code)] // Input buffer ready for future optimization
+
 use crossbeam_channel::{bounded, Receiver, Sender, TrySendError};
 
 use crate::game::state::PlayerId;

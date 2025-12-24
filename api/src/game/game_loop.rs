@@ -1,3 +1,9 @@
+//! Game loop and tick processing
+//!
+//! Manages the core game simulation at fixed timestep.
+
+#![allow(dead_code)] // Config fields and event data
+
 use std::collections::HashMap;
 use std::time::{Duration, Instant};
 use uuid::Uuid;
