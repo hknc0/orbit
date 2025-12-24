@@ -677,12 +677,23 @@ pub struct GameState {
     /// Active gravity waves from well explosions (not serialized - visual only)
     #[serde(skip)]
     pub gravity_waves: Vec<GravityWave>,
+    /// Spatial grid for efficient gravity well lookups (not serialized - rebuilt as needed)
+    #[serde(skip)]
+    pub well_grid: crate::game::spatial::WellSpatialGrid,
     next_entity_id: EntityId,
 }
 
 impl GameState {
     pub fn new() -> Self {
         Self::default()
+    }
+
+    /// Rebuild the spatial grid for gravity wells
+    /// Call this after wells are added, removed, or moved
+    pub fn rebuild_well_grid(&mut self) {
+        self.well_grid.rebuild(
+            self.arena.gravity_wells.values().map(|w| (w.id, w.position))
+        );
     }
 
     /// Generate a new unique entity ID

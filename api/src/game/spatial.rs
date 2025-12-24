@@ -8,6 +8,20 @@
 use crate::util::vec2::Vec2;
 use hashbrown::HashMap;
 
+// ============================================================================
+// Entity Spatial Grid Constants
+// ============================================================================
+
+/// Default cell size for entity collision grid (world units)
+/// Should be ~2x maximum entity radius for collision detection
+pub const ENTITY_GRID_CELL_SIZE: f32 = 64.0;
+
+/// Initial capacity for entity grid cells (number of expected non-empty cells)
+const ENTITY_GRID_INITIAL_CAPACITY: usize = 256;
+
+/// Initial capacity for entity vectors within cells
+const ENTITY_CELL_INITIAL_CAPACITY: usize = 8;
+
 /// Grid cell key - (x, y) cell coordinates
 pub type CellKey = (i32, i32);
 
@@ -48,7 +62,7 @@ impl SpatialGrid {
         Self {
             cell_size,
             inv_cell_size: 1.0 / cell_size,
-            cells: HashMap::with_capacity(256),
+            cells: HashMap::with_capacity(ENTITY_GRID_INITIAL_CAPACITY),
             neighbor_offsets: [
                 (-1, -1), (0, -1), (1, -1),
                 (-1,  0), (0,  0), (1,  0),
@@ -80,7 +94,7 @@ impl SpatialGrid {
         let cell_key = self.position_to_cell(entity.position);
         self.cells
             .entry(cell_key)
-            .or_insert_with(|| Vec::with_capacity(8))
+            .or_insert_with(|| Vec::with_capacity(ENTITY_CELL_INITIAL_CAPACITY))
             .push(entity);
     }
 
@@ -166,8 +180,7 @@ impl SpatialGrid {
 
 impl Default for SpatialGrid {
     fn default() -> Self {
-        // 64 units cell size - good for typical player radii of 10-30
-        Self::new(64.0)
+        Self::new(ENTITY_GRID_CELL_SIZE)
     }
 }
 
@@ -177,6 +190,159 @@ pub struct SpatialGridStats {
     pub non_empty_cells: usize,
     pub total_entities: usize,
     pub max_per_cell: usize,
+}
+
+// ============================================================================
+// Well Spatial Grid - Optimized for gravity well lookups
+// ============================================================================
+
+use crate::game::state::WellId;
+
+/// Default cell size for well spatial grid (world units)
+/// Larger than entity grid since wells have large influence radii
+pub const WELL_GRID_CELL_SIZE: f32 = 500.0;
+
+/// Maximum distance a gravity well can meaningfully influence entities
+/// At this distance with typical mass (10000), gravity is ~1 unit/s²
+/// Formula: acceleration = 0.5 * mass / distance = 0.5 * 10000 / 5000 = 1
+pub const WELL_INFLUENCE_RADIUS: f32 = 5000.0;
+
+/// Initial capacity for cell vectors (wells per cell, typically low)
+const WELL_CELL_INITIAL_CAPACITY: usize = 4;
+
+/// Initial capacity for cell hashmap (number of cells)
+const WELL_GRID_INITIAL_CAPACITY: usize = 64;
+
+/// Spatial hash grid optimized for gravity wells
+///
+/// Uses larger cell sizes (500+ units) since wells have large influence radii.
+/// Supports efficient queries for "all wells that could affect this position".
+#[derive(Debug, Clone)]
+pub struct WellSpatialGrid {
+    /// Cell size in world units (larger than entity grid due to well influence range)
+    cell_size: f32,
+    /// Inverse cell size for fast position-to-cell conversion
+    inv_cell_size: f32,
+    /// Map from cell key to well IDs in that cell
+    cells: HashMap<CellKey, Vec<WellId>>,
+    /// Query radius in cells (how many cells to check around a position)
+    query_radius_cells: i32,
+}
+
+impl WellSpatialGrid {
+    /// Create a new well spatial grid
+    ///
+    /// # Arguments
+    /// * `cell_size` - Size of each cell (recommend 500-1000 for gravity wells)
+    /// * `influence_radius` - Maximum distance a well can influence (determines query radius)
+    pub fn new(cell_size: f32, influence_radius: f32) -> Self {
+        // Calculate how many cells we need to check to cover the influence radius
+        let query_radius_cells = (influence_radius / cell_size).ceil() as i32 + 1;
+
+        Self {
+            cell_size,
+            inv_cell_size: 1.0 / cell_size,
+            cells: HashMap::with_capacity(WELL_GRID_INITIAL_CAPACITY),
+            query_radius_cells,
+        }
+    }
+
+    /// Clear all wells from the grid
+    #[inline]
+    pub fn clear(&mut self) {
+        for cell in self.cells.values_mut() {
+            cell.clear();
+        }
+    }
+
+    /// Convert world position to cell key
+    #[inline]
+    fn position_to_cell(&self, position: Vec2) -> CellKey {
+        (
+            (position.x * self.inv_cell_size).floor() as i32,
+            (position.y * self.inv_cell_size).floor() as i32,
+        )
+    }
+
+    /// Insert a well into the grid
+    #[inline]
+    pub fn insert(&mut self, well_id: WellId, position: Vec2) {
+        let cell_key = self.position_to_cell(position);
+        self.cells
+            .entry(cell_key)
+            .or_insert_with(|| Vec::with_capacity(WELL_CELL_INITIAL_CAPACITY))
+            .push(well_id);
+    }
+
+    /// Remove a well from the grid
+    /// Returns true if the well was found and removed
+    pub fn remove(&mut self, well_id: WellId, position: Vec2) -> bool {
+        let cell_key = self.position_to_cell(position);
+        if let Some(cell) = self.cells.get_mut(&cell_key) {
+            if let Some(idx) = cell.iter().position(|&id| id == well_id) {
+                cell.swap_remove(idx);
+                return true;
+            }
+        }
+        false
+    }
+
+    /// Query all well IDs that could potentially influence a position
+    /// Returns well IDs within the configured influence radius
+    pub fn query_nearby(&self, position: Vec2) -> impl Iterator<Item = WellId> + '_ {
+        let (cx, cy) = self.position_to_cell(position);
+        let radius = self.query_radius_cells;
+
+        (-radius..=radius).flat_map(move |dx| {
+            (-radius..=radius).flat_map(move |dy| {
+                let cell_key = (cx + dx, cy + dy);
+                self.cells
+                    .get(&cell_key)
+                    .into_iter()
+                    .flat_map(|cell| cell.iter().copied())
+            })
+        })
+    }
+
+    /// Query well IDs within a specific radius (for custom influence calculations)
+    pub fn query_radius(&self, position: Vec2, radius: f32) -> impl Iterator<Item = WellId> + '_ {
+        let (cx, cy) = self.position_to_cell(position);
+        let cell_radius = (radius * self.inv_cell_size).ceil() as i32 + 1;
+
+        (-cell_radius..=cell_radius).flat_map(move |dx| {
+            (-cell_radius..=cell_radius).flat_map(move |dy| {
+                let cell_key = (cx + dx, cy + dy);
+                self.cells
+                    .get(&cell_key)
+                    .into_iter()
+                    .flat_map(|cell| cell.iter().copied())
+            })
+        })
+    }
+
+    /// Rebuild the grid from a collection of wells
+    pub fn rebuild<'a>(&mut self, wells: impl Iterator<Item = (WellId, Vec2)>) {
+        self.clear();
+        for (well_id, position) in wells {
+            self.insert(well_id, position);
+        }
+    }
+
+    /// Get the number of non-empty cells
+    pub fn cell_count(&self) -> usize {
+        self.cells.values().filter(|c| !c.is_empty()).count()
+    }
+
+    /// Get total wells in the grid
+    pub fn well_count(&self) -> usize {
+        self.cells.values().map(|c| c.len()).sum()
+    }
+}
+
+impl Default for WellSpatialGrid {
+    fn default() -> Self {
+        Self::new(WELL_GRID_CELL_SIZE, WELL_INFLUENCE_RADIUS)
+    }
 }
 
 #[cfg(test)]
@@ -272,5 +438,142 @@ mod tests {
         assert_eq!(stats.total_entities, 4);
         assert_eq!(stats.non_empty_cells, 2);
         assert_eq!(stats.max_per_cell, 3);
+    }
+
+    // === WellSpatialGrid Tests ===
+
+    #[test]
+    fn test_well_grid_new() {
+        let grid = WellSpatialGrid::new(500.0, 2000.0);
+        assert_eq!(grid.cell_size, 500.0);
+        assert_eq!(grid.query_radius_cells, 5); // ceil(2000/500) + 1 = 5
+    }
+
+    #[test]
+    fn test_well_grid_insert_and_query() {
+        let mut grid = WellSpatialGrid::new(500.0, 2000.0);
+
+        // Insert a well at origin
+        grid.insert(1, Vec2::ZERO);
+
+        // Query should find it
+        let results: Vec<_> = grid.query_nearby(Vec2::ZERO).collect();
+        assert_eq!(results.len(), 1);
+        assert_eq!(results[0], 1);
+
+        // Query from nearby position should also find it
+        let results: Vec<_> = grid.query_nearby(Vec2::new(100.0, 100.0)).collect();
+        assert_eq!(results.len(), 1);
+    }
+
+    #[test]
+    fn test_well_grid_remove() {
+        let mut grid = WellSpatialGrid::new(500.0, 2000.0);
+
+        grid.insert(1, Vec2::new(100.0, 100.0));
+        grid.insert(2, Vec2::new(200.0, 200.0));
+
+        assert_eq!(grid.well_count(), 2);
+
+        // Remove well 1
+        let removed = grid.remove(1, Vec2::new(100.0, 100.0));
+        assert!(removed);
+        assert_eq!(grid.well_count(), 1);
+
+        // Try to remove again (should fail)
+        let removed_again = grid.remove(1, Vec2::new(100.0, 100.0));
+        assert!(!removed_again);
+    }
+
+    #[test]
+    fn test_well_grid_query_finds_distant_wells() {
+        let mut grid = WellSpatialGrid::new(500.0, 2000.0);
+
+        // Insert well at origin
+        grid.insert(1, Vec2::ZERO);
+
+        // Query from 1500 units away (within influence radius)
+        let results: Vec<_> = grid.query_nearby(Vec2::new(1500.0, 0.0)).collect();
+        assert_eq!(results.len(), 1);
+
+        // Query from 3000 units away (outside default influence radius)
+        let results: Vec<_> = grid.query_nearby(Vec2::new(3000.0, 0.0)).collect();
+        assert_eq!(results.len(), 0);
+    }
+
+    #[test]
+    fn test_well_grid_rebuild() {
+        let mut grid = WellSpatialGrid::new(500.0, 2000.0);
+
+        // Insert some wells
+        grid.insert(1, Vec2::new(0.0, 0.0));
+        grid.insert(2, Vec2::new(1000.0, 0.0));
+        assert_eq!(grid.well_count(), 2);
+
+        // Rebuild with different wells
+        let new_wells = vec![
+            (10, Vec2::new(500.0, 500.0)),
+            (11, Vec2::new(-500.0, -500.0)),
+            (12, Vec2::new(0.0, 1000.0)),
+        ];
+        grid.rebuild(new_wells.into_iter());
+
+        assert_eq!(grid.well_count(), 3);
+
+        // Old wells should not be found
+        let results: Vec<_> = grid.query_nearby(Vec2::ZERO).collect();
+        assert!(!results.contains(&1));
+        assert!(!results.contains(&2));
+
+        // New wells should be found
+        assert!(results.contains(&10));
+        assert!(results.contains(&11));
+    }
+
+    #[test]
+    fn test_well_grid_many_wells() {
+        // Use larger spacing to test sparse queries
+        let mut grid = WellSpatialGrid::new(500.0, 1500.0);
+
+        // Insert 400 wells in a grid pattern (20x20, spaced 1000 apart)
+        for x in 0..20 {
+            for y in 0..20 {
+                let id = (x * 20 + y) as u32;
+                let pos = Vec2::new(x as f32 * 1000.0, y as f32 * 1000.0);
+                grid.insert(id, pos);
+            }
+        }
+
+        assert_eq!(grid.well_count(), 400);
+
+        // Query from center should find only nearby wells, not all 400
+        let center = Vec2::new(10000.0, 10000.0);
+        let results: Vec<_> = grid.query_nearby(center).collect();
+
+        // Should find wells within 1500 units (not all 400)
+        // With 1000-unit spacing, we should find ~9-16 wells in a 3x3 to 4x4 area
+        assert!(results.len() > 5, "Should find nearby wells: found {}", results.len());
+        assert!(results.len() < 50, "Should not find all wells: found {}", results.len());
+    }
+
+    #[test]
+    fn test_well_grid_query_radius() {
+        let mut grid = WellSpatialGrid::new(500.0, 2000.0);
+
+        // Insert wells at various distances from origin
+        grid.insert(1, Vec2::new(0.0, 0.0));
+        grid.insert(2, Vec2::new(500.0, 0.0));
+        grid.insert(3, Vec2::new(1500.0, 0.0));
+        grid.insert(4, Vec2::new(3000.0, 0.0));
+
+        // Query with small radius
+        let results: Vec<_> = grid.query_radius(Vec2::ZERO, 600.0).collect();
+        assert!(results.contains(&1));
+        assert!(results.contains(&2));
+        assert!(!results.contains(&4)); // Too far
+
+        // Query with large radius
+        let results: Vec<_> = grid.query_radius(Vec2::ZERO, 3500.0).collect();
+        assert_eq!(results.len(), 4);
     }
 }
