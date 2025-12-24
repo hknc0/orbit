@@ -4,6 +4,28 @@ version = "0.1.0"
 edition = "2021"
 rust-version = "1.75"
 
+[features]
+# All features enabled by default for production
+default = ["anticheat", "lobby", "dos_ratelimit", "metrics_extended", "advanced_physics"]
+
+# Anti-cheat system: input validation, sequence tracking, behavior analysis, sanctions
+anticheat = []
+
+# Advanced lobby system: rooms, matchmaking, session management
+lobby = []
+
+# DoS rate limiting: per-message rate limiting (connection limits always enabled)
+dos_ratelimit = []
+
+# Extended metrics: AOI stats, physics stats, detailed performance counters
+metrics_extended = []
+
+# Advanced physics: momentum-based collision, kinetic energy calculations
+advanced_physics = []
+
+# Minimal build without optional features (for testing/debugging)
+minimal = []
+
 [dependencies]
 # Networking - WebTransport
 wtransport = "0.6.1"
