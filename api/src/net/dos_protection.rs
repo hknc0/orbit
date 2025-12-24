@@ -186,6 +186,7 @@ impl DoSProtection {
     }
 
     /// Ban an IP address
+    #[allow(dead_code)]
     pub fn ban_ip(&mut self, ip: IpAddr, reason: String) {
         self.banned_ips.insert(
             ip,
@@ -197,11 +198,13 @@ impl DoSProtection {
     }
 
     /// Unban an IP address
+    #[allow(dead_code)]
     pub fn unban_ip(&mut self, ip: IpAddr) -> bool {
         self.banned_ips.remove(&ip).is_some()
     }
 
     /// Check if an IP is banned
+    #[allow(dead_code)]
     pub fn is_banned(&self, ip: IpAddr) -> bool {
         if let Some(ban) = self.banned_ips.get(&ip) {
             ban.banned_at.elapsed() < self.config.ban_duration
@@ -211,6 +214,7 @@ impl DoSProtection {
     }
 
     /// Clean up expired bans
+    #[allow(dead_code)]
     pub fn cleanup_expired_bans(&mut self) -> usize {
         let ban_duration = self.config.ban_duration;
         let before = self.banned_ips.len();
@@ -220,16 +224,19 @@ impl DoSProtection {
     }
 
     /// Get current connection count
+    #[allow(dead_code)]
     pub fn connection_count(&self) -> usize {
         self.total_connections
     }
 
     /// Get connections from an IP
+    #[allow(dead_code)]
     pub fn connections_from_ip(&self, ip: IpAddr) -> usize {
         self.ip_connections.get(&ip).copied().unwrap_or(0)
     }
 
     /// Get violation count for a connection
+    #[allow(dead_code)]
     pub fn violation_count(&self, connection_id: u64) -> u32 {
         self.connection_rates
             .get(&connection_id)

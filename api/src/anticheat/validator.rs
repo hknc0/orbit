@@ -167,11 +167,13 @@ pub fn sanitize_input(input: &mut PlayerInput) {
 }
 
 /// Quick validation function for common use
+#[allow(dead_code)]
 pub fn validate_input(input: &PlayerInput) -> Result<(), CheatViolation> {
     InputValidator::default().validate_input(input)
 }
 
 /// Quick timing validation
+#[allow(dead_code)]
 pub fn validate_timing(
     input_tick: u64,
     server_tick: u64,

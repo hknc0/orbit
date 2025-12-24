@@ -241,6 +241,7 @@ impl Default for AOIManager {
 
 /// Statistics about AOI filtering
 #[derive(Debug, Clone)]
+#[allow(dead_code)]
 pub struct AOIStats {
     pub original_players: usize,
     pub filtered_players: usize,

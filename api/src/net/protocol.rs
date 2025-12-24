@@ -68,6 +68,7 @@ pub struct PlayerInput {
 }
 
 impl PlayerInput {
+    #[allow(dead_code)]
     pub fn new(sequence: u64, tick: u64) -> Self {
         Self {
             sequence,

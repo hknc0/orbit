@@ -9,6 +9,7 @@ use crate::game::constants::{debris_spawning, gravity_waves};
 /// Gravity influence radius bounds (world units)
 /// Min: Minimum meaningful influence distance for limited mode
 /// Max: Maximum practical range (beyond this, use unlimited mode)
+#[allow(dead_code)]
 mod gravity_bounds {
     pub const INFLUENCE_RADIUS_MIN: f32 = 1000.0;
     pub const INFLUENCE_RADIUS_MAX: f32 = 20000.0;
@@ -79,6 +80,7 @@ impl Default for GravityConfig {
 
 impl GravityConfig {
     /// Load config from environment variables, falling back to defaults
+    #[allow(dead_code)]
     pub fn from_env() -> Self {
         let mut config = Self::default();
 
@@ -879,6 +881,7 @@ impl ArenaScalingConfig {
 /// Controls the autonomous AI that monitors and adjusts simulation parameters
 /// All values can be overridden via AI_* environment variables
 #[derive(Debug, Clone)]
+#[allow(dead_code)]
 pub struct AIManagerConfig {
     /// Master switch - when false, AI manager is disabled
     pub enabled: bool,
@@ -912,6 +915,7 @@ impl Default for AIManagerConfig {
 
 impl AIManagerConfig {
     /// Load config from environment variables, falling back to defaults
+    #[allow(dead_code)]
     pub fn from_env() -> Self {
         let mut config = Self::default();
 
@@ -995,6 +999,7 @@ impl AIManagerConfig {
     }
 
     /// Check if AI manager should be active
+    #[allow(dead_code)]
     pub fn is_active(&self) -> bool {
         self.enabled && self.api_key.is_some()
     }

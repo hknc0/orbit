@@ -77,6 +77,7 @@ impl WebTransportServer {
     }
 
     /// Get the bind address
+    #[allow(dead_code)]
     pub fn bind_addr(&self) -> SocketAddr {
         SocketAddr::new(self.config.bind_address, self.config.port)
     }

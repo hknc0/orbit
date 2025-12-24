@@ -584,12 +584,12 @@ mod tests {
 
         // Player A: heavy and moving fast toward B
         let p1 = create_player("A", Vec2::new(0.0, 0.0), Vec2::new(200.0, 0.0), 200.0);
-        let id1 = p1.id;
+        let _id1 = p1.id;
         state.add_player(p1);
 
         // Player B: light and stationary
         let p2 = create_player("B", Vec2::new(30.0, 0.0), Vec2::ZERO, 50.0);
-        let id2 = p2.id;
+        let _id2 = p2.id;
         state.add_player(p2);
 
         let events = update(&mut state);
@@ -874,7 +874,7 @@ mod tests {
         let dead_player_id = uuid::Uuid::new_v4();
 
         let player = create_player("Alive", Vec2::new(100.0, 100.0), Vec2::ZERO, 100.0);
-        let player_id = player.id;
+        let _player_id = player.id;
         state.add_player(player);
 
         state.add_projectile(dead_player_id, Vec2::new(100.0, 100.0), Vec2::ZERO, 20.0);

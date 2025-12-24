@@ -163,6 +163,7 @@ impl SimulationConfig {
 
 /// A connected player's message channel for lock-free sending
 /// Uses unbounded channel to avoid backpressure blocking the game loop
+#[allow(dead_code)]
 pub struct PlayerConnection {
     pub player_id: PlayerId,
     pub player_name: String,
@@ -344,11 +345,13 @@ impl GameSession {
     }
 
     /// Get current player count
+    #[allow(dead_code)]
     pub fn player_count(&self) -> usize {
         self.game_loop.state().players.len()
     }
 
     /// Get shared arena config for AI manager
+    #[allow(dead_code)]
     pub fn arena_config(&self) -> Arc<parking_lot::RwLock<ArenaScalingConfig>> {
         Arc::clone(&self.arena_config)
     }
@@ -784,6 +787,7 @@ impl GameSession {
     }
 
     /// Get a filtered snapshot for a specific player using AOI
+    #[allow(dead_code)]
     pub fn get_filtered_snapshot(&self, player_id: PlayerId) -> GameSnapshot {
         let full_snapshot = self.get_snapshot();
 

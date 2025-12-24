@@ -208,10 +208,12 @@ impl AiManager {
         self.states.remove(&player_id);
     }
 
+    #[allow(dead_code)]
     pub fn get(&self, player_id: PlayerId) -> Option<&AiState> {
         self.states.get(&player_id)
     }
 
+    #[allow(dead_code)]
     pub fn get_mut(&mut self, player_id: PlayerId) -> Option<&mut AiState> {
         self.states.get_mut(&player_id)
     }

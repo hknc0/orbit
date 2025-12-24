@@ -73,10 +73,12 @@ impl ChargeManager {
         }
     }
 
+    #[allow(dead_code)]
     pub fn get(&self, player_id: PlayerId) -> Option<&ChargeState> {
         self.charges.get(&player_id)
     }
 
+    #[allow(dead_code)]
     pub fn get_mut(&mut self, player_id: PlayerId) -> &mut ChargeState {
         self.charges.entry(player_id).or_default()
     }

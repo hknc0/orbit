@@ -378,6 +378,7 @@ impl Arena {
     /// DEPRECATED: Use `scale_for_simulation()` instead for area-based well scaling.
     /// This legacy method uses player-count-based well calculation.
     #[deprecated(since = "0.3.0", note = "Use scale_for_simulation() for area-based well scaling")]
+    #[allow(deprecated)]
     pub fn update_for_player_count(&mut self, player_count: usize) {
         self.update_for_player_count_with_limit(player_count, None);
     }
@@ -1024,7 +1025,7 @@ mod tests {
 
         // Record well ratios after initial setup
         let setup_escape = arena.escape_radius;
-        let setup_ratios: Vec<f32> = arena.gravity_wells.values()
+        let _setup_ratios: Vec<f32> = arena.gravity_wells.values()
             .filter(|w| w.id != CENTRAL_WELL_ID)
             .map(|w| w.position.length() / setup_escape)
             .collect();

@@ -582,7 +582,7 @@ mod tests {
     fn test_multiple_entities_update() {
         use crate::game::state::DebrisSize;
 
-        let (mut state, player_id) = create_test_state();
+        let (mut state, _player_id) = create_test_state();
 
         // Add multiple entities
         for i in 0..10 {

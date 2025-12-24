@@ -215,11 +215,13 @@ pub mod gravity_waves {
     /// Kept for backwards compatibility with legacy update_for_player_count method
     /// Number of players required per orbital gravity well (player-based scaling)
     #[deprecated(since = "0.2.0", note = "Use area-based well scaling via ArenaScalingConfig.wells_per_area")]
+    #[allow(dead_code)]
     pub const BASE_PLAYERS_PER_WELL: usize = 50;
 
     /// DEPRECATED: Use ArenaScalingConfig.min_wells instead (no max limit in new system)
     /// Kept for backwards compatibility with legacy update_for_player_count method
     #[deprecated(since = "0.2.0", note = "Use area-based well scaling - no hard cap in new system")]
+    #[allow(dead_code)]
     pub const MAX_ORBITAL_WELLS: usize = 20;
 
     /// Wave expansion speed in units per second

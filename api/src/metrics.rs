@@ -87,6 +87,7 @@ pub struct Metrics {
     pub ai_decisions_total: AtomicU64,         // Total decisions made
     pub ai_decisions_successful: AtomicU64,    // Successful decisions
     pub ai_last_confidence: AtomicU64,         // Last confidence level (0-100)
+    #[allow(dead_code)]
     pub ai_pending_evaluations: AtomicU64,     // Decisions awaiting outcome evaluation
 
     // Rolling tick times for percentile calculation (VecDeque for O(1) pop_front)
@@ -408,6 +409,7 @@ impl Metrics {
 
 /// AI Manager metrics for JSON endpoint
 #[derive(Debug, Clone, Serialize)]
+#[allow(dead_code)]
 pub struct AIManagerMetrics {
     pub enabled: bool,
     pub status: String,
@@ -425,6 +427,7 @@ pub struct AIManagerMetrics {
 
 /// Summary of an AI decision for metrics display
 #[derive(Debug, Clone, Serialize)]
+#[allow(dead_code)]
 pub struct AIDecisionSummary {
     pub id: String,
     pub timestamp: String,
@@ -435,6 +438,7 @@ pub struct AIDecisionSummary {
 }
 
 #[derive(Debug, Clone, Serialize)]
+#[allow(dead_code)]
 pub struct AIActionSummary {
     pub parameter: String,
     pub old_value: f32,
@@ -443,6 +447,7 @@ pub struct AIActionSummary {
 }
 
 #[derive(Debug, Clone, Serialize)]
+#[allow(dead_code)]
 pub struct AIOutcomeSummary {
     pub success: bool,
     pub performance_delta_us: i64,
@@ -569,7 +574,9 @@ mod tests {
     fn test_uptime() {
         let metrics = Metrics::new();
         std::thread::sleep(Duration::from_millis(10));
-        assert!(metrics.uptime_seconds() >= 0);
+        // uptime_seconds() returns u64 so it's always >= 0
+        // Just verify it returns a reasonable value (small after short sleep)
+        assert!(metrics.uptime_seconds() < 60);
     }
 
     #[test]
@@ -606,6 +613,7 @@ mod tests {
         metrics.ai_decisions_successful.store(8, Ordering::Relaxed);
         metrics.ai_last_confidence.store(92, Ordering::Relaxed);
 
+        #[allow(unused_variables)]
         let output = metrics.to_prometheus();
 
         // AI metrics should appear in Prometheus output (when feature enabled)
