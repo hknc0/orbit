@@ -217,7 +217,16 @@ pub fn safe_spawn_position(existing_positions: &[crate::util::vec2::Vec2]) -> cr
 }
 
 /// Calculate a spawn position near a random gravity well
+/// Optionally bounded by max_radius to keep spawns within arena
 pub fn spawn_near_well(wells: &[crate::game::state::GravityWell]) -> crate::util::vec2::Vec2 {
+    spawn_near_well_bounded(wells, None)
+}
+
+/// Calculate a spawn position near a random gravity well with optional max radius
+pub fn spawn_near_well_bounded(
+    wells: &[crate::game::state::GravityWell],
+    max_radius: Option<f32>,
+) -> crate::util::vec2::Vec2 {
     use crate::game::constants::spawn::{ZONE_MAX, ZONE_MIN};
     use crate::game::constants::arena::CORE_RADIUS;
     use rand::Rng;
@@ -258,7 +267,12 @@ pub fn spawn_near_well(wells: &[crate::game::state::GravityWell]) -> crate::util
             dist_sq > safe_radius * safe_radius
         });
 
-        if is_safe {
+        // Also check max radius constraint if provided
+        let within_bounds = max_radius
+            .map(|r| spawn_pos.length() <= r)
+            .unwrap_or(true);
+
+        if is_safe && within_bounds {
             return spawn_pos;
         }
     }
@@ -770,9 +784,9 @@ mod tests {
             let safe_radius = arena.current_safe_radius();
             let wells = &arena.gravity_wells;
 
-            // Test many spawn positions
+            // Test many spawn positions using bounded spawn
             for _ in 0..50 {
-                let pos = spawn_near_well(wells);
+                let pos = spawn_near_well_bounded(wells, Some(safe_radius));
                 let dist_from_center = pos.length();
 
                 assert!(
