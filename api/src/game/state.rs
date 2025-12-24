@@ -348,10 +348,10 @@ impl Arena {
     /// - GROW: Fast and immediate (players need space)
     /// - SHRINK: Delayed (5 seconds) and slow (don't trap players)
     pub fn scale_for_simulation(&mut self, target_player_count: usize) {
-        // Shrink delay: 5 seconds at 1 update/second = 5 ticks
-        const SHRINK_DELAY_TICKS: u32 = 5;
-        // Minimum arena size (never shrink below this)
-        const MIN_ESCAPE_RADIUS: f32 = 2000.0;
+        // Shrink delay at 30Hz = 150 ticks for 5 seconds
+        const SHRINK_DELAY_TICKS: u32 = 150;
+        // Minimum arena size = base size (scale 1.0)
+        const MIN_ESCAPE_RADIUS: f32 = arena::ESCAPE_RADIUS;
 
         // Calculate target number of wells (not counting central supermassive)
         // Dynamic: 1-50 players: 1 well, 51-100: 2 wells, etc
@@ -359,39 +359,41 @@ impl Arena {
         let current_orbital_wells = self.gravity_wells.len().saturating_sub(1);
 
         // Calculate target arena size based on player count
-        // Scale: base 2000 + 5 units per player beyond 10
-        let base_radius = arena::ESCAPE_RADIUS * 2.5; // 2000 base
-        let additional = (target_player_count.saturating_sub(10) as f32) * 5.0;
-        let target_escape = (base_radius + additional).max(MIN_ESCAPE_RADIUS);
+        // Scale 1.0 = base ESCAPE_RADIUS (800), grows with player count
+        // ~10 units per player beyond 10, capped for sanity
+        let base_radius = arena::ESCAPE_RADIUS; // 800 = scale 1.0
+        let additional = (target_player_count.saturating_sub(10) as f32) * 10.0;
+        let target_escape = (base_radius + additional).min(base_radius * 10.0).max(MIN_ESCAPE_RADIUS);
         let target_outer = target_escape - 200.0;
 
-        // Determine if we need to grow or shrink
-        let needs_grow = target_escape > self.escape_radius + 10.0; // +10 threshold to avoid jitter
-        let needs_shrink = target_escape < self.escape_radius - 50.0; // -50 threshold for hysteresis
+        // Smooth lerp toward target (called every tick at 30Hz)
+        let diff = target_escape - self.escape_radius;
 
-        if needs_grow {
-            // GROW: Fast and immediate - players need space NOW
-            self.shrink_delay_ticks = SHRINK_DELAY_TICKS; // Reset shrink delay
-            let grow_lerp = 0.05; // 5% per update = fast growth
-            let delta = ((target_escape - self.escape_radius) * grow_lerp).max(10.0);
+        if diff > 1.0 {
+            // GROW: ~5 seconds to reach 95% of target
+            self.shrink_delay_ticks = SHRINK_DELAY_TICKS;
+            let grow_lerp = 0.02;
+            let delta = diff * grow_lerp;
             self.escape_radius = (self.escape_radius + delta).min(target_escape);
             self.outer_radius = (self.outer_radius + delta).min(target_outer);
-        } else if needs_shrink {
-            // SHRINK: Only after delay expires, and very slowly
+        } else if diff < -1.0 {
+            // SHRINK: Only after delay expires, ~20 seconds to reach 95%
             if self.shrink_delay_ticks > 0 {
                 self.shrink_delay_ticks -= 1;
-                // Don't shrink yet - still in delay period
             } else {
-                // Delay expired - shrink slowly
-                let shrink_lerp = 0.005; // 0.5% per update = very slow shrink
-                let delta = ((self.escape_radius - target_escape) * shrink_lerp).max(2.0);
+                let shrink_lerp = 0.005;
+                let delta = (-diff) * shrink_lerp;
                 self.escape_radius = (self.escape_radius - delta).max(target_escape).max(MIN_ESCAPE_RADIUS);
                 self.outer_radius = (self.outer_radius - delta).max(target_outer).max(MIN_ESCAPE_RADIUS - 200.0);
             }
         } else {
-            // In the "stable" zone - reset shrink delay
+            // Within 1 unit of target - stable
             self.shrink_delay_ticks = SHRINK_DELAY_TICKS;
         }
+
+        // Update scale factor based on current escape_radius vs base
+        // This is what gets sent to client for UI display
+        self.scale = self.escape_radius / arena::ESCAPE_RADIUS;
 
         // Reposition wells that are now too close to center after arena growth
         // This prevents wells from clustering at center when scaling from small to large
@@ -812,25 +814,25 @@ mod tests {
         assert!(expanded_escape > 3000.0, "Should have grown significantly");
 
         // Now request shrink to 10 players
-        // First few calls should NOT shrink (delay period)
+        // First few calls should NOT shrink (delay period is 150 ticks at 30Hz = 5 seconds)
         arena.scale_for_simulation(10);
         arena.scale_for_simulation(10);
         arena.scale_for_simulation(10);
         assert!(arena.escape_radius >= expanded_escape - 10.0,
             "Should not shrink during delay period");
 
-        // After delay (5+ ticks), should start shrinking slowly
-        for _ in 0..10 {
+        // After delay (150+ ticks), should start shrinking slowly
+        for _ in 0..200 {
             arena.scale_for_simulation(10);
         }
         assert!(arena.escape_radius < expanded_escape,
             "Should shrink after delay: {} < {}", arena.escape_radius, expanded_escape);
 
-        // But should never go below minimum
-        for _ in 0..100 {
+        // But should never go below minimum (ESCAPE_RADIUS = 800 at scale 1.0)
+        for _ in 0..500 {
             arena.scale_for_simulation(10);
         }
-        assert!(arena.escape_radius >= 2000.0,
+        assert!(arena.escape_radius >= 800.0,
             "Should never shrink below minimum: {}", arena.escape_radius);
     }
 
@@ -938,7 +940,7 @@ mod tests {
         // Now request growth again
         arena.scale_for_simulation(500);
 
-        // Shrink delay should be reset
-        assert_eq!(arena.shrink_delay_ticks, 5, "Shrink delay should be reset on grow");
+        // Shrink delay should be reset to 150 (5 seconds at 30Hz)
+        assert_eq!(arena.shrink_delay_ticks, 150, "Shrink delay should be reset on grow");
     }
 }

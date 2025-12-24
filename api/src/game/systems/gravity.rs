@@ -509,4 +509,349 @@ mod tests {
         // Projectile should be pulled toward center
         assert!(state.projectiles[0].velocity.x < 0.0);
     }
+
+    #[test]
+    fn test_gravity_applies_to_debris() {
+        use crate::game::state::DebrisSize;
+
+        let (mut state, _) = create_test_state();
+        state.add_debris(Vec2::new(200.0, 0.0), Vec2::ZERO, DebrisSize::Medium);
+
+        update_central(&mut state, DT);
+
+        // Debris should be pulled toward center (toward first well)
+        // Direction depends on well configuration
+        assert!(state.debris[0].velocity.length() > 0.0);
+    }
+
+    // === GRAVITY WAVE TESTS ===
+
+    #[test]
+    fn test_wave_explosion_timer_decreases() {
+        let mut state = GameState::new();
+        let config = GravityWaveConfig::default();
+
+        // Set a well to explode soon
+        if state.arena.gravity_wells.len() > 1 {
+            state.arena.gravity_wells[1].explosion_timer = 10.0;
+        }
+
+        let initial_timer = state.arena.gravity_wells.get(1).map(|w| w.explosion_timer).unwrap_or(0.0);
+        update_explosions(&mut state, &config, DT);
+
+        if state.arena.gravity_wells.len() > 1 {
+            assert!(state.arena.gravity_wells[1].explosion_timer < initial_timer);
+        }
+    }
+
+    #[test]
+    fn test_wave_explosion_creates_wave() {
+        let mut state = GameState::new();
+        let config = GravityWaveConfig::default();
+
+        // Set a well to explode immediately
+        if state.arena.gravity_wells.len() > 1 {
+            state.arena.gravity_wells[1].explosion_timer = 0.0;
+            state.arena.gravity_wells[1].is_charging = true;
+
+            let events = update_explosions(&mut state, &config, DT);
+
+            // Should create an explosion event
+            assert!(events.iter().any(|e| matches!(e, GravityWaveEvent::WellExploded { .. })));
+            // Should create a wave
+            assert!(!state.gravity_waves.is_empty());
+        }
+    }
+
+    #[test]
+    fn test_wave_charging_event() {
+        let mut state = GameState::new();
+        let config = GravityWaveConfig::default();
+
+        // Set well to enter charging phase
+        if state.arena.gravity_wells.len() > 1 {
+            state.arena.gravity_wells[1].explosion_timer = config.charge_duration - 0.1;
+            state.arena.gravity_wells[1].is_charging = false;
+
+            let events = update_explosions(&mut state, &config, DT);
+
+            // Should create a charging event
+            assert!(events.iter().any(|e| matches!(e, GravityWaveEvent::WellCharging { .. })));
+            assert!(state.arena.gravity_wells[1].is_charging);
+        }
+    }
+
+    #[test]
+    fn test_wave_expands_over_time() {
+        let mut state = GameState::new();
+        let config = GravityWaveConfig::default();
+
+        // Add a wave manually
+        state.gravity_waves.push(crate::game::state::GravityWave::new(Vec2::ZERO, 1.0));
+        let initial_radius = state.gravity_waves[0].radius;
+
+        update_waves(&mut state, &config, DT);
+
+        assert!(state.gravity_waves[0].radius > initial_radius);
+    }
+
+    #[test]
+    fn test_wave_removes_when_max_radius() {
+        let mut state = GameState::new();
+        let config = GravityWaveConfig::default();
+
+        // Add a wave at max radius
+        let mut wave = crate::game::state::GravityWave::new(Vec2::ZERO, 1.0);
+        wave.radius = config.wave_max_radius - 1.0;
+        state.gravity_waves.push(wave);
+
+        // Update should expand beyond max and remove
+        update_waves(&mut state, &config, 100.0);
+
+        assert!(state.gravity_waves.is_empty());
+    }
+
+    #[test]
+    fn test_wave_applies_impulse_to_player() {
+        let (mut state, player_id) = create_test_state();
+        let config = GravityWaveConfig::default();
+
+        // Position player where wave will hit
+        state.get_player_mut(player_id).unwrap().position = Vec2::new(50.0, 0.0);
+        let initial_velocity = state.get_player(player_id).unwrap().velocity;
+
+        // Add wave that will hit the player
+        let mut wave = crate::game::state::GravityWave::new(Vec2::ZERO, 1.0);
+        wave.radius = 50.0 - config.wave_front_thickness * 0.3;
+        state.gravity_waves.push(wave);
+
+        update_waves(&mut state, &config, DT);
+
+        // Player should have been pushed outward
+        let new_velocity = state.get_player(player_id).unwrap().velocity;
+        assert!(new_velocity.length() > initial_velocity.length());
+    }
+
+    #[test]
+    fn test_wave_applies_impulse_to_projectile() {
+        let mut state = GameState::new();
+        let config = GravityWaveConfig::default();
+
+        // Add projectile in wave path
+        state.add_projectile(
+            uuid::Uuid::new_v4(),
+            Vec2::new(50.0, 0.0),
+            Vec2::ZERO,
+            10.0,
+        );
+
+        // Add wave that will hit the projectile
+        let mut wave = crate::game::state::GravityWave::new(Vec2::ZERO, 1.0);
+        wave.radius = 50.0 - config.wave_front_thickness * 0.3;
+        state.gravity_waves.push(wave);
+
+        update_waves(&mut state, &config, DT);
+
+        // Projectile should have been pushed (50% force)
+        assert!(state.projectiles[0].velocity.length() > 0.0);
+    }
+
+    #[test]
+    fn test_wave_applies_impulse_to_debris() {
+        use crate::game::state::DebrisSize;
+
+        let mut state = GameState::new();
+        let config = GravityWaveConfig::default();
+
+        // Add debris in wave path
+        state.add_debris(Vec2::new(50.0, 0.0), Vec2::ZERO, DebrisSize::Small);
+
+        // Add wave that will hit the debris
+        let mut wave = crate::game::state::GravityWave::new(Vec2::ZERO, 1.0);
+        wave.radius = 50.0 - config.wave_front_thickness * 0.3;
+        state.gravity_waves.push(wave);
+
+        update_waves(&mut state, &config, DT);
+
+        // Debris should have been pushed (70% force)
+        assert!(state.debris[0].velocity.length() > 0.0);
+    }
+
+    #[test]
+    fn test_wave_only_hits_player_once() {
+        let (mut state, player_id) = create_test_state();
+        let config = GravityWaveConfig::default();
+
+        state.get_player_mut(player_id).unwrap().position = Vec2::new(50.0, 0.0);
+
+        // Add wave that will hit the player
+        let mut wave = crate::game::state::GravityWave::new(Vec2::ZERO, 1.0);
+        wave.radius = 50.0 - config.wave_front_thickness * 0.3;
+        state.gravity_waves.push(wave);
+
+        // First update - player gets hit
+        update_waves(&mut state, &config, DT);
+        let velocity_after_first = state.get_player(player_id).unwrap().velocity;
+
+        // Reset velocity to track second hit
+        state.get_player_mut(player_id).unwrap().velocity = Vec2::ZERO;
+
+        // Second update - wave still passing, but player should NOT be hit again
+        update_waves(&mut state, &config, DT);
+        let velocity_after_second = state.get_player(player_id).unwrap().velocity;
+
+        // Second hit should not have occurred (hit_players tracking)
+        assert!(velocity_after_second.length() < velocity_after_first.length() * 0.1);
+    }
+
+    #[test]
+    fn test_wave_strength_affects_impulse() {
+        let mut state1 = GameState::new();
+        let mut state2 = GameState::new();
+        let config = GravityWaveConfig::default();
+
+        // Add players at same position
+        let player1 = Player {
+            id: uuid::Uuid::new_v4(),
+            name: "Test".to_string(),
+            position: Vec2::new(50.0, 0.0),
+            velocity: Vec2::ZERO,
+            mass: 100.0,
+            alive: true,
+            ..Default::default()
+        };
+        let player2 = Player {
+            id: uuid::Uuid::new_v4(),
+            name: "Test".to_string(),
+            position: Vec2::new(50.0, 0.0),
+            velocity: Vec2::ZERO,
+            mass: 100.0,
+            alive: true,
+            ..Default::default()
+        };
+        let id1 = player1.id;
+        let id2 = player2.id;
+        state1.add_player(player1);
+        state2.add_player(player2);
+
+        // Add weak wave to state1
+        let mut weak_wave = crate::game::state::GravityWave::new(Vec2::ZERO, 0.3);
+        weak_wave.radius = 50.0 - config.wave_front_thickness * 0.3;
+        state1.gravity_waves.push(weak_wave);
+
+        // Add strong wave to state2
+        let mut strong_wave = crate::game::state::GravityWave::new(Vec2::ZERO, 1.0);
+        strong_wave.radius = 50.0 - config.wave_front_thickness * 0.3;
+        state2.gravity_waves.push(strong_wave);
+
+        update_waves(&mut state1, &config, DT);
+        update_waves(&mut state2, &config, DT);
+
+        let vel1 = state1.get_player(id1).unwrap().velocity.length();
+        let vel2 = state2.get_player(id2).unwrap().velocity.length();
+
+        // Strong wave should apply more force
+        assert!(vel2 > vel1 * 2.5);
+    }
+
+    #[test]
+    fn test_central_supermassive_never_explodes() {
+        let mut state = GameState::new();
+        let config = GravityWaveConfig::default();
+
+        // Set central well (index 0) to explode
+        if !state.arena.gravity_wells.is_empty() {
+            state.arena.gravity_wells[0].explosion_timer = 0.0;
+            state.arena.gravity_wells[0].is_charging = true;
+        }
+
+        let events = update_explosions(&mut state, &config, DT);
+
+        // Central well should NOT explode (skipped at index 0)
+        assert!(!events.iter().any(|e| match e {
+            GravityWaveEvent::WellExploded { well_index, .. } => *well_index == 0,
+            _ => false,
+        }));
+    }
+
+    #[test]
+    fn test_wave_distance_decay() {
+        let (mut state, player_id) = create_test_state();
+        let config = GravityWaveConfig::default();
+
+        // Position player far from wave center
+        state.get_player_mut(player_id).unwrap().position = Vec2::new(1500.0, 0.0);
+
+        // Add wave that's expanded far
+        let mut wave = crate::game::state::GravityWave::new(Vec2::ZERO, 1.0);
+        wave.radius = 1500.0 - config.wave_front_thickness * 0.3;
+        state.gravity_waves.push(wave);
+
+        update_waves(&mut state, &config, DT);
+
+        // Force should be weaker due to distance decay
+        let far_velocity = state.get_player(player_id).unwrap().velocity.length();
+
+        // Compare with close position
+        let (mut state2, player_id2) = create_test_state();
+        state2.get_player_mut(player_id2).unwrap().position = Vec2::new(100.0, 0.0);
+        let mut wave2 = crate::game::state::GravityWave::new(Vec2::ZERO, 1.0);
+        wave2.radius = 100.0 - config.wave_front_thickness * 0.3;
+        state2.gravity_waves.push(wave2);
+        update_waves(&mut state2, &config, DT);
+        let close_velocity = state2.get_player(player_id2).unwrap().velocity.length();
+
+        // Close should have stronger impulse
+        assert!(close_velocity > far_velocity);
+    }
+
+    // === MULTI-WELL GRAVITY TESTS ===
+
+    #[test]
+    fn test_multi_well_gravity_superposition() {
+        // Two wells should have combined effect
+        let well1 = GravityWell::new(Vec2::new(-100.0, 0.0), 10000.0, 20.0);
+        let well2 = GravityWell::new(Vec2::new(100.0, 0.0), 10000.0, 20.0);
+        let wells = vec![well1, well2];
+
+        // At origin, forces should cancel out (equal wells on both sides)
+        let gravity_at_origin = calculate_multi_well_gravity(Vec2::ZERO, &wells);
+        assert!(gravity_at_origin.x.abs() < 1.0, "X force should mostly cancel");
+        assert!(gravity_at_origin.y.abs() < 0.001, "Y force should be zero");
+    }
+
+    #[test]
+    fn test_multi_well_gravity_asymmetric() {
+        // Closer well should dominate
+        let well1 = GravityWell::new(Vec2::new(-50.0, 0.0), 10000.0, 20.0);
+        let well2 = GravityWell::new(Vec2::new(200.0, 0.0), 10000.0, 20.0);
+        let wells = vec![well1, well2];
+
+        // At origin, should be pulled more toward well1 (closer)
+        let gravity = calculate_multi_well_gravity(Vec2::ZERO, &wells);
+        assert!(gravity.x < 0.0, "Should be pulled toward closer well on left");
+    }
+
+    #[test]
+    fn test_gravity_well_minimum_distance() {
+        // Very close to well should return zero (safety)
+        let well = GravityWell::new(Vec2::ZERO, 10000.0, 50.0);
+        let wells = vec![well];
+
+        // Inside 2x core radius should be zero
+        let gravity = calculate_multi_well_gravity(Vec2::new(50.0, 0.0), &wells);
+        assert_eq!(gravity, Vec2::ZERO);
+    }
+
+    #[test]
+    fn test_gravity_deterministic() {
+        let well = GravityWell::new(Vec2::new(100.0, 50.0), 8000.0, 30.0);
+        let wells = vec![well.clone()];
+        let pos = Vec2::new(300.0, 200.0);
+
+        let g1 = calculate_gravity_from_well(pos, &well);
+        let g2 = calculate_gravity_from_well(pos, &well);
+
+        assert_eq!(g1, g2, "Gravity should be deterministic");
+    }
 }

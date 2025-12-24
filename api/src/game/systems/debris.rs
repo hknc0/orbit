@@ -311,4 +311,266 @@ mod tests {
             assert!(speed <= config.orbital_velocity_max);
         }
     }
+
+    // === EDGE CASE TESTS ===
+
+    #[test]
+    fn test_spawn_state_accumulator_works() {
+        let mut state = GameState::new();
+        let mut config = test_config();
+        config.initial_inner = 0;
+        config.initial_middle = 0;
+        config.initial_outer = 0;
+        config.spawn_rate_inner_small = 1.0; // 1 per second
+        config.spawn_rate_inner_medium = 0.0;
+        config.spawn_rate_inner_large = 0.0;
+        config.spawn_rate_middle_small = 0.0;
+        config.spawn_rate_middle_medium = 0.0;
+        config.spawn_rate_middle_large = 0.0;
+        config.spawn_rate_outer_small = 0.0;
+        config.spawn_rate_outer_medium = 0.0;
+        config.spawn_rate_outer_large = 0.0;
+
+        let mut spawn_state = DebrisSpawnState::new();
+
+        // Run for exactly 1 second
+        for _ in 0..30 {
+            update(&mut state, &config, &mut spawn_state, 1.0 / 30.0);
+        }
+
+        // Should have spawned exactly 1 debris (1.0 per second)
+        assert_eq!(state.debris.len(), 1);
+    }
+
+    #[test]
+    fn test_fractional_accumulation() {
+        let mut state = GameState::new();
+        let mut config = test_config();
+        config.initial_inner = 0;
+        config.initial_middle = 0;
+        config.initial_outer = 0;
+        // Very slow spawn rate: 0.1 per second = 1 per 10 seconds
+        config.spawn_rate_inner_small = 0.1;
+        config.spawn_rate_inner_medium = 0.0;
+        config.spawn_rate_inner_large = 0.0;
+        config.spawn_rate_middle_small = 0.0;
+        config.spawn_rate_middle_medium = 0.0;
+        config.spawn_rate_middle_large = 0.0;
+        config.spawn_rate_outer_small = 0.0;
+        config.spawn_rate_outer_medium = 0.0;
+        config.spawn_rate_outer_large = 0.0;
+
+        let mut spawn_state = DebrisSpawnState::new();
+
+        // Run for 5 seconds - should NOT spawn anything yet
+        for _ in 0..150 {
+            update(&mut state, &config, &mut spawn_state, 1.0 / 30.0);
+        }
+        assert_eq!(state.debris.len(), 0, "Should not spawn before accumulator reaches 1.0");
+
+        // Run for another 5+ seconds - should spawn 1
+        for _ in 0..180 {
+            update(&mut state, &config, &mut spawn_state, 1.0 / 30.0);
+        }
+        assert_eq!(state.debris.len(), 1, "Should spawn after accumulator reaches 1.0");
+    }
+
+    #[test]
+    fn test_spawn_in_correct_zone_inner() {
+        let mut state = GameState::new();
+        let mut config = test_config();
+        config.initial_inner = 10;
+        config.initial_middle = 0;
+        config.initial_outer = 0;
+
+        spawn_initial(&mut state, &config);
+
+        for debris in &state.debris {
+            let dist = debris.position.length();
+            let (min_r, max_r) = DebrisZone::Inner.radius_range();
+            assert!(dist >= min_r, "Debris at {} should be >= {}", dist, min_r);
+            assert!(dist <= max_r, "Debris at {} should be <= {}", dist, max_r);
+        }
+    }
+
+    #[test]
+    fn test_spawn_in_correct_zone_middle() {
+        let mut state = GameState::new();
+        let mut config = test_config();
+        config.initial_inner = 0;
+        config.initial_middle = 10;
+        config.initial_outer = 0;
+
+        spawn_initial(&mut state, &config);
+
+        for debris in &state.debris {
+            let dist = debris.position.length();
+            let (min_r, max_r) = DebrisZone::Middle.radius_range();
+            assert!(dist >= min_r, "Debris at {} should be >= {}", dist, min_r);
+            assert!(dist <= max_r, "Debris at {} should be <= {}", dist, max_r);
+        }
+    }
+
+    #[test]
+    fn test_spawn_in_correct_zone_outer() {
+        let mut state = GameState::new();
+        let mut config = test_config();
+        config.initial_inner = 0;
+        config.initial_middle = 0;
+        config.initial_outer = 10;
+
+        spawn_initial(&mut state, &config);
+
+        for debris in &state.debris {
+            let dist = debris.position.length();
+            let (min_r, max_r) = DebrisZone::Outer.radius_range();
+            assert!(dist >= min_r, "Debris at {} should be >= {}", dist, min_r);
+            assert!(dist <= max_r, "Debris at {} should be <= {}", dist, max_r);
+        }
+    }
+
+    #[test]
+    fn test_debris_lifetime_set_from_config() {
+        let mut state = GameState::new();
+        let mut config = test_config();
+        config.lifetime = 45.0; // Custom lifetime
+        config.initial_inner = 5;
+        config.initial_middle = 0;
+        config.initial_outer = 0;
+
+        spawn_initial(&mut state, &config);
+
+        for debris in &state.debris {
+            assert!((debris.lifetime - 45.0).abs() < 0.001);
+        }
+    }
+
+    #[test]
+    fn test_velocity_direction_is_orbital() {
+        let mut state = GameState::new();
+        let config = test_config();
+
+        spawn_initial(&mut state, &config);
+
+        for debris in &state.debris {
+            // Velocity should be roughly perpendicular to position (orbital)
+            let radial = debris.position.normalize();
+            let tangent = debris.velocity.normalize();
+
+            // Dot product should be close to 0 (perpendicular)
+            let dot = radial.dot(tangent).abs();
+            assert!(dot < 0.2, "Velocity should be roughly perpendicular to radius, got dot={}", dot);
+        }
+    }
+
+    #[test]
+    fn test_zone_weights_determine_size_distribution() {
+        let mut state = GameState::new();
+        let mut config = test_config();
+        // Set up so only large debris spawns in inner zone
+        config.spawn_rate_inner_small = 0.0;
+        config.spawn_rate_inner_medium = 0.0;
+        config.spawn_rate_inner_large = 10.0;
+        config.initial_inner = 20;
+        config.initial_middle = 0;
+        config.initial_outer = 0;
+
+        spawn_initial(&mut state, &config);
+
+        // All should be large
+        for debris in &state.debris {
+            assert_eq!(debris.size, DebrisSize::Large);
+        }
+    }
+
+    #[test]
+    fn test_zero_total_rate_no_spawn() {
+        let mut state = GameState::new();
+        let mut config = test_config();
+        // All rates zero
+        config.spawn_rate_inner_small = 0.0;
+        config.spawn_rate_inner_medium = 0.0;
+        config.spawn_rate_inner_large = 0.0;
+        config.initial_inner = 10;
+        config.initial_middle = 0;
+        config.initial_outer = 0;
+
+        spawn_initial(&mut state, &config);
+
+        // Should not spawn anything when total rate is 0
+        assert_eq!(state.debris.len(), 0);
+    }
+
+    #[test]
+    fn test_max_count_enforced_during_update() {
+        let mut state = GameState::new();
+        let mut config = test_config();
+        config.max_count = 5;
+        config.initial_inner = 0;
+        config.initial_middle = 0;
+        config.initial_outer = 0;
+        config.spawn_rate_inner_small = 100.0; // Very fast
+
+        let mut spawn_state = DebrisSpawnState::new();
+
+        // Run many updates
+        for _ in 0..300 {
+            update(&mut state, &config, &mut spawn_state, 1.0 / 30.0);
+        }
+
+        assert!(state.debris.len() <= config.max_count);
+    }
+
+    #[test]
+    fn test_debris_spawn_state_new() {
+        let state = DebrisSpawnState::new();
+        assert!((state.inner_small - 0.0).abs() < 0.001);
+        assert!((state.inner_medium - 0.0).abs() < 0.001);
+        assert!((state.inner_large - 0.0).abs() < 0.001);
+        assert!((state.middle_small - 0.0).abs() < 0.001);
+        assert!((state.middle_medium - 0.0).abs() < 0.001);
+        assert!((state.middle_large - 0.0).abs() < 0.001);
+        assert!((state.outer_small - 0.0).abs() < 0.001);
+        assert!((state.outer_medium - 0.0).abs() < 0.001);
+        assert!((state.outer_large - 0.0).abs() < 0.001);
+    }
+
+    #[test]
+    fn test_all_zones_spawn_simultaneously() {
+        let mut state = GameState::new();
+        let mut config = test_config();
+        config.initial_inner = 0;
+        config.initial_middle = 0;
+        config.initial_outer = 0;
+        config.spawn_rate_inner_small = 30.0; // 1 per tick
+        config.spawn_rate_middle_small = 30.0;
+        config.spawn_rate_outer_small = 30.0;
+        // Zero other rates to ensure only small debris
+        config.spawn_rate_inner_medium = 0.0;
+        config.spawn_rate_inner_large = 0.0;
+        config.spawn_rate_middle_medium = 0.0;
+        config.spawn_rate_middle_large = 0.0;
+        config.spawn_rate_outer_medium = 0.0;
+        config.spawn_rate_outer_large = 0.0;
+
+        let mut spawn_state = DebrisSpawnState::new();
+        update(&mut state, &config, &mut spawn_state, 1.0 / 30.0);
+
+        // Should have spawned at least 1 from each zone (3 total)
+        assert!(state.debris.len() >= 3);
+    }
+
+    #[test]
+    fn test_debris_zone_radius_ordering() {
+        let inner_range = DebrisZone::Inner.radius_range();
+        let middle_range = DebrisZone::Middle.radius_range();
+        let outer_range = DebrisZone::Outer.radius_range();
+
+        // Inner zone ends where middle begins
+        assert!((inner_range.1 - middle_range.0).abs() < 1.0);
+        // Middle zone ends where outer begins
+        assert!((middle_range.1 - outer_range.0).abs() < 1.0);
+        // Outer extends beyond middle
+        assert!(outer_range.1 > middle_range.1);
+    }
 }

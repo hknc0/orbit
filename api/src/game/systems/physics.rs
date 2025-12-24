@@ -353,4 +353,352 @@ mod tests {
         assert_eq!(state1.get_player(player_id1).unwrap().position, state2.get_player(player_id2).unwrap().position);
         assert_eq!(state1.get_player(player_id1).unwrap().velocity, state2.get_player(player_id2).unwrap().velocity);
     }
+
+    // === DEBRIS PHYSICS TESTS ===
+
+    #[test]
+    fn test_debris_lifetime_decay() {
+        use crate::game::state::DebrisSize;
+
+        let (mut state, _) = create_test_state();
+        state.add_debris(Vec2::new(100.0, 100.0), Vec2::ZERO, DebrisSize::Medium);
+
+        let initial_lifetime = state.debris[0].lifetime;
+        update(&mut state, DT);
+
+        assert!(state.debris[0].lifetime < initial_lifetime);
+        assert!((initial_lifetime - state.debris[0].lifetime - DT).abs() < 0.001);
+    }
+
+    #[test]
+    fn test_expired_debris_removed() {
+        use crate::game::state::DebrisSize;
+
+        let (mut state, _) = create_test_state();
+        state.add_debris(Vec2::new(100.0, 100.0), Vec2::ZERO, DebrisSize::Small);
+        state.debris[0].lifetime = 0.01; // About to expire
+
+        update(&mut state, DT);
+
+        assert!(state.debris.is_empty(), "Expired debris should be removed");
+    }
+
+    #[test]
+    fn test_debris_drag_application() {
+        use crate::game::state::DebrisSize;
+
+        let (mut state, _) = create_test_state();
+        let initial_vel = Vec2::new(100.0, 50.0);
+        state.add_debris(Vec2::new(200.0, 200.0), initial_vel, DebrisSize::Medium);
+
+        update(&mut state, DT);
+
+        let expected_vel = initial_vel * (1.0 - DRAG);
+        let actual_vel = state.debris[0].velocity;
+        assert!((actual_vel - expected_vel).length() < 0.01);
+    }
+
+    #[test]
+    fn test_debris_position_integration() {
+        use crate::game::state::DebrisSize;
+
+        let (mut state, _) = create_test_state();
+        let initial_pos = Vec2::new(200.0, 200.0);
+        let initial_vel = Vec2::new(100.0, 50.0);
+        state.add_debris(initial_pos, initial_vel, DebrisSize::Medium);
+
+        update(&mut state, DT);
+
+        // Position should change by approximately velocity * dt (before drag)
+        let expected_delta = initial_vel * DT;
+        let actual_delta = state.debris[0].position - initial_pos;
+        assert!((actual_delta - expected_delta).length() < 1.0);
+    }
+
+    #[test]
+    fn test_out_of_bounds_debris_removed() {
+        use crate::game::state::DebrisSize;
+
+        let (mut state, _) = create_test_state();
+        let escape = state.arena.escape_radius;
+        // Place debris way outside arena
+        state.add_debris(Vec2::new(escape * 2.0, 0.0), Vec2::ZERO, DebrisSize::Small);
+
+        update(&mut state, DT);
+
+        assert!(state.debris.is_empty(), "Out-of-bounds debris should be removed");
+    }
+
+    #[test]
+    fn test_out_of_bounds_projectile_removed() {
+        let (mut state, _) = create_test_state();
+        let escape = state.arena.escape_radius;
+        // Place projectile way outside arena
+        state.add_projectile(
+            uuid::Uuid::new_v4(),
+            Vec2::new(escape * 2.0, 0.0),
+            Vec2::ZERO,
+            10.0,
+        );
+
+        update(&mut state, DT);
+
+        assert!(state.projectiles.is_empty(), "Out-of-bounds projectile should be removed");
+    }
+
+    #[test]
+    fn test_debris_at_boundary_kept() {
+        use crate::game::state::DebrisSize;
+
+        let (mut state, _) = create_test_state();
+        let escape = state.arena.escape_radius;
+        // Place debris just inside the cleanup boundary (1.2x escape)
+        state.add_debris(Vec2::new(escape * 1.1, 0.0), Vec2::ZERO, DebrisSize::Small);
+
+        update(&mut state, DT);
+
+        assert_eq!(state.debris.len(), 1, "Debris inside boundary should be kept");
+    }
+
+    #[test]
+    fn test_projectile_at_boundary_kept() {
+        let (mut state, _) = create_test_state();
+        let escape = state.arena.escape_radius;
+        // Place projectile just inside the cleanup boundary (1.5x escape)
+        state.add_projectile(
+            uuid::Uuid::new_v4(),
+            Vec2::new(escape * 1.4, 0.0),
+            Vec2::ZERO,
+            10.0,
+        );
+
+        update(&mut state, DT);
+
+        assert_eq!(state.projectiles.len(), 1, "Projectile inside boundary should be kept");
+    }
+
+    #[test]
+    fn test_multiple_entities_update() {
+        use crate::game::state::DebrisSize;
+
+        let (mut state, player_id) = create_test_state();
+
+        // Add multiple entities
+        for i in 0..10 {
+            let pos = Vec2::new(100.0 + i as f32 * 50.0, 100.0);
+            state.add_debris(pos, Vec2::new(10.0, 0.0), DebrisSize::Small);
+            state.add_projectile(uuid::Uuid::new_v4(), pos, Vec2::new(20.0, 0.0), 5.0);
+        }
+
+        // All should update
+        update(&mut state, DT);
+
+        assert_eq!(state.debris.len(), 10);
+        assert_eq!(state.projectiles.len(), 10);
+
+        // All should have moved
+        for debris in &state.debris {
+            assert!(debris.velocity.x > 9.9);
+        }
+    }
+
+    #[test]
+    fn test_very_high_velocity_debris() {
+        use crate::game::state::DebrisSize;
+
+        let (mut state, _) = create_test_state();
+        state.add_debris(Vec2::new(100.0, 100.0), Vec2::new(10000.0, 10000.0), DebrisSize::Medium);
+
+        // Should not panic or produce NaN
+        update(&mut state, DT);
+
+        assert!(!state.debris[0].velocity.x.is_nan());
+        assert!(!state.debris[0].velocity.y.is_nan());
+        assert!(!state.debris[0].position.x.is_nan());
+        assert!(!state.debris[0].position.y.is_nan());
+    }
+
+    #[test]
+    fn test_zero_velocity_debris() {
+        use crate::game::state::DebrisSize;
+
+        let (mut state, _) = create_test_state();
+        state.add_debris(Vec2::new(100.0, 100.0), Vec2::ZERO, DebrisSize::Medium);
+
+        update(&mut state, DT);
+
+        // Should not move, but should still decay lifetime
+        assert_eq!(state.debris[0].position, Vec2::new(100.0, 100.0));
+        assert!(state.debris[0].lifetime < 90.0);
+    }
+
+    // === THRUST EDGE CASES ===
+
+    #[test]
+    fn test_thrust_minimum_mass_protection() {
+        use crate::game::constants::mass::MINIMUM;
+
+        let (mut state, player_id) = create_test_state();
+        state.get_player_mut(player_id).unwrap().mass = MINIMUM + 0.1;
+
+        let input = PlayerInput {
+            sequence: 1,
+            tick: 1,
+            client_time: 0,
+            thrust: Vec2::new(1.0, 0.0),
+            aim: Vec2::ZERO,
+            boost: true,
+            fire: false,
+            fire_released: false,
+        };
+
+        // Apply thrust many times
+        for _ in 0..100 {
+            apply_thrust(&mut state, player_id, &input, DT);
+        }
+
+        // Mass should never go below minimum
+        assert!(state.get_player(player_id).unwrap().mass >= MINIMUM);
+    }
+
+    #[test]
+    fn test_thrust_diagonal_direction() {
+        let (mut state, player_id) = create_test_state();
+        state.get_player_mut(player_id).unwrap().velocity = Vec2::ZERO;
+
+        let input = PlayerInput {
+            sequence: 1,
+            tick: 1,
+            client_time: 0,
+            thrust: Vec2::new(1.0, 1.0), // Diagonal
+            aim: Vec2::ZERO,
+            boost: true,
+            fire: false,
+            fire_released: false,
+        };
+
+        apply_thrust(&mut state, player_id, &input, DT);
+
+        let vel = state.get_player(player_id).unwrap().velocity;
+        // Should move diagonally
+        assert!(vel.x > 0.0);
+        assert!(vel.y > 0.0);
+        // Should be roughly equal in x and y
+        assert!((vel.x - vel.y).abs() < 0.1);
+    }
+
+    #[test]
+    fn test_thrust_very_small_input() {
+        let (mut state, player_id) = create_test_state();
+        let initial_velocity = state.get_player(player_id).unwrap().velocity;
+
+        let input = PlayerInput {
+            sequence: 1,
+            tick: 1,
+            client_time: 0,
+            thrust: Vec2::new(0.001, 0.001), // Very small, below threshold
+            aim: Vec2::ZERO,
+            boost: true,
+            fire: false,
+            fire_released: false,
+        };
+
+        let applied = apply_thrust(&mut state, player_id, &input, DT);
+
+        // Should not apply thrust (length_sq < 0.01)
+        assert!(!applied);
+        assert_eq!(state.get_player(player_id).unwrap().velocity, initial_velocity);
+    }
+
+    #[test]
+    fn test_aim_updates_rotation() {
+        let (mut state, player_id) = create_test_state();
+
+        let input = PlayerInput {
+            sequence: 1,
+            tick: 1,
+            client_time: 0,
+            thrust: Vec2::ZERO,
+            aim: Vec2::new(0.0, 1.0), // Aim up
+            boost: false,
+            fire: false,
+            fire_released: false,
+        };
+
+        apply_thrust(&mut state, player_id, &input, DT);
+
+        let rotation = state.get_player(player_id).unwrap().rotation;
+        // Should face upward (PI/2)
+        assert!((rotation - std::f32::consts::FRAC_PI_2).abs() < 0.1);
+    }
+
+    #[test]
+    fn test_dead_player_no_thrust() {
+        let (mut state, player_id) = create_test_state();
+        state.get_player_mut(player_id).unwrap().alive = false;
+        state.get_player_mut(player_id).unwrap().velocity = Vec2::ZERO;
+
+        let input = PlayerInput {
+            sequence: 1,
+            tick: 1,
+            client_time: 0,
+            thrust: Vec2::new(1.0, 0.0),
+            aim: Vec2::ZERO,
+            boost: true,
+            fire: false,
+            fire_released: false,
+        };
+
+        let applied = apply_thrust(&mut state, player_id, &input, DT);
+
+        assert!(!applied);
+        assert_eq!(state.get_player(player_id).unwrap().velocity, Vec2::ZERO);
+    }
+
+    #[test]
+    fn test_nonexistent_player_no_thrust() {
+        let (mut state, _) = create_test_state();
+        let fake_id = uuid::Uuid::new_v4();
+
+        let input = PlayerInput {
+            sequence: 1,
+            tick: 1,
+            client_time: 0,
+            thrust: Vec2::new(1.0, 0.0),
+            aim: Vec2::ZERO,
+            boost: true,
+            fire: false,
+            fire_released: false,
+        };
+
+        let applied = apply_thrust(&mut state, fake_id, &input, DT);
+        assert!(!applied);
+    }
+
+    // === PARALLEL PROCESSING SANITY ===
+
+    #[test]
+    fn test_many_entities_parallel() {
+        use crate::game::state::DebrisSize;
+
+        let (mut state, _) = create_test_state();
+
+        // Add many entities to exercise parallel processing
+        for _ in 0..100 {
+            let pos = Vec2::new(
+                rand::random::<f32>() * 400.0 + 100.0,
+                rand::random::<f32>() * 400.0 + 100.0,
+            );
+            state.add_debris(pos, Vec2::new(10.0, 5.0), DebrisSize::Small);
+            state.add_projectile(uuid::Uuid::new_v4(), pos, Vec2::new(20.0, 10.0), 5.0);
+        }
+
+        // Run many ticks
+        for _ in 0..100 {
+            update(&mut state, DT);
+        }
+
+        // Should complete without panic
+        assert!(true);
+    }
 }
