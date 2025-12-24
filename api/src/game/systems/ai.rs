@@ -176,12 +176,14 @@ impl Default for AiManager {
 
 /// Update AI decision for a single bot
 fn update_ai_decision(ai: &mut AiState, bot_id: PlayerId, state: &GameState, dt: f32) {
-    // Update decision timer
+    // Update decision timer (scaled by reaction_variance for personality-based timing)
     ai.decision_timer -= dt;
 
     if ai.decision_timer <= 0.0 {
-        // Make new decision
-        ai.decision_timer = DECISION_INTERVAL * (1.0 + rand::thread_rng().gen_range(-0.2..0.2));
+        // Make new decision with personality-based timing variance
+        let variance = ai.personality.reaction_variance;
+        let timing_factor = 1.0 + rand::thread_rng().gen_range(-variance..variance);
+        ai.decision_timer = DECISION_INTERVAL * timing_factor;
         decide_behavior(ai, bot_id, state);
     }
 
