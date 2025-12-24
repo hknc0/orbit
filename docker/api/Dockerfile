@@ -74,6 +74,12 @@ ENV HOST=0.0.0.0
 ENV PORT=4433
 ENV METRICS_PORT=9090
 
+# Simulation mode (load testing) - set SIMULATION_MODE=true to enable
+# SIMULATION_MODE=false        # Enable sinusoidal bot scaling
+# SIMULATION_MIN_BOTS=5        # Minimum bots at cycle trough
+# SIMULATION_MAX_BOTS=100      # Maximum bots at cycle peak
+# SIMULATION_CYCLE_MINUTES=5   # Duration of one min→max→min cycle
+
 # Expose ports
 EXPOSE 4433/udp
 EXPOSE 9090

@@ -49,9 +49,16 @@ pub struct Metrics {
     // Game state
     pub match_time_seconds: AtomicU64,
     pub arena_scale: AtomicU64, // Stored as scale * 100 (e.g., 1.5 = 150)
+    pub arena_radius: AtomicU64, // Arena escape radius in world units
+    pub arena_gravity_wells: AtomicU64, // Number of gravity wells
 
     // Server uptime
     start_time: Instant,
+
+    // Simulation mode metrics
+    pub simulation_enabled: AtomicU64,      // 0 or 1
+    pub simulation_target_bots: AtomicU64,  // Current target bot count
+    pub simulation_cycle_progress: AtomicU64, // Progress through cycle (0-100)
 
     // Rolling tick times for percentile calculation (VecDeque for O(1) pop_front)
     tick_history: RwLock<VecDeque<u64>>,
@@ -81,7 +88,12 @@ impl Metrics {
             bytes_received: AtomicU64::new(0),
             match_time_seconds: AtomicU64::new(0),
             arena_scale: AtomicU64::new(100),
+            arena_radius: AtomicU64::new(0),
+            arena_gravity_wells: AtomicU64::new(0),
             start_time: Instant::now(),
+            simulation_enabled: AtomicU64::new(0),
+            simulation_target_bots: AtomicU64::new(0),
+            simulation_cycle_progress: AtomicU64::new(0),
             tick_history: RwLock::new(VecDeque::with_capacity(1000)),
         }
     }
@@ -200,8 +212,20 @@ impl Metrics {
             self.match_time_seconds.load(Ordering::Relaxed));
         metric!("orbit_royale_arena_scale", "Arena scale factor (x100)", "gauge",
             self.arena_scale.load(Ordering::Relaxed));
+        metric!("orbit_royale_arena_radius", "Arena escape radius in world units", "gauge",
+            self.arena_radius.load(Ordering::Relaxed));
+        metric!("orbit_royale_arena_gravity_wells", "Number of gravity wells", "gauge",
+            self.arena_gravity_wells.load(Ordering::Relaxed));
         metric!("orbit_royale_uptime_seconds", "Server uptime in seconds", "counter",
             self.uptime_seconds());
+
+        // Simulation mode metrics
+        metric!("orbit_royale_simulation_enabled", "Simulation mode enabled (0/1)", "gauge",
+            self.simulation_enabled.load(Ordering::Relaxed));
+        metric!("orbit_royale_simulation_target_bots", "Current target bot count in simulation", "gauge",
+            self.simulation_target_bots.load(Ordering::Relaxed));
+        metric!("orbit_royale_simulation_cycle_progress", "Simulation cycle progress (0-100%)", "gauge",
+            self.simulation_cycle_progress.load(Ordering::Relaxed));
 
         output
     }

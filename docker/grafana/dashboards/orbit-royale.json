@@ -1,7 +1,5 @@
 {
-  "annotations": {
-    "list": []
-  },
+  "annotations": { "list": [] },
   "editable": true,
   "fiscalYearStartMonth": 0,
   "graphTooltip": 1,
@@ -18,11 +16,10 @@
       "type": "row"
     },
     {
-      "datasource": { "type": "prometheus", "uid": "PBFA97CFB590B2093" },
+      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
       "fieldConfig": {
         "defaults": {
           "color": { "mode": "thresholds" },
-          "mappings": [],
           "thresholds": {
             "mode": "absolute",
             "steps": [
@@ -30,139 +27,79 @@
               { "color": "yellow", "value": 50 },
               { "color": "red", "value": 100 }
             ]
-          },
-          "unit": "none"
-        },
-        "overrides": []
+          }
+        }
       },
       "gridPos": { "h": 4, "w": 4, "x": 0, "y": 1 },
       "id": 1,
       "options": {
         "colorMode": "value",
         "graphMode": "area",
-        "justifyMode": "auto",
-        "orientation": "auto",
-        "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false },
-        "textMode": "auto"
+        "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false }
       },
-      "pluginVersion": "10.2.2",
-      "targets": [
-        {
-          "expr": "orbit_royale_players_total",
-          "legendFormat": "Total",
-          "refId": "A"
-        }
-      ],
+      "targets": [{ "expr": "orbit_royale_players_total{job=\"orbit-royale-api\"}", "legendFormat": "Total", "refId": "A" }],
       "title": "Total Players",
       "type": "stat"
     },
     {
-      "datasource": { "type": "prometheus", "uid": "PBFA97CFB590B2093" },
+      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
       "fieldConfig": {
         "defaults": {
           "color": { "mode": "thresholds" },
-          "mappings": [],
-          "thresholds": {
-            "mode": "absolute",
-            "steps": [
-              { "color": "blue", "value": null }
-            ]
-          }
-        },
-        "overrides": []
+          "thresholds": { "mode": "absolute", "steps": [{ "color": "blue", "value": null }] }
+        }
       },
       "gridPos": { "h": 4, "w": 4, "x": 4, "y": 1 },
       "id": 2,
       "options": {
         "colorMode": "value",
         "graphMode": "area",
-        "justifyMode": "auto",
-        "orientation": "auto",
-        "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false },
-        "textMode": "auto"
+        "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false }
       },
-      "targets": [
-        {
-          "expr": "orbit_royale_players_human",
-          "legendFormat": "Human",
-          "refId": "A"
-        }
-      ],
+      "targets": [{ "expr": "orbit_royale_players_human{job=\"orbit-royale-api\"}", "legendFormat": "Human", "refId": "A" }],
       "title": "Human Players",
       "type": "stat"
     },
     {
-      "datasource": { "type": "prometheus", "uid": "PBFA97CFB590B2093" },
+      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
       "fieldConfig": {
         "defaults": {
           "color": { "mode": "thresholds" },
-          "mappings": [],
-          "thresholds": {
-            "mode": "absolute",
-            "steps": [
-              { "color": "orange", "value": null }
-            ]
-          }
-        },
-        "overrides": []
+          "thresholds": { "mode": "absolute", "steps": [{ "color": "orange", "value": null }] }
+        }
       },
       "gridPos": { "h": 4, "w": 4, "x": 8, "y": 1 },
       "id": 3,
       "options": {
         "colorMode": "value",
         "graphMode": "area",
-        "justifyMode": "auto",
-        "orientation": "auto",
-        "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false },
-        "textMode": "auto"
+        "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false }
       },
-      "targets": [
-        {
-          "expr": "orbit_royale_players_bot",
-          "legendFormat": "Bots",
-          "refId": "A"
-        }
-      ],
+      "targets": [{ "expr": "orbit_royale_players_bot{job=\"orbit-royale-api\"}", "legendFormat": "Bots", "refId": "A" }],
       "title": "Bot Players",
       "type": "stat"
     },
     {
-      "datasource": { "type": "prometheus", "uid": "PBFA97CFB590B2093" },
+      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
       "fieldConfig": {
         "defaults": {
           "color": { "mode": "thresholds" },
-          "mappings": [],
-          "thresholds": {
-            "mode": "absolute",
-            "steps": [
-              { "color": "green", "value": null }
-            ]
-          }
-        },
-        "overrides": []
+          "thresholds": { "mode": "absolute", "steps": [{ "color": "green", "value": null }] }
+        }
       },
       "gridPos": { "h": 4, "w": 4, "x": 12, "y": 1 },
       "id": 4,
       "options": {
         "colorMode": "value",
         "graphMode": "area",
-        "justifyMode": "auto",
-        "orientation": "auto",
-        "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false },
-        "textMode": "auto"
+        "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false }
       },
-      "targets": [
-        {
-          "expr": "orbit_royale_players_alive",
-          "legendFormat": "Alive",
-          "refId": "A"
-        }
-      ],
+      "targets": [{ "expr": "orbit_royale_players_alive{job=\"orbit-royale-api\"}", "legendFormat": "Alive", "refId": "A" }],
       "title": "Alive Players",
       "type": "stat"
     },
     {
-      "datasource": { "type": "prometheus", "uid": "PBFA97CFB590B2093" },
+      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
       "fieldConfig": {
         "defaults": {
           "color": { "mode": "thresholds" },
@@ -173,72 +110,37 @@
             { "options": { "3": { "color": "orange", "index": 3, "text": "Critical" } }, "type": "value" },
             { "options": { "4": { "color": "red", "index": 4, "text": "Catastrophic" } }, "type": "value" }
           ],
-          "thresholds": {
-            "mode": "absolute",
-            "steps": [
-              { "color": "green", "value": null },
-              { "color": "yellow", "value": 2 },
-              { "color": "red", "value": 3 }
-            ]
-          }
-        },
-        "overrides": []
+          "thresholds": { "mode": "absolute", "steps": [{ "color": "green", "value": null }, { "color": "yellow", "value": 2 }, { "color": "red", "value": 3 }] }
+        }
       },
       "gridPos": { "h": 4, "w": 4, "x": 16, "y": 1 },
       "id": 5,
       "options": {
         "colorMode": "background",
         "graphMode": "none",
-        "justifyMode": "auto",
-        "orientation": "auto",
-        "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false },
-        "textMode": "auto"
+        "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false }
       },
-      "targets": [
-        {
-          "expr": "orbit_royale_performance_status",
-          "legendFormat": "Status",
-          "refId": "A"
-        }
-      ],
+      "targets": [{ "expr": "orbit_royale_performance_status{job=\"orbit-royale-api\"}", "legendFormat": "Status", "refId": "A" }],
       "title": "Performance Status",
       "type": "stat"
     },
     {
-      "datasource": { "type": "prometheus", "uid": "PBFA97CFB590B2093" },
+      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
       "fieldConfig": {
         "defaults": {
           "color": { "mode": "thresholds" },
-          "mappings": [],
-          "thresholds": {
-            "mode": "absolute",
-            "steps": [
-              { "color": "green", "value": null },
-              { "color": "yellow", "value": 80 },
-              { "color": "red", "value": 100 }
-            ]
-          },
+          "thresholds": { "mode": "absolute", "steps": [{ "color": "green", "value": null }, { "color": "yellow", "value": 80 }, { "color": "red", "value": 100 }] },
           "unit": "percent"
-        },
-        "overrides": []
+        }
       },
       "gridPos": { "h": 4, "w": 4, "x": 20, "y": 1 },
       "id": 6,
       "options": {
         "colorMode": "value",
         "graphMode": "area",
-        "justifyMode": "auto",
-        "orientation": "auto",
-        "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false },
-        "textMode": "auto"
+        "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false }
       },
-      "targets": [
-        {
-          "expr": "orbit_royale_budget_usage_percent",
-          "legendFormat": "Budget",
-          "refId": "A"
-        }
-      ],
+      "targets": [{ "expr": "orbit_royale_budget_usage_percent{job=\"orbit-royale-api\"}", "legendFormat": "Budget", "refId": "A" }],
       "title": "Tick Budget Usage",
       "type": "stat"
     },
@@ -251,42 +153,25 @@
       "type": "row"
     },
     {
-      "datasource": { "type": "prometheus", "uid": "PBFA97CFB590B2093" },
+      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
       "fieldConfig": {
         "defaults": {
           "color": { "mode": "palette-classic" },
           "custom": {
             "axisBorderShow": false,
-            "axisCenteredZero": false,
-            "axisColorMode": "text",
             "axisLabel": "",
             "axisPlacement": "auto",
-            "barAlignment": 0,
             "drawStyle": "line",
             "fillOpacity": 20,
             "gradientMode": "opacity",
-            "hideFrom": { "legend": false, "tooltip": false, "viz": false },
-            "insertNulls": false,
             "lineInterpolation": "smooth",
             "lineWidth": 2,
-            "pointSize": 5,
-            "scaleDistribution": { "type": "linear" },
             "showPoints": "never",
-            "spanNulls": false,
-            "stacking": { "group": "A", "mode": "none" },
             "thresholdsStyle": { "mode": "line+area" }
           },
-          "mappings": [],
-          "thresholds": {
-            "mode": "absolute",
-            "steps": [
-              { "color": "transparent", "value": null },
-              { "color": "red", "value": 33333 }
-            ]
-          },
-          "unit": "µs"
-        },
-        "overrides": []
+          "thresholds": { "mode": "absolute", "steps": [{ "color": "transparent", "value": null }, { "color": "red", "value": 33.3 }] },
+          "unit": "ms"
+        }
       },
       "gridPos": { "h": 8, "w": 12, "x": 0, "y": 6 },
       "id": 10,
@@ -295,61 +180,32 @@
         "tooltip": { "mode": "multi", "sort": "desc" }
       },
       "targets": [
-        {
-          "expr": "orbit_royale_tick_time_microseconds",
-          "legendFormat": "Current",
-          "refId": "A"
-        },
-        {
-          "expr": "orbit_royale_tick_time_p95_microseconds",
-          "legendFormat": "P95",
-          "refId": "B"
-        },
-        {
-          "expr": "orbit_royale_tick_time_p99_microseconds",
-          "legendFormat": "P99",
-          "refId": "C"
-        },
-        {
-          "expr": "orbit_royale_tick_time_max_microseconds",
-          "legendFormat": "Max",
-          "refId": "D"
-        }
+        { "expr": "orbit_royale_tick_time_microseconds{job=\"orbit-royale-api\"} / 1000", "legendFormat": "Current", "refId": "A" },
+        { "expr": "orbit_royale_tick_time_p95_microseconds{job=\"orbit-royale-api\"} / 1000", "legendFormat": "P95", "refId": "B" },
+        { "expr": "orbit_royale_tick_time_p99_microseconds{job=\"orbit-royale-api\"} / 1000", "legendFormat": "P99", "refId": "C" },
+        { "expr": "orbit_royale_tick_time_max_microseconds{job=\"orbit-royale-api\"} / 1000", "legendFormat": "Max", "refId": "D" }
       ],
       "title": "Tick Timing (target: 33.3ms = 30 TPS)",
       "type": "timeseries"
     },
     {
-      "datasource": { "type": "prometheus", "uid": "PBFA97CFB590B2093" },
+      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
       "fieldConfig": {
         "defaults": {
           "color": { "mode": "palette-classic" },
           "custom": {
             "axisBorderShow": false,
-            "axisCenteredZero": false,
-            "axisColorMode": "text",
             "axisLabel": "",
             "axisPlacement": "auto",
-            "barAlignment": 0,
             "drawStyle": "line",
             "fillOpacity": 10,
-            "gradientMode": "none",
-            "hideFrom": { "legend": false, "tooltip": false, "viz": false },
-            "insertNulls": false,
             "lineInterpolation": "smooth",
             "lineWidth": 2,
-            "pointSize": 5,
-            "scaleDistribution": { "type": "linear" },
-            "showPoints": "never",
-            "spanNulls": false,
-            "stacking": { "group": "A", "mode": "none" },
-            "thresholdsStyle": { "mode": "off" }
+            "showPoints": "never"
           },
-          "mappings": [],
           "thresholds": { "mode": "absolute", "steps": [{ "color": "green", "value": null }] },
           "unit": "ops"
-        },
-        "overrides": []
+        }
       },
       "gridPos": { "h": 8, "w": 12, "x": 12, "y": 6 },
       "id": 11,
@@ -357,13 +213,7 @@
         "legend": { "calcs": ["mean", "lastNotNull"], "displayMode": "table", "placement": "bottom", "showLegend": true },
         "tooltip": { "mode": "multi", "sort": "desc" }
       },
-      "targets": [
-        {
-          "expr": "rate(orbit_royale_tick_count[1m])",
-          "legendFormat": "Ticks/sec",
-          "refId": "A"
-        }
-      ],
+      "targets": [{ "expr": "rate(orbit_royale_tick_count{job=\"orbit-royale-api\"}[30s])", "legendFormat": "Ticks/sec", "refId": "A" }],
       "title": "Tick Rate (target: 30 TPS)",
       "type": "timeseries"
     },
@@ -376,36 +226,21 @@
       "type": "row"
     },
     {
-      "datasource": { "type": "prometheus", "uid": "PBFA97CFB590B2093" },
+      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
       "fieldConfig": {
         "defaults": {
           "color": { "mode": "palette-classic" },
           "custom": {
             "axisBorderShow": false,
-            "axisCenteredZero": false,
-            "axisColorMode": "text",
-            "axisLabel": "",
-            "axisPlacement": "auto",
-            "barAlignment": 0,
             "drawStyle": "line",
             "fillOpacity": 20,
             "gradientMode": "opacity",
-            "hideFrom": { "legend": false, "tooltip": false, "viz": false },
-            "insertNulls": false,
             "lineInterpolation": "smooth",
             "lineWidth": 2,
-            "pointSize": 5,
-            "scaleDistribution": { "type": "linear" },
-            "showPoints": "never",
-            "spanNulls": false,
-            "stacking": { "group": "A", "mode": "none" },
-            "thresholdsStyle": { "mode": "off" }
+            "showPoints": "never"
           },
-          "mappings": [],
-          "thresholds": { "mode": "absolute", "steps": [{ "color": "green", "value": null }] },
-          "unit": "none"
-        },
-        "overrides": []
+          "thresholds": { "mode": "absolute", "steps": [{ "color": "green", "value": null }] }
+        }
       },
       "gridPos": { "h": 6, "w": 8, "x": 0, "y": 15 },
       "id": 20,
@@ -413,47 +248,26 @@
         "legend": { "calcs": ["lastNotNull"], "displayMode": "list", "placement": "bottom", "showLegend": true },
         "tooltip": { "mode": "multi", "sort": "none" }
       },
-      "targets": [
-        {
-          "expr": "orbit_royale_connections_active",
-          "legendFormat": "Active Connections",
-          "refId": "A"
-        }
-      ],
+      "targets": [{ "expr": "orbit_royale_connections_active{job=\"orbit-royale-api\"}", "legendFormat": "Active Connections", "refId": "A" }],
       "title": "Active Connections",
       "type": "timeseries"
     },
     {
-      "datasource": { "type": "prometheus", "uid": "PBFA97CFB590B2093" },
+      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
       "fieldConfig": {
         "defaults": {
           "color": { "mode": "palette-classic" },
           "custom": {
             "axisBorderShow": false,
-            "axisCenteredZero": false,
-            "axisColorMode": "text",
-            "axisLabel": "",
-            "axisPlacement": "auto",
-            "barAlignment": 0,
             "drawStyle": "line",
             "fillOpacity": 10,
-            "gradientMode": "none",
-            "hideFrom": { "legend": false, "tooltip": false, "viz": false },
-            "insertNulls": false,
             "lineInterpolation": "smooth",
             "lineWidth": 2,
-            "pointSize": 5,
-            "scaleDistribution": { "type": "linear" },
-            "showPoints": "never",
-            "spanNulls": false,
-            "stacking": { "group": "A", "mode": "none" },
-            "thresholdsStyle": { "mode": "off" }
+            "showPoints": "never"
           },
-          "mappings": [],
           "thresholds": { "mode": "absolute", "steps": [{ "color": "green", "value": null }] },
           "unit": "pps"
-        },
-        "overrides": []
+        }
       },
       "gridPos": { "h": 6, "w": 8, "x": 8, "y": 15 },
       "id": 21,
@@ -462,51 +276,28 @@
         "tooltip": { "mode": "multi", "sort": "desc" }
       },
       "targets": [
-        {
-          "expr": "rate(orbit_royale_messages_sent_total[1m])",
-          "legendFormat": "Sent",
-          "refId": "A"
-        },
-        {
-          "expr": "rate(orbit_royale_messages_received_total[1m])",
-          "legendFormat": "Received",
-          "refId": "B"
-        }
+        { "expr": "rate(orbit_royale_messages_sent_total{job=\"orbit-royale-api\"}[30s])", "legendFormat": "Sent", "refId": "A" },
+        { "expr": "rate(orbit_royale_messages_received_total{job=\"orbit-royale-api\"}[30s])", "legendFormat": "Received", "refId": "B" }
       ],
       "title": "Message Rate",
       "type": "timeseries"
     },
     {
-      "datasource": { "type": "prometheus", "uid": "PBFA97CFB590B2093" },
+      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
       "fieldConfig": {
         "defaults": {
           "color": { "mode": "palette-classic" },
           "custom": {
             "axisBorderShow": false,
-            "axisCenteredZero": false,
-            "axisColorMode": "text",
-            "axisLabel": "",
-            "axisPlacement": "auto",
-            "barAlignment": 0,
             "drawStyle": "line",
             "fillOpacity": 10,
-            "gradientMode": "none",
-            "hideFrom": { "legend": false, "tooltip": false, "viz": false },
-            "insertNulls": false,
             "lineInterpolation": "smooth",
             "lineWidth": 2,
-            "pointSize": 5,
-            "scaleDistribution": { "type": "linear" },
-            "showPoints": "never",
-            "spanNulls": false,
-            "stacking": { "group": "A", "mode": "none" },
-            "thresholdsStyle": { "mode": "off" }
+            "showPoints": "never"
           },
-          "mappings": [],
           "thresholds": { "mode": "absolute", "steps": [{ "color": "green", "value": null }] },
           "unit": "Bps"
-        },
-        "overrides": []
+        }
       },
       "gridPos": { "h": 6, "w": 8, "x": 16, "y": 15 },
       "id": 22,
@@ -515,16 +306,8 @@
         "tooltip": { "mode": "multi", "sort": "desc" }
       },
       "targets": [
-        {
-          "expr": "rate(orbit_royale_bytes_sent_total[1m])",
-          "legendFormat": "Sent",
-          "refId": "A"
-        },
-        {
-          "expr": "rate(orbit_royale_bytes_received_total[1m])",
-          "legendFormat": "Received",
-          "refId": "B"
-        }
+        { "expr": "rate(orbit_royale_bytes_sent_total{job=\"orbit-royale-api\"}[30s])", "legendFormat": "Sent", "refId": "A" },
+        { "expr": "rate(orbit_royale_bytes_received_total{job=\"orbit-royale-api\"}[30s])", "legendFormat": "Received", "refId": "B" }
       ],
       "title": "Bandwidth",
       "type": "timeseries"
@@ -538,45 +321,25 @@
       "type": "row"
     },
     {
-      "datasource": { "type": "prometheus", "uid": "PBFA97CFB590B2093" },
+      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
       "fieldConfig": {
         "defaults": {
           "color": { "mode": "palette-classic" },
           "custom": {
             "axisBorderShow": false,
-            "axisCenteredZero": false,
-            "axisColorMode": "text",
-            "axisLabel": "",
-            "axisPlacement": "auto",
-            "barAlignment": 0,
             "drawStyle": "line",
             "fillOpacity": 20,
             "gradientMode": "opacity",
-            "hideFrom": { "legend": false, "tooltip": false, "viz": false },
-            "insertNulls": false,
             "lineInterpolation": "smooth",
             "lineWidth": 2,
-            "pointSize": 5,
-            "scaleDistribution": { "type": "linear" },
             "showPoints": "never",
-            "spanNulls": false,
-            "stacking": { "group": "A", "mode": "none" },
             "thresholdsStyle": { "mode": "line" }
           },
-          "mappings": [],
           "max": 100,
           "min": 0,
-          "thresholds": {
-            "mode": "absolute",
-            "steps": [
-              { "color": "green", "value": null },
-              { "color": "yellow", "value": 80 },
-              { "color": "red", "value": 95 }
-            ]
-          },
+          "thresholds": { "mode": "absolute", "steps": [{ "color": "green", "value": null }, { "color": "yellow", "value": 80 }, { "color": "red", "value": 95 }] },
           "unit": "percent"
-        },
-        "overrides": []
+        }
       },
       "gridPos": { "h": 8, "w": 12, "x": 0, "y": 22 },
       "id": 30,
@@ -584,47 +347,27 @@
         "legend": { "calcs": ["mean", "max"], "displayMode": "table", "placement": "bottom", "showLegend": true },
         "tooltip": { "mode": "multi", "sort": "desc" }
       },
-      "targets": [
-        {
-          "expr": "rate(container_cpu_usage_seconds_total{name=~\"orbit-.*\"}[1m]) * 100",
-          "legendFormat": "{{name}}",
-          "refId": "A"
-        }
-      ],
+      "targets": [{ "expr": "sum by (name) (rate(container_cpu_usage_seconds_total{job=\"cadvisor\", id=~\"/docker/.*\"}[1m])) * 100", "legendFormat": "{{name}}", "refId": "A" }],
       "title": "Container CPU Usage %",
       "type": "timeseries"
     },
     {
-      "datasource": { "type": "prometheus", "uid": "PBFA97CFB590B2093" },
+      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
       "fieldConfig": {
         "defaults": {
           "color": { "mode": "palette-classic" },
           "custom": {
             "axisBorderShow": false,
-            "axisCenteredZero": false,
-            "axisColorMode": "text",
-            "axisLabel": "",
-            "axisPlacement": "auto",
-            "barAlignment": 0,
             "drawStyle": "line",
             "fillOpacity": 20,
             "gradientMode": "opacity",
-            "hideFrom": { "legend": false, "tooltip": false, "viz": false },
-            "insertNulls": false,
             "lineInterpolation": "smooth",
             "lineWidth": 2,
-            "pointSize": 5,
-            "scaleDistribution": { "type": "linear" },
-            "showPoints": "never",
-            "spanNulls": false,
-            "stacking": { "group": "A", "mode": "none" },
-            "thresholdsStyle": { "mode": "off" }
+            "showPoints": "never"
           },
-          "mappings": [],
           "thresholds": { "mode": "absolute", "steps": [{ "color": "green", "value": null }] },
           "unit": "bytes"
-        },
-        "overrides": []
+        }
       },
       "gridPos": { "h": 8, "w": 12, "x": 12, "y": 22 },
       "id": 31,
@@ -632,13 +375,7 @@
         "legend": { "calcs": ["mean", "max"], "displayMode": "table", "placement": "bottom", "showLegend": true },
         "tooltip": { "mode": "multi", "sort": "desc" }
       },
-      "targets": [
-        {
-          "expr": "container_memory_usage_bytes{name=~\"orbit-.*\"}",
-          "legendFormat": "{{name}}",
-          "refId": "A"
-        }
-      ],
+      "targets": [{ "expr": "container_memory_usage_bytes{job=\"cadvisor\", id=~\"/docker/.*\"}", "legendFormat": "{{name}}", "refId": "A" }],
       "title": "Container Memory Usage",
       "type": "timeseries"
     },
@@ -651,35 +388,22 @@
       "type": "row"
     },
     {
-      "datasource": { "type": "prometheus", "uid": "PBFA97CFB590B2093" },
+      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
       "fieldConfig": {
         "defaults": {
           "color": { "mode": "palette-classic" },
           "custom": {
             "axisBorderShow": false,
-            "axisCenteredZero": false,
-            "axisColorMode": "text",
-            "axisLabel": "",
-            "axisPlacement": "auto",
-            "barAlignment": 0,
             "drawStyle": "line",
             "fillOpacity": 20,
             "gradientMode": "opacity",
-            "hideFrom": { "legend": false, "tooltip": false, "viz": false },
-            "insertNulls": false,
             "lineInterpolation": "smooth",
             "lineWidth": 2,
-            "pointSize": 5,
-            "scaleDistribution": { "type": "linear" },
             "showPoints": "never",
-            "spanNulls": false,
-            "stacking": { "group": "A", "mode": "normal" },
-            "thresholdsStyle": { "mode": "off" }
+            "stacking": { "group": "A", "mode": "normal" }
           },
-          "mappings": [],
           "thresholds": { "mode": "absolute", "steps": [{ "color": "green", "value": null }] }
-        },
-        "overrides": []
+        }
       },
       "gridPos": { "h": 6, "w": 12, "x": 0, "y": 31 },
       "id": 40,
@@ -688,50 +412,27 @@
         "tooltip": { "mode": "multi", "sort": "desc" }
       },
       "targets": [
-        {
-          "expr": "orbit_royale_players_human",
-          "legendFormat": "Humans",
-          "refId": "A"
-        },
-        {
-          "expr": "orbit_royale_players_bot",
-          "legendFormat": "Bots",
-          "refId": "B"
-        }
+        { "expr": "orbit_royale_players_human{job=\"orbit-royale-api\"}", "legendFormat": "Humans", "refId": "A" },
+        { "expr": "orbit_royale_players_bot{job=\"orbit-royale-api\"}", "legendFormat": "Bots", "refId": "B" }
       ],
       "title": "Player Breakdown",
       "type": "timeseries"
     },
     {
-      "datasource": { "type": "prometheus", "uid": "PBFA97CFB590B2093" },
+      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
       "fieldConfig": {
         "defaults": {
           "color": { "mode": "palette-classic" },
           "custom": {
             "axisBorderShow": false,
-            "axisCenteredZero": false,
-            "axisColorMode": "text",
-            "axisLabel": "",
-            "axisPlacement": "auto",
-            "barAlignment": 0,
             "drawStyle": "line",
             "fillOpacity": 10,
-            "gradientMode": "none",
-            "hideFrom": { "legend": false, "tooltip": false, "viz": false },
-            "insertNulls": false,
             "lineInterpolation": "smooth",
             "lineWidth": 2,
-            "pointSize": 5,
-            "scaleDistribution": { "type": "linear" },
-            "showPoints": "never",
-            "spanNulls": false,
-            "stacking": { "group": "A", "mode": "none" },
-            "thresholdsStyle": { "mode": "off" }
+            "showPoints": "never"
           },
-          "mappings": [],
           "thresholds": { "mode": "absolute", "steps": [{ "color": "green", "value": null }] }
-        },
-        "overrides": []
+        }
       },
       "gridPos": { "h": 6, "w": 12, "x": 12, "y": 31 },
       "id": 41,
@@ -740,30 +441,206 @@
         "tooltip": { "mode": "multi", "sort": "desc" }
       },
       "targets": [
-        {
-          "expr": "orbit_royale_projectiles",
-          "legendFormat": "Projectiles",
-          "refId": "A"
-        },
-        {
-          "expr": "orbit_royale_debris",
-          "legendFormat": "Debris",
-          "refId": "B"
-        },
-        {
-          "expr": "orbit_royale_gravity_wells",
-          "legendFormat": "Gravity Wells",
-          "refId": "C"
-        }
+        { "expr": "orbit_royale_projectiles{job=\"orbit-royale-api\"}", "legendFormat": "Projectiles", "refId": "A" },
+        { "expr": "orbit_royale_debris{job=\"orbit-royale-api\"}", "legendFormat": "Debris", "refId": "B" },
+        { "expr": "orbit_royale_gravity_wells{job=\"orbit-royale-api\"}", "legendFormat": "Gravity Wells", "refId": "C" }
       ],
       "title": "Game Entities",
+      "type": "timeseries"
+    },
+    {
+      "collapsed": false,
+      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 37 },
+      "id": 105,
+      "panels": [],
+      "title": "🌍 Arena & Simulation",
+      "type": "row"
+    },
+    {
+      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "thresholds" },
+          "thresholds": { "mode": "absolute", "steps": [{ "color": "purple", "value": null }] },
+          "unit": "none"
+        }
+      },
+      "gridPos": { "h": 4, "w": 4, "x": 0, "y": 38 },
+      "id": 50,
+      "options": {
+        "colorMode": "value",
+        "graphMode": "area",
+        "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false }
+      },
+      "targets": [{ "expr": "orbit_royale_arena_radius{job=\"orbit-royale-api\"}", "legendFormat": "Radius", "refId": "A" }],
+      "title": "Arena Radius",
+      "type": "stat"
+    },
+    {
+      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "thresholds" },
+          "thresholds": { "mode": "absolute", "steps": [{ "color": "blue", "value": null }] },
+          "unit": "none"
+        }
+      },
+      "gridPos": { "h": 4, "w": 4, "x": 4, "y": 38 },
+      "id": 51,
+      "options": {
+        "colorMode": "value",
+        "graphMode": "area",
+        "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false }
+      },
+      "targets": [{ "expr": "orbit_royale_arena_gravity_wells{job=\"orbit-royale-api\"}", "legendFormat": "Wells", "refId": "A" }],
+      "title": "Gravity Wells",
+      "type": "stat"
+    },
+    {
+      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "thresholds" },
+          "mappings": [
+            { "options": { "0": { "color": "semi-dark-blue", "index": 0, "text": "OFF" } }, "type": "value" },
+            { "options": { "1": { "color": "green", "index": 1, "text": "ON" } }, "type": "value" }
+          ],
+          "thresholds": { "mode": "absolute", "steps": [{ "color": "blue", "value": null }, { "color": "green", "value": 1 }] }
+        }
+      },
+      "gridPos": { "h": 4, "w": 4, "x": 8, "y": 38 },
+      "id": 52,
+      "options": {
+        "colorMode": "background",
+        "graphMode": "none",
+        "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false }
+      },
+      "targets": [{ "expr": "orbit_royale_simulation_enabled{job=\"orbit-royale-api\"}", "legendFormat": "Simulation", "refId": "A" }],
+      "title": "Simulation Mode",
+      "type": "stat"
+    },
+    {
+      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "thresholds" },
+          "thresholds": { "mode": "absolute", "steps": [{ "color": "yellow", "value": null }] },
+          "unit": "none"
+        }
+      },
+      "gridPos": { "h": 4, "w": 4, "x": 12, "y": 38 },
+      "id": 53,
+      "options": {
+        "colorMode": "value",
+        "graphMode": "area",
+        "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false }
+      },
+      "targets": [{ "expr": "orbit_royale_simulation_target_bots{job=\"orbit-royale-api\"}", "legendFormat": "Target", "refId": "A" }],
+      "title": "Target Bots",
+      "type": "stat"
+    },
+    {
+      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "thresholds" },
+          "max": 100,
+          "min": 0,
+          "thresholds": { "mode": "absolute", "steps": [{ "color": "green", "value": null }, { "color": "yellow", "value": 50 }, { "color": "orange", "value": 75 }] },
+          "unit": "percent"
+        }
+      },
+      "gridPos": { "h": 4, "w": 4, "x": 16, "y": 38 },
+      "id": 54,
+      "options": {
+        "minVizHeight": 75,
+        "minVizWidth": 75,
+        "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false },
+        "showThresholdLabels": false,
+        "showThresholdMarkers": true
+      },
+      "targets": [{ "expr": "orbit_royale_simulation_cycle_progress{job=\"orbit-royale-api\"}", "legendFormat": "Progress", "refId": "A" }],
+      "title": "Cycle Progress",
+      "type": "gauge"
+    },
+    {
+      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "palette-classic" },
+          "custom": {
+            "axisBorderShow": false,
+            "drawStyle": "line",
+            "fillOpacity": 20,
+            "gradientMode": "opacity",
+            "lineInterpolation": "smooth",
+            "lineWidth": 2,
+            "showPoints": "never"
+          },
+          "thresholds": { "mode": "absolute", "steps": [{ "color": "green", "value": null }] }
+        }
+      },
+      "gridPos": { "h": 6, "w": 12, "x": 0, "y": 42 },
+      "id": 55,
+      "options": {
+        "legend": { "calcs": ["mean", "max"], "displayMode": "table", "placement": "bottom", "showLegend": true },
+        "tooltip": { "mode": "multi", "sort": "desc" }
+      },
+      "targets": [
+        { "expr": "orbit_royale_arena_radius{job=\"orbit-royale-api\"}", "legendFormat": "Arena Radius", "refId": "A" }
+      ],
+      "title": "Arena Radius Over Time",
+      "type": "timeseries"
+    },
+    {
+      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "palette-classic" },
+          "custom": {
+            "axisBorderShow": false,
+            "drawStyle": "line",
+            "fillOpacity": 20,
+            "gradientMode": "opacity",
+            "lineInterpolation": "smooth",
+            "lineWidth": 2,
+            "showPoints": "never"
+          },
+          "thresholds": { "mode": "absolute", "steps": [{ "color": "green", "value": null }] }
+        }
+      },
+      "gridPos": { "h": 6, "w": 12, "x": 12, "y": 42 },
+      "id": 56,
+      "options": {
+        "legend": { "calcs": ["lastNotNull"], "displayMode": "list", "placement": "bottom", "showLegend": true },
+        "tooltip": { "mode": "multi", "sort": "desc" }
+      },
+      "targets": [
+        { "expr": "orbit_royale_simulation_target_bots{job=\"orbit-royale-api\"}", "legendFormat": "Target Bots", "refId": "A" },
+        { "expr": "orbit_royale_players_bot{job=\"orbit-royale-api\"}", "legendFormat": "Actual Bots", "refId": "B" }
+      ],
+      "title": "Simulation: Target vs Actual Bots",
       "type": "timeseries"
     }
   ],
   "refresh": "2s",
   "schemaVersion": 38,
   "tags": ["orbit-royale", "game", "rust"],
-  "templating": { "list": [] },
+  "templating": {
+    "list": [
+      {
+        "current": { "selected": false, "text": "Prometheus", "value": "PBFA97CFB590B2093" },
+        "hide": 2,
+        "includeAll": false,
+        "name": "DS_PROMETHEUS",
+        "options": [],
+        "query": "prometheus",
+        "refresh": 1,
+        "regex": "",
+        "type": "datasource"
+      }
+    ]
+  },
   "time": { "from": "now-5m", "to": "now" },
   "timepicker": {
     "refresh_intervals": ["2s", "5s", "10s", "30s", "1m"],
@@ -772,6 +649,5 @@
   "timezone": "browser",
   "title": "Orbit Royale - Game Server Dashboard",
   "uid": "orbit-royale-main",
-  "version": 1,
-  "weekStart": ""
+  "version": 1
 }

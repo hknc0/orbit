@@ -1499,6 +1499,24 @@ export class RenderSystem {
     this.ctx.textAlign = 'center';
     this.ctx.fillStyle = 'rgba(148, 163, 184, 0.7)';
     this.ctx.fillText(`${aliveCount} alive`, Math.round(centerX), Math.round(minimapY - 6));
+
+    // Universe scale and zoom indicators (left of minimap)
+    const indicatorX = minimapX - 8;
+    const indicatorY = minimapY + minimapSize / 2;
+
+    this.ctx.textAlign = 'right';
+    this.ctx.font = '9px Inter, system-ui, sans-serif';
+
+    // Universe scale (arena radius)
+    const arenaRadius = Math.round(safeRadius);
+    const arenaKm = (arenaRadius / 1000).toFixed(1);
+    this.ctx.fillStyle = 'rgba(139, 92, 246, 0.8)'; // Purple
+    this.ctx.fillText(`⬡ ${arenaKm}km`, indicatorX, indicatorY - 8);
+
+    // Zoom level
+    const zoomPercent = Math.round(this.currentZoom * 100);
+    this.ctx.fillStyle = 'rgba(96, 165, 250, 0.8)'; // Blue
+    this.ctx.fillText(`◎ ${zoomPercent}%`, indicatorX, indicatorY + 8);
   }
 
   // Enhanced panel with gradient background and optional corner accents

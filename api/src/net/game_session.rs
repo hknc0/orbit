@@ -17,6 +17,67 @@ use crate::metrics::Metrics;
 use crate::net::aoi::{AOIConfig, AOIManager};
 use crate::net::protocol::{encode, GameSnapshot, PlayerInput, ServerMessage};
 
+/// Simulation mode configuration for load testing
+/// Scales bots up and down over time in a sinusoidal pattern
+#[derive(Debug, Clone)]
+pub struct SimulationConfig {
+    /// Whether simulation mode is enabled
+    pub enabled: bool,
+    /// Minimum number of bots
+    pub min_bots: usize,
+    /// Maximum number of bots
+    pub max_bots: usize,
+    /// Duration of one full cycle (min → max → min) in seconds
+    pub cycle_duration_secs: f32,
+}
+
+impl SimulationConfig {
+    /// Load simulation config from environment variables
+    pub fn from_env() -> Self {
+        let enabled = std::env::var("SIMULATION_MODE")
+            .map(|s| s.to_lowercase() == "true" || s == "1")
+            .unwrap_or(false);
+
+        let min_bots = std::env::var("SIMULATION_MIN_BOTS")
+            .ok()
+            .and_then(|s| s.parse().ok())
+            .unwrap_or(5);
+
+        let max_bots = std::env::var("SIMULATION_MAX_BOTS")
+            .ok()
+            .and_then(|s| s.parse().ok())
+            .unwrap_or(100);
+
+        let cycle_minutes: f32 = std::env::var("SIMULATION_CYCLE_MINUTES")
+            .ok()
+            .and_then(|s| s.parse().ok())
+            .unwrap_or(5.0);
+
+        Self {
+            enabled,
+            min_bots,
+            max_bots,
+            cycle_duration_secs: cycle_minutes * 60.0,
+        }
+    }
+
+    /// Calculate target bot count based on elapsed time
+    /// Uses sinusoidal wave: starts at min, goes to max at half cycle, back to min
+    pub fn target_bots(&self, elapsed_secs: f32) -> usize {
+        if !self.enabled {
+            return self.max_bots;
+        }
+
+        // Use cosine for smooth min→max→min cycle
+        // cos(0) = 1 (min), cos(π) = -1 (max), cos(2π) = 1 (min)
+        let phase = (elapsed_secs / self.cycle_duration_secs) * std::f32::consts::TAU;
+        let normalized = (1.0 - phase.cos()) / 2.0; // 0.0 at start, 1.0 at half, 0.0 at end
+
+        let range = self.max_bots - self.min_bots;
+        self.min_bots + (normalized * range as f32) as usize
+    }
+}
+
 /// A connected player's stream writer for sending messages
 pub struct PlayerConnection {
     pub player_id: PlayerId,
@@ -33,6 +94,12 @@ pub struct GameSession {
     pub metrics: Option<Arc<Metrics>>,
     last_snapshot_tick: u64,
     bot_count: usize,
+    /// Simulation mode configuration
+    simulation_config: SimulationConfig,
+    /// When the session started (for simulation timing)
+    session_start: std::time::Instant,
+    /// Last tick when simulation target was updated (rate limiting)
+    last_simulation_update_tick: u64,
 }
 
 impl GameSession {
@@ -47,13 +114,28 @@ impl GameSession {
     }
 
     fn new_with_metrics_opt(metrics: Option<Arc<Metrics>>) -> Self {
-        // Read bot count from environment, default to ai::COUNT
-        let bot_count = std::env::var("BOT_COUNT")
-            .ok()
-            .and_then(|s| s.parse().ok())
-            .unwrap_or(ai::COUNT);
+        // Load simulation config from environment
+        let simulation_config = SimulationConfig::from_env();
 
-        info!("Bot count set to {}", bot_count);
+        // Determine initial bot count
+        let bot_count = if simulation_config.enabled {
+            // In simulation mode, start at minimum
+            info!(
+                "Simulation mode ENABLED: {} → {} bots over {} minutes",
+                simulation_config.min_bots,
+                simulation_config.max_bots,
+                simulation_config.cycle_duration_secs / 60.0
+            );
+            simulation_config.min_bots
+        } else {
+            // Normal mode: read from BOT_COUNT env or default
+            let count = std::env::var("BOT_COUNT")
+                .ok()
+                .and_then(|s| s.parse().ok())
+                .unwrap_or(ai::COUNT);
+            info!("Bot count set to {}", count);
+            count
+        };
 
         let mut game_loop = GameLoop::new(GameLoopConfig::default());
 
@@ -108,6 +190,9 @@ impl GameSession {
             metrics,
             last_snapshot_tick: 0,
             bot_count,
+            simulation_config,
+            session_start: std::time::Instant::now(),
+            last_simulation_update_tick: 0,
         }
     }
 
@@ -175,21 +260,15 @@ impl GameSession {
         self.update_arena_scale();
     }
 
-    /// Update arena scale and gravity wells based on player count and performance
+    /// Update arena scale and gravity wells based on player count
+    /// Uses smooth scaling to avoid regenerating all wells and causing chaos
     fn update_arena_scale(&mut self) {
         let player_count = self.game_loop.state().players.len();
-
-        // Dynamic well limit based on performance headroom
-        // If using 80% of budget, only allow 20% more wells than current
-        // This scales smoothly with actual measured performance
-        let max_wells = self.performance.calculate_entity_budget(
-            self.game_loop.state().arena.gravity_wells.len()
-        );
-
+        // Use smooth scaling that only adds wells incrementally (never removes/moves existing)
         self.game_loop
             .state_mut()
             .arena
-            .update_for_player_count_with_limit(player_count, max_wells);
+            .scale_for_simulation(player_count);
     }
 
     /// Queue input for a player
@@ -208,6 +287,9 @@ impl GameSession {
         // Respawn dead players (humans always, bots only if performance allows)
         self.respawn_dead_players();
 
+        // Update simulation bot target if in simulation mode
+        self.update_simulation_bot_count();
+
         // Performance-based bot management
         // Only forcibly remove bots in catastrophic situations (>150% budget)
         // Otherwise, let natural attrition handle it by not respawning dead bots
@@ -215,10 +297,17 @@ impl GameSession {
             // Catastrophic: remove one bot per tick to reduce load
             self.remove_one_bot();
         } else if self.performance.can_add_bots() {
-            // Excellent/Good: maintain target bot count
+            // Excellent/Good: maintain target bot count (spawns bots up to target)
             self.maintain_player_count();
+            // In simulation mode, also clean up dead bots if we're over target
+            if self.simulation_config.enabled {
+                self.scale_down_bots_if_needed();
+            }
+        } else if self.simulation_config.enabled {
+            // In simulation mode during Warning/Critical: still scale down if target is lower
+            self.scale_down_bots_if_needed();
         }
-        // Warning/Critical: do nothing - bots that die won't respawn, natural reduction
+        // Warning/Critical (non-simulation): do nothing - bots that die won't respawn, natural reduction
 
         // Keep game running forever - reset phase to Playing if it ended
         // This is an eternal game mode with no match end
@@ -280,9 +369,30 @@ impl GameSession {
                 (state.arena.scale * 100.0) as u64,
                 Ordering::Relaxed,
             );
+            metrics.arena_radius.store(
+                state.arena.escape_radius as u64,
+                Ordering::Relaxed,
+            );
+            metrics.arena_gravity_wells.store(
+                state.arena.gravity_wells.len() as u64,
+                Ordering::Relaxed,
+            );
 
             // Network (connection count)
             metrics.connections_active.store(self.players.len() as u64, Ordering::Relaxed);
+
+            // Simulation metrics
+            metrics.simulation_enabled.store(
+                if self.simulation_config.enabled { 1 } else { 0 },
+                Ordering::Relaxed,
+            );
+            if self.simulation_config.enabled {
+                metrics.simulation_target_bots.store(self.bot_count as u64, Ordering::Relaxed);
+                let elapsed = self.session_start.elapsed().as_secs_f32();
+                let cycle_progress = ((elapsed % self.simulation_config.cycle_duration_secs)
+                    / self.simulation_config.cycle_duration_secs * 100.0) as u64;
+                metrics.simulation_cycle_progress.store(cycle_progress, Ordering::Relaxed);
+            }
         }
 
         events
@@ -303,6 +413,81 @@ impl GameSession {
         if let Some(bot_id) = bot_to_remove {
             self.game_loop.remove_player(bot_id);
             debug!("Removed bot {} due to performance pressure", bot_id);
+        }
+    }
+
+    /// Update bot count target based on simulation mode timing
+    /// Rate-limited to once per second to prevent chaos
+    fn update_simulation_bot_count(&mut self) {
+        if !self.simulation_config.enabled {
+            return;
+        }
+
+        let current_tick = self.game_loop.state().tick;
+
+        // Rate limit: only update target once per second (every 30 ticks at 30 TPS)
+        if current_tick < self.last_simulation_update_tick + 30 {
+            return;
+        }
+        self.last_simulation_update_tick = current_tick;
+
+        let elapsed = self.session_start.elapsed().as_secs_f32();
+        let target = self.simulation_config.target_bots(elapsed);
+
+        // Only update if target changed significantly (±2 bots to reduce noise)
+        if (target as i32 - self.bot_count as i32).abs() >= 2 {
+            let old_target = self.bot_count;
+            self.bot_count = target;
+
+            info!(
+                "Simulation: bot target {} → {} (elapsed: {:.1}s, cycle {:.1}%)",
+                old_target,
+                target,
+                elapsed,
+                (elapsed % self.simulation_config.cycle_duration_secs)
+                    / self.simulation_config.cycle_duration_secs
+                    * 100.0
+            );
+        }
+
+        // Smoothly scale arena for current target (runs every update for smooth lerping)
+        // This adjusts radii smoothly and adds wells incrementally without chaos
+        self.game_loop
+            .state_mut()
+            .arena
+            .scale_for_simulation(self.bot_count);
+    }
+
+    /// Scale down bots if current count exceeds target (used during simulation scale-down phase)
+    /// ONLY removes dead bots - never kills alive bots to prevent flickering
+    fn scale_down_bots_if_needed(&mut self) {
+        let current_bot_count = self
+            .game_loop
+            .state()
+            .players
+            .values()
+            .filter(|p| p.is_bot)
+            .count();
+
+        // Only scale down if we have excess bots
+        if current_bot_count <= self.bot_count {
+            return;
+        }
+
+        // Find DEAD bots to remove (never remove alive bots during simulation)
+        let dead_bots: Vec<_> = self
+            .game_loop
+            .state()
+            .players
+            .values()
+            .filter(|p| p.is_bot && !p.alive)
+            .map(|p| p.id)
+            .take(2) // Remove max 2 dead bots per tick
+            .collect();
+
+        for bot_id in dead_bots {
+            self.game_loop.remove_player(bot_id);
+            debug!("Simulation scale-down: removed dead bot {}", bot_id);
         }
     }
 
@@ -423,17 +608,16 @@ impl GameSession {
     }
 
     /// Maintain minimum player count with bots
-    /// Spawns bots gradually (a few per tick) rather than all at once
+    /// Spawns bots ONE at a time (like humans) so arena scales naturally
     fn maintain_player_count(&mut self) {
         let current_count = self.game_loop.state().players.len();
         let target = self.bot_count;
 
-        // Only add bots if we're below target
+        // Only add ONE bot per tick to simulate natural human join behavior
+        // Arena scaling is handled by update_simulation_bot_count (once per second)
+        // to avoid constant small updates that cause visual pulsing
         if current_count < target {
-            // Add bots gradually - max 5 per tick for smoother distribution
-            let bots_needed = (target - current_count).min(5);
-            let new_target = current_count + bots_needed;
-            self.game_loop.fill_with_bots(new_target);
+            self.game_loop.fill_with_bots(current_count + 1);
         }
     }
 }
@@ -574,6 +758,102 @@ pub async fn send_to_player(
     }
 }
 
+#[cfg(test)]
+mod simulation_tests {
+    use super::*;
+
+    #[test]
+    fn test_simulation_config_default() {
+        // Without env vars, should be disabled
+        let config = SimulationConfig {
+            enabled: false,
+            min_bots: 5,
+            max_bots: 100,
+            cycle_duration_secs: 300.0,
+        };
+        assert!(!config.enabled);
+    }
+
+    #[test]
+    fn test_target_bots_disabled() {
+        let config = SimulationConfig {
+            enabled: false,
+            min_bots: 5,
+            max_bots: 100,
+            cycle_duration_secs: 300.0,
+        };
+        // When disabled, always returns max
+        assert_eq!(config.target_bots(0.0), 100);
+        assert_eq!(config.target_bots(150.0), 100);
+    }
+
+    #[test]
+    fn test_target_bots_at_start() {
+        let config = SimulationConfig {
+            enabled: true,
+            min_bots: 10,
+            max_bots: 100,
+            cycle_duration_secs: 300.0, // 5 minutes
+        };
+        // At t=0, should be at minimum (cosine starts at 1, normalized to 0)
+        assert_eq!(config.target_bots(0.0), 10);
+    }
+
+    #[test]
+    fn test_target_bots_at_half_cycle() {
+        let config = SimulationConfig {
+            enabled: true,
+            min_bots: 10,
+            max_bots: 100,
+            cycle_duration_secs: 300.0,
+        };
+        // At half cycle (150s), should be at maximum
+        let target = config.target_bots(150.0);
+        assert_eq!(target, 100);
+    }
+
+    #[test]
+    fn test_target_bots_at_full_cycle() {
+        let config = SimulationConfig {
+            enabled: true,
+            min_bots: 10,
+            max_bots: 100,
+            cycle_duration_secs: 300.0,
+        };
+        // At full cycle (300s), should be back at minimum
+        assert_eq!(config.target_bots(300.0), 10);
+    }
+
+    #[test]
+    fn test_target_bots_quarter_cycle() {
+        let config = SimulationConfig {
+            enabled: true,
+            min_bots: 0,
+            max_bots: 100,
+            cycle_duration_secs: 300.0,
+        };
+        // At quarter cycle (75s), should be around 50 (halfway up)
+        let target = config.target_bots(75.0);
+        assert!(target >= 45 && target <= 55, "Expected ~50, got {}", target);
+    }
+
+    #[test]
+    fn test_target_bots_wraps_around() {
+        let config = SimulationConfig {
+            enabled: true,
+            min_bots: 10,
+            max_bots: 100,
+            cycle_duration_secs: 300.0,
+        };
+        // After one full cycle, pattern should repeat
+        let t0 = config.target_bots(0.0);
+        let t300 = config.target_bots(300.0);
+        let t600 = config.target_bots(600.0);
+        assert_eq!(t0, t300);
+        assert_eq!(t0, t600);
+    }
+}
+
 /// Sanitize player state to prevent NaN/Infinity corruption
 fn sanitize_game_state(session: &mut GameSession) {
     for player in session.game_loop.state_mut().players.values_mut() {
@@ -665,16 +945,35 @@ pub fn start_game_loop(session: Arc<RwLock<GameSession>>) {
                 let well_count = session_guard.game_loop.state().arena.gravity_wells.len();
                 let perf_status = session_guard.performance.status();
                 let perf_budget = session_guard.performance.budget_usage_percent();
-                info!(
-                    "Game: {}s, tick {}, {} humans + {} bots, {} wells | Perf: {:?} ({:.1}%)",
-                    elapsed,
-                    session_guard.game_loop.state().tick,
-                    human_count,
-                    bot_count,
-                    well_count,
-                    perf_status,
-                    perf_budget
-                );
+
+                if session_guard.simulation_config.enabled {
+                    let target = session_guard.bot_count;
+                    let cycle_progress = (elapsed as f32 % session_guard.simulation_config.cycle_duration_secs)
+                        / session_guard.simulation_config.cycle_duration_secs * 100.0;
+                    info!(
+                        "Game: {}s, tick {}, {} humans + {}/{} bots, {} wells | Perf: {:?} ({:.1}%) | Sim: {:.1}% cycle",
+                        elapsed,
+                        session_guard.game_loop.state().tick,
+                        human_count,
+                        bot_count,
+                        target,
+                        well_count,
+                        perf_status,
+                        perf_budget,
+                        cycle_progress
+                    );
+                } else {
+                    info!(
+                        "Game: {}s, tick {}, {} humans + {} bots, {} wells | Perf: {:?} ({:.1}%)",
+                        elapsed,
+                        session_guard.game_loop.state().tick,
+                        human_count,
+                        bot_count,
+                        well_count,
+                        perf_status,
+                        perf_budget
+                    );
+                }
             }
         }
     });

@@ -191,6 +191,10 @@ pub struct Arena {
     /// Multiple gravity wells
     #[serde(default)]
     pub gravity_wells: Vec<GravityWell>,
+    /// Shrink delay counter - arena only shrinks after this reaches 0
+    /// Prevents sudden shrinking when players leave temporarily
+    #[serde(default)]
+    pub shrink_delay_ticks: u32,
 }
 
 fn default_scale() -> f32 { 1.0 }
@@ -210,6 +214,7 @@ impl Default for Arena {
             time_until_collapse: arena::COLLAPSE_INTERVAL,
             scale: 1.0,
             gravity_wells: vec![GravityWell::new(Vec2::ZERO, CENTRAL_MASS, arena::CORE_RADIUS)],
+            shrink_delay_ticks: 0,
         }
     }
 }
@@ -325,6 +330,109 @@ impl Arena {
                 }
 
                 // Track best attempt in case we can't find ideal position
+                if min_dist > best_min_dist || attempt == 0 {
+                    best_min_dist = min_dist;
+                    best_pos = candidate;
+                }
+            }
+
+            self.gravity_wells.push(GravityWell::new(best_pos, well_mass, well_core));
+        }
+    }
+
+    /// Smoothly scale arena based on player count
+    /// - GROW: Fast and immediate (players need space)
+    /// - SHRINK: Delayed (5 seconds) and slow (don't trap players)
+    pub fn scale_for_simulation(&mut self, target_player_count: usize) {
+        // Shrink delay: 5 seconds at 1 update/second = 5 ticks
+        const SHRINK_DELAY_TICKS: u32 = 5;
+        // Minimum arena size (never shrink below this)
+        const MIN_ESCAPE_RADIUS: f32 = 2000.0;
+
+        // Calculate target number of wells (not counting central supermassive)
+        // Dynamic: 1-50 players: 1 well, 51-100: 2 wells, etc
+        let target_wells = ((target_player_count + 49) / 50).max(1).min(20);
+        let current_orbital_wells = self.gravity_wells.len().saturating_sub(1);
+
+        // Calculate target arena size based on player count
+        // Scale: base 2000 + 5 units per player beyond 10
+        let base_radius = arena::ESCAPE_RADIUS * 2.5; // 2000 base
+        let additional = (target_player_count.saturating_sub(10) as f32) * 5.0;
+        let target_escape = (base_radius + additional).max(MIN_ESCAPE_RADIUS);
+        let target_outer = target_escape - 200.0;
+
+        // Determine if we need to grow or shrink
+        let needs_grow = target_escape > self.escape_radius + 10.0; // +10 threshold to avoid jitter
+        let needs_shrink = target_escape < self.escape_radius - 50.0; // -50 threshold for hysteresis
+
+        if needs_grow {
+            // GROW: Fast and immediate - players need space NOW
+            self.shrink_delay_ticks = SHRINK_DELAY_TICKS; // Reset shrink delay
+            let grow_lerp = 0.05; // 5% per update = fast growth
+            let delta = ((target_escape - self.escape_radius) * grow_lerp).max(10.0);
+            self.escape_radius = (self.escape_radius + delta).min(target_escape);
+            self.outer_radius = (self.outer_radius + delta).min(target_outer);
+        } else if needs_shrink {
+            // SHRINK: Only after delay expires, and very slowly
+            if self.shrink_delay_ticks > 0 {
+                self.shrink_delay_ticks -= 1;
+                // Don't shrink yet - still in delay period
+            } else {
+                // Delay expired - shrink slowly
+                let shrink_lerp = 0.005; // 0.5% per update = very slow shrink
+                let delta = ((self.escape_radius - target_escape) * shrink_lerp).max(2.0);
+                self.escape_radius = (self.escape_radius - delta).max(target_escape).max(MIN_ESCAPE_RADIUS);
+                self.outer_radius = (self.outer_radius - delta).max(target_outer).max(MIN_ESCAPE_RADIUS - 200.0);
+            }
+        } else {
+            // In the "stable" zone - reset shrink delay
+            self.shrink_delay_ticks = SHRINK_DELAY_TICKS;
+        }
+
+        // Add new wells if needed (never remove existing ones during gameplay)
+        // Wells are placed at the current escape radius to spread them out
+        if target_wells > current_orbital_wells {
+            let wells_to_add = target_wells - current_orbital_wells;
+            self.add_orbital_wells(wells_to_add, self.escape_radius * 0.6);
+        }
+    }
+
+    /// Add orbital wells at the specified radius without touching existing wells
+    fn add_orbital_wells(&mut self, count: usize, orbit_radius: f32) {
+        use crate::game::constants::physics::CENTRAL_MASS;
+        use rand::Rng;
+        use std::f32::consts::TAU;
+
+        let mut rng = rand::thread_rng();
+        let size_multipliers = [0.6, 0.8, 1.0, 1.2, 1.4];
+        let well_spacing = arena::OUTER_RADIUS * 2.0;
+        let min_well_distance = well_spacing * 0.6; // Slightly less strict for incremental adds
+        const MAX_PLACEMENT_ATTEMPTS: usize = 50;
+
+        for _ in 0..count {
+            let size_mult = size_multipliers[rng.gen_range(0..size_multipliers.len())];
+            let well_mass = CENTRAL_MASS * size_mult;
+            let well_core = arena::CORE_RADIUS * size_mult;
+
+            let mut best_pos = Vec2::ZERO;
+            let mut best_min_dist = 0.0f32;
+
+            for attempt in 0..MAX_PLACEMENT_ATTEMPTS {
+                let angle = rng.gen_range(0.0..TAU);
+                let radius = rng.gen_range(orbit_radius * 0.5..orbit_radius * 1.2);
+                let candidate = Vec2::from_angle(angle) * radius;
+
+                let min_dist = self.gravity_wells
+                    .iter()
+                    .map(|w| (w.position - candidate).length())
+                    .min_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal))
+                    .unwrap_or(f32::MAX);
+
+                if min_dist >= min_well_distance {
+                    best_pos = candidate;
+                    break;
+                }
+
                 if min_dist > best_min_dist || attempt == 0 {
                     best_min_dist = min_dist;
                     best_pos = candidate;
@@ -602,5 +710,169 @@ mod tests {
         let (decoded, _): (GameState, usize) =
             bincode::serde::decode_from_slice(&encoded, bincode::config::standard()).unwrap();
         assert_eq!(decoded.tick, state.tick);
+    }
+
+    #[test]
+    fn test_scale_for_simulation_expands_arena() {
+        let mut arena = Arena::default();
+        let initial_escape = arena.escape_radius;
+        let initial_outer = arena.outer_radius;
+        let initial_wells = arena.gravity_wells.len();
+
+        // Simulate scaling for 500 players (should grow arena)
+        for _ in 0..50 {
+            arena.scale_for_simulation(500);
+        }
+
+        // Arena should have expanded
+        assert!(arena.escape_radius > initial_escape,
+            "escape_radius should grow: {} > {}", arena.escape_radius, initial_escape);
+        assert!(arena.outer_radius > initial_outer,
+            "outer_radius should grow: {} > {}", arena.outer_radius, initial_outer);
+        // Should have added wells (500 players = 10 wells target)
+        assert!(arena.gravity_wells.len() > initial_wells,
+            "wells should increase: {} > {}", arena.gravity_wells.len(), initial_wells);
+    }
+
+    #[test]
+    fn test_scale_for_simulation_shrinks_with_delay() {
+        let mut arena = Arena::default();
+
+        // First grow the arena
+        for _ in 0..50 {
+            arena.scale_for_simulation(500);
+        }
+        let expanded_escape = arena.escape_radius;
+        assert!(expanded_escape > 3000.0, "Should have grown significantly");
+
+        // Now request shrink to 10 players
+        // First few calls should NOT shrink (delay period)
+        arena.scale_for_simulation(10);
+        arena.scale_for_simulation(10);
+        arena.scale_for_simulation(10);
+        assert!(arena.escape_radius >= expanded_escape - 10.0,
+            "Should not shrink during delay period");
+
+        // After delay (5+ ticks), should start shrinking slowly
+        for _ in 0..10 {
+            arena.scale_for_simulation(10);
+        }
+        assert!(arena.escape_radius < expanded_escape,
+            "Should shrink after delay: {} < {}", arena.escape_radius, expanded_escape);
+
+        // But should never go below minimum
+        for _ in 0..100 {
+            arena.scale_for_simulation(10);
+        }
+        assert!(arena.escape_radius >= 2000.0,
+            "Should never shrink below minimum: {}", arena.escape_radius);
+    }
+
+    #[test]
+    fn test_scale_for_simulation_preserves_existing_wells() {
+        let mut arena = Arena::default();
+        // Set up initial wells
+        arena.update_for_player_count(50);
+        let initial_well_positions: Vec<Vec2> = arena.gravity_wells.iter().map(|w| w.position).collect();
+        let initial_well_count = arena.gravity_wells.len();
+
+        // Scale for more players
+        for _ in 0..20 {
+            arena.scale_for_simulation(200);
+        }
+
+        // Original wells should still be in same positions
+        for (i, initial_pos) in initial_well_positions.iter().enumerate() {
+            if i < arena.gravity_wells.len() {
+                let current_pos = arena.gravity_wells[i].position;
+                assert!((current_pos - *initial_pos).length() < 0.001,
+                    "Well {} position changed from {:?} to {:?}", i, initial_pos, current_pos);
+            }
+        }
+
+        // Should have same or more wells (never removes)
+        assert!(arena.gravity_wells.len() >= initial_well_count,
+            "Wells should not decrease: {} >= {}", arena.gravity_wells.len(), initial_well_count);
+    }
+
+    #[test]
+    fn test_scale_for_simulation_smooth_lerp() {
+        let mut arena = Arena::default();
+        let initial_escape = arena.escape_radius;
+
+        // Single call should move toward target with lerp
+        arena.scale_for_simulation(1000);
+        let after_one = arena.escape_radius;
+
+        // Should have moved but not instantly jumped
+        assert!(after_one > initial_escape, "Should start expanding");
+        assert!(after_one < initial_escape * 2.0, "Should not jump instantly");
+
+        // Multiple calls should continue converging
+        for _ in 0..100 {
+            arena.scale_for_simulation(1000);
+        }
+        let after_many = arena.escape_radius;
+
+        assert!(after_many > after_one, "Should continue expanding");
+    }
+
+    #[test]
+    fn test_scale_for_simulation_well_cap() {
+        let mut arena = Arena::default();
+
+        // Even with huge player count, wells should be capped at 20
+        for _ in 0..100 {
+            arena.scale_for_simulation(10000);
+        }
+
+        // -1 because central supermassive doesn't count toward the cap
+        let orbital_wells = arena.gravity_wells.len() - 1;
+        assert!(orbital_wells <= 20, "Orbital wells should be capped at 20, got {}", orbital_wells);
+    }
+
+    #[test]
+    fn test_add_orbital_wells_spacing() {
+        let mut arena = Arena::default();
+        let orbit_radius = 2000.0;
+
+        // Add several wells
+        arena.add_orbital_wells(5, orbit_radius);
+        let initial_count = arena.gravity_wells.len();
+
+        // All wells should be reasonably spaced
+        for i in 0..arena.gravity_wells.len() {
+            for j in (i + 1)..arena.gravity_wells.len() {
+                let dist = (arena.gravity_wells[i].position - arena.gravity_wells[j].position).length();
+                // Minimum distance should be enforced (well_spacing * 0.6 = 720)
+                assert!(dist > 500.0, "Wells {} and {} too close: {}", i, j, dist);
+            }
+        }
+
+        // Add more wells
+        arena.add_orbital_wells(3, orbit_radius);
+        assert_eq!(arena.gravity_wells.len(), initial_count + 3);
+    }
+
+    #[test]
+    fn test_scale_grow_resets_shrink_delay() {
+        let mut arena = Arena::default();
+
+        // Grow to large size
+        for _ in 0..50 {
+            arena.scale_for_simulation(500);
+        }
+
+        // Start shrink process
+        for _ in 0..3 {
+            arena.scale_for_simulation(10);
+        }
+        // shrink_delay should be counting down
+
+        // Now request growth again
+        arena.scale_for_simulation(500);
+
+        // Shrink delay should be reset
+        assert_eq!(arena.shrink_delay_ticks, 5, "Shrink delay should be reset on grow");
     }
 }
