@@ -4,6 +4,7 @@ use crate::game::constants::{debris_spawning, gravity_waves};
 
 /// Server configuration
 #[derive(Debug, Clone)]
+#[allow(dead_code)] // Fields are part of public API, may be used by consumers
 pub struct ServerConfig {
     /// Address to bind the server to
     pub bind_address: IpAddr,
@@ -463,6 +464,8 @@ impl DebrisSpawnConfig {
     }
 
     /// Get total spawn rate for a zone (all sizes combined)
+    /// Available for metrics and debugging
+    #[allow(dead_code)]
     pub fn total_spawn_rate(&self, zone: &str) -> f32 {
         match zone {
             "inner" => {

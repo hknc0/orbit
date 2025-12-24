@@ -1,20 +1,26 @@
-mod anticheat;
 mod config;
 mod game;
-mod lobby;
 mod metrics;
 mod net;
 mod util;
+
+#[cfg(feature = "anticheat")]
+mod anticheat;
+#[cfg(feature = "lobby")]
+mod lobby;
 
 use std::sync::Arc;
 use tokio::sync::RwLock;
 use tracing::{error, info, Level};
 
-use crate::anticheat::sanctions::BanList;
 use crate::config::ServerConfig;
-use crate::lobby::manager::LobbyManager;
 use crate::metrics::Metrics;
 use crate::net::transport::WebTransportServer;
+
+#[cfg(feature = "anticheat")]
+use crate::anticheat::sanctions::BanList;
+#[cfg(feature = "lobby")]
+use crate::lobby::manager::LobbyManager;
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
@@ -34,6 +40,13 @@ async fn main() -> anyhow::Result<()> {
 
     // Load configuration
     let config = ServerConfig::load_or_default();
+
+    // Validate configuration
+    if let Err(e) = config.validate() {
+        error!("Invalid configuration: {}", e);
+        return Err(anyhow::anyhow!("Configuration validation failed: {}", e));
+    }
+
     info!(
         "Configuration loaded: {}:{}, max_rooms={}",
         config.bind_address, config.port, config.max_rooms
@@ -55,9 +68,16 @@ async fn main() -> anyhow::Result<()> {
         }
     });
 
-    // Initialize shared state
+    // Initialize shared state (feature-gated)
+    #[cfg(feature = "lobby")]
     let lobby_manager = Arc::new(RwLock::new(LobbyManager::new(config.max_rooms)));
+    #[cfg(not(feature = "lobby"))]
+    let lobby_manager = Arc::new(RwLock::new(()));
+
+    #[cfg(feature = "anticheat")]
     let ban_list = Arc::new(RwLock::new(BanList::new()));
+    #[cfg(not(feature = "anticheat"))]
+    let ban_list = Arc::new(RwLock::new(()));
 
     // Create WebTransport server
     let server = WebTransportServer::new(
@@ -99,6 +119,7 @@ async fn main() -> anyhow::Result<()> {
     }
 
     // Cleanup
+    #[cfg(feature = "lobby")]
     lobby_manager.write().await.shutdown_all_rooms().await;
     info!("Server stopped");
 
