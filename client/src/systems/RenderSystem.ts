@@ -60,6 +60,11 @@ export class RenderSystem {
   private readonly SHAKE_DECAY = 0.85;
   private readonly MAX_SHAKE = 12;
 
+  // Arena scale tracking (for growth indicator)
+  private scaleHistory: number[] = [];
+  private readonly SCALE_HISTORY_SIZE = 60; // ~1 second at 60fps
+  private scaleDirection: 'growing' | 'shrinking' | 'stable' = 'stable';
+
   constructor(ctx: CanvasRenderingContext2D) {
     this.ctx = ctx;
   }
@@ -203,9 +208,10 @@ export class RenderSystem {
     // Update and apply shake
     this.updateShake();
     // Then apply camera offset with shake
+    // Divide shake by zoom to keep screen-space shake constant regardless of zoom level
     this.ctx.translate(
-      this.cameraOffset.x + this.shakeOffset.x,
-      this.cameraOffset.y + this.shakeOffset.y
+      this.cameraOffset.x + this.shakeOffset.x / this.currentZoom,
+      this.cameraOffset.y + this.shakeOffset.y / this.currentZoom
     );
 
     // Reset any lingering canvas state that might cause visual artifacts
@@ -1656,27 +1662,31 @@ export class RenderSystem {
       this.ctx.stroke();
     }
 
-    // 3. Other players (nearby/visible) - small dots
+    // 3. Other players (nearby/visible) - only show larger players to reduce clutter
+    const MIN_MASS_FOR_MINIMAP = 120; // Only show players above this mass
     for (const [playerId, player] of world.getPlayers()) {
       if (!player.alive) continue;
       if (playerId === world.localPlayerId) continue;
+      if (player.mass < MIN_MASS_FOR_MINIMAP) continue; // Skip small players
 
       const pos = clampToMinimap(
         centerX + player.position.x * scale,
         centerY + player.position.y * scale
       );
 
-      // Colored dot with outline for visibility over heatmap
+      // Size based on mass (bigger players = bigger dots)
+      const dotSize = Math.min(2 + (player.mass - MIN_MASS_FOR_MINIMAP) / 100, 4);
       const color = world.getPlayerColor(player.colorIndex);
+
       // Dark outline
       this.ctx.fillStyle = 'rgba(0, 0, 0, 0.5)';
       this.ctx.beginPath();
-      this.ctx.arc(pos.x, pos.y, 3.5, 0, Math.PI * 2);
+      this.ctx.arc(pos.x, pos.y, dotSize + 1, 0, Math.PI * 2);
       this.ctx.fill();
       // Colored fill
       this.ctx.fillStyle = color;
       this.ctx.beginPath();
-      this.ctx.arc(pos.x, pos.y, 2.5, 0, Math.PI * 2);
+      this.ctx.arc(pos.x, pos.y, dotSize, 0, Math.PI * 2);
       this.ctx.fill();
     }
 
@@ -1778,23 +1788,70 @@ export class RenderSystem {
     this.ctx.fillStyle = 'rgba(148, 163, 184, 0.7)';
     this.ctx.fillText(`${aliveCount} alive`, Math.round(centerX), Math.round(minimapY - 6));
 
-    // Universe scale and zoom indicators (left of minimap)
-    const indicatorX = minimapX - 8;
-    const indicatorY = minimapY + minimapSize / 2;
+    // === INDICATORS (left of minimap) ===
+    const indicatorX = minimapX - 10;
 
+    // --- Arena Scale Indicator ---
+    const currentScale = world.arena.scale;
+
+    // Track scale over time to detect growth/shrink
+    this.scaleHistory.push(currentScale);
+    if (this.scaleHistory.length > this.SCALE_HISTORY_SIZE) {
+      this.scaleHistory.shift();
+    }
+
+    // Compare current scale to scale from ~1 second ago
+    if (this.scaleHistory.length >= this.SCALE_HISTORY_SIZE) {
+      const oldScale = this.scaleHistory[0];
+      const scaleDelta = currentScale - oldScale;
+      if (scaleDelta > 0.002) {
+        this.scaleDirection = 'growing';
+      } else if (scaleDelta < -0.002) {
+        this.scaleDirection = 'shrinking';
+      } else {
+        this.scaleDirection = 'stable';
+      }
+    }
+
+    // Scale display with direction arrow
+    this.ctx.font = '10px Inter, system-ui, sans-serif';
     this.ctx.textAlign = 'right';
-    this.ctx.font = '9px Inter, system-ui, sans-serif';
 
-    // Universe scale (arena radius)
-    const arenaRadius = Math.round(safeRadius);
-    const arenaKm = (arenaRadius / 1000).toFixed(1);
+    const scaleText = `✧ ${currentScale.toFixed(1)}`;
+    const arrowColor = this.scaleDirection === 'growing' ? 'rgba(74, 222, 128, 0.9)' :
+                       this.scaleDirection === 'shrinking' ? 'rgba(251, 146, 60, 0.9)' :
+                       'rgba(148, 163, 184, 0.3)';
+
+    // Scale value with galaxy icon (fixed position)
     this.ctx.fillStyle = 'rgba(139, 92, 246, 0.8)'; // Purple
-    this.ctx.fillText(`⬡ ${arenaKm}km`, indicatorX, indicatorY - 8);
+    this.ctx.fillText(scaleText, indicatorX, minimapY + 12);
 
-    // Zoom level
-    const zoomPercent = Math.round(this.currentZoom * 100);
-    this.ctx.fillStyle = 'rgba(96, 165, 250, 0.8)'; // Blue
-    this.ctx.fillText(`◎ ${zoomPercent}%`, indicatorX, indicatorY + 8);
+    // Arrow at fixed position (always same spot, just different visibility)
+    const arrow = this.scaleDirection === 'growing' ? '↑' :
+                  this.scaleDirection === 'shrinking' ? '↓' : '·';
+    this.ctx.fillStyle = arrowColor;
+    this.ctx.fillText(arrow, indicatorX + 10, minimapY + 12);
+
+    // --- Zoom Bar Indicator ---
+    const barX = indicatorX;
+    const barY = minimapY + minimapSize / 2 + 10;
+    const barHeight = 30;
+    const barWidth = 3;
+    const zoomRatio = (this.currentZoom - this.ZOOM_MIN) / (this.ZOOM_MAX - this.ZOOM_MIN);
+    const fillHeight = barHeight * zoomRatio;
+
+    // Bar background
+    this.ctx.fillStyle = 'rgba(30, 41, 59, 0.5)';
+    this.ctx.fillRect(barX - barWidth / 2, barY - barHeight / 2, barWidth, barHeight);
+
+    // Filled portion (bottom-up: more fill = more zoomed in)
+    this.ctx.fillStyle = 'rgba(96, 165, 250, 0.6)';
+    this.ctx.fillRect(
+      barX - barWidth / 2,
+      barY + barHeight / 2 - fillHeight,
+      barWidth,
+      fillHeight
+    );
   }
 
   // Enhanced panel with gradient background and optional corner accents
@@ -2051,5 +2108,7 @@ export class RenderSystem {
     this.lastTrailPositions.clear();
     this.shakeIntensity = 0;
     this.shakeOffset = { x: 0, y: 0 };
+    this.scaleHistory = [];
+    this.scaleDirection = 'stable';
   }
 }

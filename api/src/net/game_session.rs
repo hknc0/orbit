@@ -313,6 +313,10 @@ impl GameSession {
 
         let events = self.game_loop.tick();
 
+        // Continuously update arena scale for smooth lerping
+        // (scale_for_simulation uses lerp factors that need per-tick updates)
+        self.update_arena_scale();
+
         // Respawn dead players (humans always, bots only if performance allows)
         self.respawn_dead_players();
 
