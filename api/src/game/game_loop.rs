@@ -173,7 +173,8 @@ impl GameLoop {
         if self.config.gravity_wave_config.enabled {
             // Calculate target wells based on current player count
             // Uses same formula as ArenaScalingConfig defaults: 1 well per 50 players, max 20
-            let player_count = self.state.players.values().filter(|p| p.alive).count();
+            // Use total players (not just alive) since dead players will respawn
+            let player_count = self.state.players.len();
             let target_wells = ((player_count + 49) / 50).max(1).min(20);
 
             let wave_events = gravity::update_explosions(
