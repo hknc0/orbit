@@ -10,93 +10,10 @@
     {
       "collapsed": false,
       "gridPos": { "h": 1, "w": 24, "x": 0, "y": 0 },
-      "id": 100,
-      "panels": [],
-      "title": "🎮 Game Overview",
-      "type": "row"
-    },
-    {
-      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
-      "fieldConfig": {
-        "defaults": {
-          "color": { "mode": "thresholds" },
-          "thresholds": {
-            "mode": "absolute",
-            "steps": [
-              { "color": "green", "value": null },
-              { "color": "yellow", "value": 50 },
-              { "color": "red", "value": 100 }
-            ]
-          }
-        }
-      },
-      "gridPos": { "h": 4, "w": 4, "x": 0, "y": 1 },
       "id": 1,
-      "options": {
-        "colorMode": "value",
-        "graphMode": "area",
-        "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false }
-      },
-      "targets": [{ "expr": "orbit_royale_players_total{job=\"orbit-royale-api\"}", "legendFormat": "Total", "refId": "A" }],
-      "title": "Total Players",
-      "type": "stat"
-    },
-    {
-      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
-      "fieldConfig": {
-        "defaults": {
-          "color": { "mode": "thresholds" },
-          "thresholds": { "mode": "absolute", "steps": [{ "color": "blue", "value": null }] }
-        }
-      },
-      "gridPos": { "h": 4, "w": 4, "x": 4, "y": 1 },
-      "id": 2,
-      "options": {
-        "colorMode": "value",
-        "graphMode": "area",
-        "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false }
-      },
-      "targets": [{ "expr": "orbit_royale_players_human{job=\"orbit-royale-api\"}", "legendFormat": "Human", "refId": "A" }],
-      "title": "Human Players",
-      "type": "stat"
-    },
-    {
-      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
-      "fieldConfig": {
-        "defaults": {
-          "color": { "mode": "thresholds" },
-          "thresholds": { "mode": "absolute", "steps": [{ "color": "orange", "value": null }] }
-        }
-      },
-      "gridPos": { "h": 4, "w": 4, "x": 8, "y": 1 },
-      "id": 3,
-      "options": {
-        "colorMode": "value",
-        "graphMode": "area",
-        "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false }
-      },
-      "targets": [{ "expr": "orbit_royale_players_bot{job=\"orbit-royale-api\"}", "legendFormat": "Bots", "refId": "A" }],
-      "title": "Bot Players",
-      "type": "stat"
-    },
-    {
-      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
-      "fieldConfig": {
-        "defaults": {
-          "color": { "mode": "thresholds" },
-          "thresholds": { "mode": "absolute", "steps": [{ "color": "green", "value": null }] }
-        }
-      },
-      "gridPos": { "h": 4, "w": 4, "x": 12, "y": 1 },
-      "id": 4,
-      "options": {
-        "colorMode": "value",
-        "graphMode": "area",
-        "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false }
-      },
-      "targets": [{ "expr": "orbit_royale_players_alive{job=\"orbit-royale-api\"}", "legendFormat": "Alive", "refId": "A" }],
-      "title": "Alive Players",
-      "type": "stat"
+      "panels": [],
+      "title": "Critical Overview",
+      "type": "row"
     },
     {
       "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
@@ -113,15 +30,11 @@
           "thresholds": { "mode": "absolute", "steps": [{ "color": "green", "value": null }, { "color": "yellow", "value": 2 }, { "color": "red", "value": 3 }] }
         }
       },
-      "gridPos": { "h": 4, "w": 4, "x": 16, "y": 1 },
-      "id": 5,
-      "options": {
-        "colorMode": "background",
-        "graphMode": "none",
-        "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false }
-      },
+      "gridPos": { "h": 4, "w": 3, "x": 0, "y": 1 },
+      "id": 2,
+      "options": { "colorMode": "background", "graphMode": "none", "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false } },
       "targets": [{ "expr": "orbit_royale_performance_status{job=\"orbit-royale-api\"}", "legendFormat": "Status", "refId": "A" }],
-      "title": "Performance Status",
+      "title": "Health",
       "type": "stat"
     },
     {
@@ -133,23 +46,150 @@
           "unit": "percent"
         }
       },
-      "gridPos": { "h": 4, "w": 4, "x": 20, "y": 1 },
-      "id": 6,
-      "options": {
-        "colorMode": "value",
-        "graphMode": "area",
-        "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false }
-      },
+      "gridPos": { "h": 4, "w": 3, "x": 3, "y": 1 },
+      "id": 3,
+      "options": { "colorMode": "value", "graphMode": "area", "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false } },
       "targets": [{ "expr": "orbit_royale_budget_usage_percent{job=\"orbit-royale-api\"}", "legendFormat": "Budget", "refId": "A" }],
-      "title": "Tick Budget Usage",
+      "title": "Budget",
       "type": "stat"
     },
     {
+      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "thresholds" },
+          "thresholds": { "mode": "absolute", "steps": [{ "color": "green", "value": null }, { "color": "yellow", "value": 50 }, { "color": "red", "value": 100 }] }
+        }
+      },
+      "gridPos": { "h": 4, "w": 3, "x": 6, "y": 1 },
+      "id": 4,
+      "options": { "colorMode": "value", "graphMode": "area", "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false } },
+      "targets": [{ "expr": "orbit_royale_players_total{job=\"orbit-royale-api\"}", "legendFormat": "Total", "refId": "A" }],
+      "title": "Players",
+      "type": "stat"
+    },
+    {
+      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "thresholds" },
+          "thresholds": { "mode": "absolute", "steps": [{ "color": "blue", "value": null }] }
+        }
+      },
+      "gridPos": { "h": 4, "w": 2, "x": 9, "y": 1 },
+      "id": 5,
+      "options": { "colorMode": "value", "graphMode": "area", "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false } },
+      "targets": [{ "expr": "orbit_royale_players_human{job=\"orbit-royale-api\"}", "legendFormat": "Human", "refId": "A" }],
+      "title": "Human",
+      "type": "stat"
+    },
+    {
+      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "thresholds" },
+          "thresholds": { "mode": "absolute", "steps": [{ "color": "orange", "value": null }] }
+        }
+      },
+      "gridPos": { "h": 4, "w": 2, "x": 11, "y": 1 },
+      "id": 6,
+      "options": { "colorMode": "value", "graphMode": "area", "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false } },
+      "targets": [{ "expr": "orbit_royale_players_bot{job=\"orbit-royale-api\"}", "legendFormat": "Bots", "refId": "A" }],
+      "title": "Bots",
+      "type": "stat"
+    },
+    {
+      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "thresholds" },
+          "thresholds": { "mode": "absolute", "steps": [{ "color": "green", "value": null }] }
+        }
+      },
+      "gridPos": { "h": 4, "w": 2, "x": 13, "y": 1 },
+      "id": 7,
+      "options": { "colorMode": "value", "graphMode": "area", "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false } },
+      "targets": [{ "expr": "orbit_royale_players_alive{job=\"orbit-royale-api\"}", "legendFormat": "Alive", "refId": "A" }],
+      "title": "Alive",
+      "type": "stat"
+    },
+    {
+      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "thresholds" },
+          "mappings": [
+            { "options": { "0": { "color": "semi-dark-blue", "text": "OFF" }, "1": { "color": "green", "text": "ON" } }, "type": "value" }
+          ],
+          "thresholds": { "mode": "absolute", "steps": [{ "color": "blue", "value": null }, { "color": "green", "value": 1 }] }
+        }
+      },
+      "gridPos": { "h": 4, "w": 2, "x": 15, "y": 1 },
+      "id": 8,
+      "options": { "colorMode": "background", "graphMode": "none", "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false } },
+      "targets": [{ "expr": "orbit_royale_simulation_enabled{job=\"orbit-royale-api\"}", "legendFormat": "Sim", "refId": "A" }],
+      "title": "Sim",
+      "type": "stat"
+    },
+    {
+      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "thresholds" },
+          "mappings": [
+            { "options": { "0": { "color": "red", "text": "OFF" }, "1": { "color": "green", "text": "ON" } }, "type": "value" }
+          ],
+          "thresholds": { "mode": "absolute", "steps": [{ "color": "red", "value": null }, { "color": "green", "value": 1 }] }
+        }
+      },
+      "gridPos": { "h": 4, "w": 2, "x": 17, "y": 1 },
+      "id": 9,
+      "options": { "colorMode": "background", "graphMode": "none", "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false } },
+      "targets": [{ "expr": "orbit_royale_ai_enabled{job=\"orbit-royale-api\"}", "legendFormat": "AI", "refId": "A" }],
+      "title": "AI",
+      "type": "stat"
+    },
+    {
+      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "thresholds" },
+          "thresholds": { "mode": "absolute", "steps": [{ "color": "red", "value": null }, { "color": "yellow", "value": 50 }, { "color": "green", "value": 70 }] },
+          "unit": "percent"
+        }
+      },
+      "gridPos": { "h": 4, "w": 2, "x": 19, "y": 1 },
+      "id": 10,
+      "options": { "colorMode": "value", "graphMode": "area", "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false } },
+      "targets": [{ "expr": "orbit_royale_ai_success_rate_percent{job=\"orbit-royale-api\"}", "legendFormat": "Rate", "refId": "A" }],
+      "title": "AI Rate",
+      "type": "stat"
+    },
+    {
+      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "thresholds" },
+          "max": 100,
+          "min": 0,
+          "thresholds": { "mode": "absolute", "steps": [{ "color": "green", "value": null }, { "color": "yellow", "value": 50 }, { "color": "orange", "value": 75 }] },
+          "unit": "percent"
+        }
+      },
+      "gridPos": { "h": 4, "w": 3, "x": 21, "y": 1 },
+      "id": 11,
+      "options": { "minVizHeight": 75, "minVizWidth": 75, "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false }, "showThresholdLabels": false, "showThresholdMarkers": true },
+      "targets": [{ "expr": "orbit_royale_simulation_cycle_progress{job=\"orbit-royale-api\"}", "legendFormat": "Progress", "refId": "A" }],
+      "title": "Cycle",
+      "type": "gauge"
+    },
+
+    {
       "collapsed": false,
       "gridPos": { "h": 1, "w": 24, "x": 0, "y": 5 },
-      "id": 101,
+      "id": 20,
       "panels": [],
-      "title": "⚡ Performance Metrics",
+      "title": "Performance",
       "type": "row"
     },
     {
@@ -173,8 +213,8 @@
           "unit": "ms"
         }
       },
-      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 6 },
-      "id": 10,
+      "gridPos": { "h": 7, "w": 12, "x": 0, "y": 6 },
+      "id": 21,
       "options": {
         "legend": { "calcs": ["mean", "max"], "displayMode": "table", "placement": "bottom", "showLegend": true },
         "tooltip": { "mode": "multi", "sort": "desc" }
@@ -185,7 +225,7 @@
         { "expr": "orbit_royale_tick_time_p99_microseconds{job=\"orbit-royale-api\"} / 1000", "legendFormat": "P99", "refId": "C" },
         { "expr": "orbit_royale_tick_time_max_microseconds{job=\"orbit-royale-api\"} / 1000", "legendFormat": "Max", "refId": "D" }
       ],
-      "title": "Tick Timing (target: 33.3ms = 30 TPS)",
+      "title": "Tick Time (target: <33.3ms)",
       "type": "timeseries"
     },
     {
@@ -207,8 +247,8 @@
           "unit": "ops"
         }
       },
-      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 6 },
-      "id": 11,
+      "gridPos": { "h": 7, "w": 6, "x": 12, "y": 6 },
+      "id": 22,
       "options": {
         "legend": { "calcs": ["mean", "lastNotNull"], "displayMode": "table", "placement": "bottom", "showLegend": true },
         "tooltip": { "mode": "multi", "sort": "desc" }
@@ -218,11 +258,217 @@
       "type": "timeseries"
     },
     {
+      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "palette-classic" },
+          "custom": {
+            "axisBorderShow": false,
+            "drawStyle": "line",
+            "fillOpacity": 20,
+            "gradientMode": "opacity",
+            "lineInterpolation": "smooth",
+            "lineWidth": 2,
+            "showPoints": "never",
+            "stacking": { "group": "A", "mode": "normal" }
+          },
+          "thresholds": { "mode": "absolute", "steps": [{ "color": "green", "value": null }] }
+        }
+      },
+      "gridPos": { "h": 7, "w": 6, "x": 18, "y": 6 },
+      "id": 23,
+      "options": {
+        "legend": { "calcs": ["lastNotNull"], "displayMode": "list", "placement": "bottom", "showLegend": true },
+        "tooltip": { "mode": "multi", "sort": "desc" }
+      },
+      "targets": [
+        { "expr": "orbit_royale_players_human{job=\"orbit-royale-api\"}", "legendFormat": "Humans", "refId": "A" },
+        { "expr": "orbit_royale_players_bot{job=\"orbit-royale-api\"}", "legendFormat": "Bots", "refId": "B" }
+      ],
+      "title": "Player Breakdown",
+      "type": "timeseries"
+    },
+
+    {
       "collapsed": false,
-      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 14 },
-      "id": 102,
+      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 13 },
+      "id": 30,
       "panels": [],
-      "title": "🌐 Network Metrics",
+      "title": "AI Simulation Manager",
+      "type": "row"
+    },
+    {
+      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "thresholds" },
+          "thresholds": { "mode": "absolute", "steps": [{ "color": "blue", "value": null }] }
+        }
+      },
+      "gridPos": { "h": 3, "w": 2, "x": 0, "y": 14 },
+      "id": 31,
+      "options": { "colorMode": "value", "graphMode": "area", "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false } },
+      "targets": [{ "expr": "orbit_royale_ai_decisions_total{job=\"orbit-royale-api\"}", "legendFormat": "Total", "refId": "A" }],
+      "title": "Decisions",
+      "type": "stat"
+    },
+    {
+      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "thresholds" },
+          "thresholds": { "mode": "absolute", "steps": [{ "color": "green", "value": null }] }
+        }
+      },
+      "gridPos": { "h": 3, "w": 2, "x": 2, "y": 14 },
+      "id": 32,
+      "options": { "colorMode": "value", "graphMode": "area", "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false } },
+      "targets": [{ "expr": "orbit_royale_ai_decisions_successful{job=\"orbit-royale-api\"}", "legendFormat": "OK", "refId": "A" }],
+      "title": "Success",
+      "type": "stat"
+    },
+    {
+      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "thresholds" },
+          "thresholds": { "mode": "absolute", "steps": [{ "color": "orange", "value": null }] }
+        }
+      },
+      "gridPos": { "h": 3, "w": 2, "x": 4, "y": 14 },
+      "id": 33,
+      "options": { "colorMode": "value", "graphMode": "area", "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false } },
+      "targets": [{ "expr": "orbit_royale_ai_decisions_total{job=\"orbit-royale-api\"} - orbit_royale_ai_decisions_successful{job=\"orbit-royale-api\"}", "legendFormat": "Failed", "refId": "A" }],
+      "title": "Failed",
+      "type": "stat"
+    },
+    {
+      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "thresholds" },
+          "thresholds": { "mode": "absolute", "steps": [{ "color": "red", "value": null }, { "color": "yellow", "value": 50 }, { "color": "green", "value": 70 }] },
+          "unit": "percent"
+        }
+      },
+      "gridPos": { "h": 3, "w": 2, "x": 6, "y": 14 },
+      "id": 34,
+      "options": { "colorMode": "value", "graphMode": "area", "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false } },
+      "targets": [{ "expr": "orbit_royale_ai_last_confidence{job=\"orbit-royale-api\"}", "legendFormat": "Conf", "refId": "A" }],
+      "title": "Confidence",
+      "type": "stat"
+    },
+    {
+      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "thresholds" },
+          "thresholds": { "mode": "absolute", "steps": [{ "color": "green", "value": null }, { "color": "yellow", "value": 3 }, { "color": "red", "value": 5 }] }
+        }
+      },
+      "gridPos": { "h": 3, "w": 2, "x": 8, "y": 14 },
+      "id": 35,
+      "options": { "colorMode": "value", "graphMode": "area", "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false } },
+      "targets": [{ "expr": "orbit_royale_ai_pending_evaluations{job=\"orbit-royale-api\"}", "legendFormat": "Pending", "refId": "A" }],
+      "title": "Pending",
+      "type": "stat"
+    },
+    {
+      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "thresholds" },
+          "thresholds": { "mode": "absolute", "steps": [{ "color": "yellow", "value": null }] }
+        }
+      },
+      "gridPos": { "h": 3, "w": 2, "x": 10, "y": 14 },
+      "id": 36,
+      "options": { "colorMode": "value", "graphMode": "area", "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false } },
+      "targets": [{ "expr": "orbit_royale_simulation_target_bots{job=\"orbit-royale-api\"}", "legendFormat": "Target", "refId": "A" }],
+      "title": "Target Bots",
+      "type": "stat"
+    },
+    {
+      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "palette-classic" },
+          "custom": {
+            "axisBorderShow": false,
+            "drawStyle": "line",
+            "fillOpacity": 20,
+            "lineWidth": 2,
+            "showPoints": "never"
+          },
+          "unit": "short"
+        }
+      },
+      "gridPos": { "h": 6, "w": 6, "x": 12, "y": 14 },
+      "id": 37,
+      "options": { "legend": { "calcs": [], "displayMode": "list", "placement": "bottom", "showLegend": true }, "tooltip": { "mode": "multi", "sort": "none" } },
+      "targets": [
+        { "expr": "orbit_royale_ai_decisions_total{job=\"orbit-royale-api\"}", "legendFormat": "Total", "refId": "A" },
+        { "expr": "orbit_royale_ai_decisions_successful{job=\"orbit-royale-api\"}", "legendFormat": "Successful", "refId": "B" }
+      ],
+      "title": "AI Decisions",
+      "type": "timeseries"
+    },
+    {
+      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "palette-classic" },
+          "custom": {
+            "axisBorderShow": false,
+            "drawStyle": "line",
+            "fillOpacity": 20,
+            "lineWidth": 2,
+            "showPoints": "never"
+          },
+          "unit": "percent"
+        }
+      },
+      "gridPos": { "h": 6, "w": 6, "x": 18, "y": 14 },
+      "id": 38,
+      "options": { "legend": { "calcs": [], "displayMode": "list", "placement": "bottom", "showLegend": true }, "tooltip": { "mode": "multi", "sort": "none" } },
+      "targets": [
+        { "expr": "orbit_royale_ai_success_rate_percent{job=\"orbit-royale-api\"}", "legendFormat": "Success Rate", "refId": "A" },
+        { "expr": "orbit_royale_ai_last_confidence{job=\"orbit-royale-api\"}", "legendFormat": "Confidence", "refId": "B" }
+      ],
+      "title": "AI Performance",
+      "type": "timeseries"
+    },
+    {
+      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "palette-classic" },
+          "custom": {
+            "axisBorderShow": false,
+            "drawStyle": "line",
+            "fillOpacity": 20,
+            "lineWidth": 2,
+            "showPoints": "never"
+          }
+        }
+      },
+      "gridPos": { "h": 3, "w": 12, "x": 0, "y": 17 },
+      "id": 39,
+      "options": { "legend": { "calcs": ["lastNotNull"], "displayMode": "list", "placement": "right", "showLegend": true }, "tooltip": { "mode": "multi", "sort": "desc" } },
+      "targets": [
+        { "expr": "orbit_royale_simulation_target_bots{job=\"orbit-royale-api\"}", "legendFormat": "Target", "refId": "A" },
+        { "expr": "orbit_royale_players_bot{job=\"orbit-royale-api\"}", "legendFormat": "Actual", "refId": "B" }
+      ],
+      "title": "Target vs Actual Bots",
+      "type": "timeseries"
+    },
+
+    {
+      "collapsed": false,
+      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 20 },
+      "id": 40,
+      "panels": [],
+      "title": "Network & Connections",
       "type": "row"
     },
     {
@@ -242,14 +488,14 @@
           "thresholds": { "mode": "absolute", "steps": [{ "color": "green", "value": null }] }
         }
       },
-      "gridPos": { "h": 6, "w": 8, "x": 0, "y": 15 },
-      "id": 20,
+      "gridPos": { "h": 6, "w": 6, "x": 0, "y": 21 },
+      "id": 41,
       "options": {
         "legend": { "calcs": ["lastNotNull"], "displayMode": "list", "placement": "bottom", "showLegend": true },
         "tooltip": { "mode": "multi", "sort": "none" }
       },
-      "targets": [{ "expr": "orbit_royale_connections_active{job=\"orbit-royale-api\"}", "legendFormat": "Active Connections", "refId": "A" }],
-      "title": "Active Connections",
+      "targets": [{ "expr": "orbit_royale_connections_active{job=\"orbit-royale-api\"}", "legendFormat": "Active", "refId": "A" }],
+      "title": "Connections",
       "type": "timeseries"
     },
     {
@@ -269,8 +515,8 @@
           "unit": "pps"
         }
       },
-      "gridPos": { "h": 6, "w": 8, "x": 8, "y": 15 },
-      "id": 21,
+      "gridPos": { "h": 6, "w": 6, "x": 6, "y": 21 },
+      "id": 42,
       "options": {
         "legend": { "calcs": ["mean", "max"], "displayMode": "table", "placement": "bottom", "showLegend": true },
         "tooltip": { "mode": "multi", "sort": "desc" }
@@ -299,8 +545,8 @@
           "unit": "Bps"
         }
       },
-      "gridPos": { "h": 6, "w": 8, "x": 16, "y": 15 },
-      "id": 22,
+      "gridPos": { "h": 6, "w": 6, "x": 12, "y": 21 },
+      "id": 43,
       "options": {
         "legend": { "calcs": ["mean", "max"], "displayMode": "table", "placement": "bottom", "showLegend": true },
         "tooltip": { "mode": "multi", "sort": "desc" }
@@ -313,187 +559,93 @@
       "type": "timeseries"
     },
     {
-      "collapsed": false,
-      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 21 },
-      "id": 103,
-      "panels": [],
-      "title": "📦 Container Resources",
-      "type": "row"
-    },
-    {
-      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
-      "fieldConfig": {
-        "defaults": {
-          "color": { "mode": "palette-classic" },
-          "custom": {
-            "axisBorderShow": false,
-            "drawStyle": "line",
-            "fillOpacity": 20,
-            "gradientMode": "opacity",
-            "lineInterpolation": "smooth",
-            "lineWidth": 2,
-            "showPoints": "never",
-            "thresholdsStyle": { "mode": "line" }
-          },
-          "max": 100,
-          "min": 0,
-          "thresholds": { "mode": "absolute", "steps": [{ "color": "green", "value": null }, { "color": "yellow", "value": 80 }, { "color": "red", "value": 95 }] },
-          "unit": "percent"
-        }
-      },
-      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 22 },
-      "id": 30,
-      "options": {
-        "legend": { "calcs": ["mean", "max"], "displayMode": "table", "placement": "bottom", "showLegend": true },
-        "tooltip": { "mode": "multi", "sort": "desc" }
-      },
-      "targets": [{ "expr": "sum by (short_id) (rate(container_cpu_usage_seconds_total{job=\"cadvisor\", id=~\"/docker/[a-f0-9]+\"}[1m])) * 100", "legendFormat": "{{short_id}}", "refId": "A" }],
-      "title": "Container CPU Usage % (run 'docker ps' for ID→name)",
-      "type": "timeseries"
-    },
-    {
-      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
-      "fieldConfig": {
-        "defaults": {
-          "color": { "mode": "palette-classic" },
-          "custom": {
-            "axisBorderShow": false,
-            "drawStyle": "line",
-            "fillOpacity": 20,
-            "gradientMode": "opacity",
-            "lineInterpolation": "smooth",
-            "lineWidth": 2,
-            "showPoints": "never"
-          },
-          "thresholds": { "mode": "absolute", "steps": [{ "color": "green", "value": null }] },
-          "unit": "bytes"
-        }
-      },
-      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 22 },
-      "id": 31,
-      "options": {
-        "legend": { "calcs": ["mean", "max"], "displayMode": "table", "placement": "bottom", "showLegend": true },
-        "tooltip": { "mode": "multi", "sort": "desc" }
-      },
-      "targets": [{ "expr": "container_memory_usage_bytes{job=\"cadvisor\", id=~\"/docker/[a-f0-9]+\"}", "legendFormat": "{{short_id}}", "refId": "A" }],
-      "title": "Container Memory Usage (run 'docker ps' for ID→name)",
-      "type": "timeseries"
-    },
-    {
-      "collapsed": false,
-      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 30 },
-      "id": 104,
-      "panels": [],
-      "title": "🎯 Entity Counts",
-      "type": "row"
-    },
-    {
-      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
-      "fieldConfig": {
-        "defaults": {
-          "color": { "mode": "palette-classic" },
-          "custom": {
-            "axisBorderShow": false,
-            "drawStyle": "line",
-            "fillOpacity": 20,
-            "gradientMode": "opacity",
-            "lineInterpolation": "smooth",
-            "lineWidth": 2,
-            "showPoints": "never",
-            "stacking": { "group": "A", "mode": "normal" }
-          },
-          "thresholds": { "mode": "absolute", "steps": [{ "color": "green", "value": null }] }
-        }
-      },
-      "gridPos": { "h": 6, "w": 12, "x": 0, "y": 31 },
-      "id": 40,
-      "options": {
-        "legend": { "calcs": ["lastNotNull"], "displayMode": "list", "placement": "bottom", "showLegend": true },
-        "tooltip": { "mode": "multi", "sort": "desc" }
-      },
-      "targets": [
-        { "expr": "orbit_royale_players_human{job=\"orbit-royale-api\"}", "legendFormat": "Humans", "refId": "A" },
-        { "expr": "orbit_royale_players_bot{job=\"orbit-royale-api\"}", "legendFormat": "Bots", "refId": "B" }
-      ],
-      "title": "Player Breakdown",
-      "type": "timeseries"
-    },
-    {
-      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
-      "fieldConfig": {
-        "defaults": {
-          "color": { "mode": "palette-classic" },
-          "custom": {
-            "axisBorderShow": false,
-            "drawStyle": "line",
-            "fillOpacity": 10,
-            "lineInterpolation": "smooth",
-            "lineWidth": 2,
-            "showPoints": "never"
-          },
-          "thresholds": { "mode": "absolute", "steps": [{ "color": "green", "value": null }] }
-        }
-      },
-      "gridPos": { "h": 6, "w": 12, "x": 12, "y": 31 },
-      "id": 41,
-      "options": {
-        "legend": { "calcs": ["mean", "max"], "displayMode": "table", "placement": "bottom", "showLegend": true },
-        "tooltip": { "mode": "multi", "sort": "desc" }
-      },
-      "targets": [
-        { "expr": "orbit_royale_projectiles{job=\"orbit-royale-api\"}", "legendFormat": "Projectiles", "refId": "A" },
-        { "expr": "orbit_royale_debris{job=\"orbit-royale-api\"}", "legendFormat": "Debris", "refId": "B" },
-        { "expr": "orbit_royale_gravity_wells{job=\"orbit-royale-api\"}", "legendFormat": "Gravity Wells", "refId": "C" }
-      ],
-      "title": "Game Entities",
-      "type": "timeseries"
-    },
-    {
-      "collapsed": false,
-      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 37 },
-      "id": 105,
-      "panels": [],
-      "title": "🌍 Arena & Simulation",
-      "type": "row"
-    },
-    {
       "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
       "fieldConfig": {
         "defaults": {
           "color": { "mode": "thresholds" },
-          "thresholds": { "mode": "absolute", "steps": [{ "color": "purple", "value": null }] },
-          "unit": "none"
+          "thresholds": { "mode": "absolute", "steps": [{ "color": "red", "value": null }, { "color": "yellow", "value": 30 }, { "color": "green", "value": 50 }] },
+          "unit": "percent"
         }
       },
-      "gridPos": { "h": 4, "w": 4, "x": 0, "y": 38 },
+      "gridPos": { "h": 3, "w": 3, "x": 18, "y": 21 },
+      "id": 44,
+      "options": { "colorMode": "value", "graphMode": "area", "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false } },
+      "targets": [{ "expr": "orbit_royale_aoi_reduction_percent{job=\"orbit-royale-api\"}", "legendFormat": "Reduction", "refId": "A" }],
+      "title": "AOI Reduction",
+      "type": "stat"
+    },
+    {
+      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "palette-classic" },
+          "custom": {
+            "axisBorderShow": false,
+            "drawStyle": "line",
+            "fillOpacity": 20,
+            "lineWidth": 2,
+            "showPoints": "never"
+          },
+          "unit": "short"
+        }
+      },
+      "gridPos": { "h": 3, "w": 3, "x": 21, "y": 21 },
+      "id": 45,
+      "options": { "legend": { "calcs": [], "displayMode": "list", "placement": "right", "showLegend": true }, "tooltip": { "mode": "multi", "sort": "none" } },
+      "targets": [
+        { "expr": "orbit_royale_aoi_original_players{job=\"orbit-royale-api\"}", "legendFormat": "Orig", "refId": "A" },
+        { "expr": "orbit_royale_aoi_filtered_players{job=\"orbit-royale-api\"}", "legendFormat": "Filt", "refId": "B" }
+      ],
+      "title": "AOI Players",
+      "type": "timeseries"
+    },
+    {
+      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "palette-classic" },
+          "custom": {
+            "axisBorderShow": false,
+            "drawStyle": "line",
+            "fillOpacity": 20,
+            "lineWidth": 2,
+            "showPoints": "never"
+          },
+          "unit": "short"
+        }
+      },
+      "gridPos": { "h": 3, "w": 6, "x": 18, "y": 24 },
+      "id": 46,
+      "options": { "legend": { "calcs": [], "displayMode": "list", "placement": "right", "showLegend": true }, "tooltip": { "mode": "multi", "sort": "none" } },
+      "targets": [
+        { "expr": "orbit_royale_aoi_original_projectiles{job=\"orbit-royale-api\"}", "legendFormat": "Orig Proj", "refId": "A" },
+        { "expr": "orbit_royale_aoi_filtered_projectiles{job=\"orbit-royale-api\"}", "legendFormat": "Filt Proj", "refId": "B" }
+      ],
+      "title": "AOI Projectiles",
+      "type": "timeseries"
+    },
+
+    {
+      "collapsed": false,
+      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 27 },
       "id": 50,
-      "options": {
-        "colorMode": "value",
-        "graphMode": "area",
-        "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false }
-      },
-      "targets": [{ "expr": "orbit_royale_arena_radius{job=\"orbit-royale-api\"}", "legendFormat": "Radius", "refId": "A" }],
-      "title": "Arena Radius",
-      "type": "stat"
+      "panels": [],
+      "title": "Security & Protection",
+      "type": "row"
     },
     {
       "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
       "fieldConfig": {
         "defaults": {
           "color": { "mode": "thresholds" },
-          "thresholds": { "mode": "absolute", "steps": [{ "color": "blue", "value": null }] },
-          "unit": "none"
+          "thresholds": { "mode": "absolute", "steps": [{ "color": "green", "value": null }, { "color": "yellow", "value": 10 }, { "color": "red", "value": 100 }] }
         }
       },
-      "gridPos": { "h": 4, "w": 4, "x": 4, "y": 38 },
+      "gridPos": { "h": 3, "w": 2, "x": 0, "y": 28 },
       "id": 51,
-      "options": {
-        "colorMode": "value",
-        "graphMode": "area",
-        "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false }
-      },
-      "targets": [{ "expr": "orbit_royale_arena_gravity_wells{job=\"orbit-royale-api\"}", "legendFormat": "Wells", "refId": "A" }],
-      "title": "Gravity Wells",
+      "options": { "colorMode": "value", "graphMode": "area", "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false } },
+      "targets": [{ "expr": "orbit_royale_dos_connections_rejected{job=\"orbit-royale-api\"}", "legendFormat": "Rejected", "refId": "A" }],
+      "title": "DoS Rej",
       "type": "stat"
     },
     {
@@ -501,22 +653,14 @@
       "fieldConfig": {
         "defaults": {
           "color": { "mode": "thresholds" },
-          "mappings": [
-            { "options": { "0": { "color": "semi-dark-blue", "index": 0, "text": "OFF" } }, "type": "value" },
-            { "options": { "1": { "color": "green", "index": 1, "text": "ON" } }, "type": "value" }
-          ],
-          "thresholds": { "mode": "absolute", "steps": [{ "color": "blue", "value": null }, { "color": "green", "value": 1 }] }
+          "thresholds": { "mode": "absolute", "steps": [{ "color": "green", "value": null }, { "color": "yellow", "value": 100 }, { "color": "red", "value": 1000 }] }
         }
       },
-      "gridPos": { "h": 4, "w": 4, "x": 8, "y": 38 },
+      "gridPos": { "h": 3, "w": 2, "x": 2, "y": 28 },
       "id": 52,
-      "options": {
-        "colorMode": "background",
-        "graphMode": "none",
-        "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false }
-      },
-      "targets": [{ "expr": "orbit_royale_simulation_enabled{job=\"orbit-royale-api\"}", "legendFormat": "Simulation", "refId": "A" }],
-      "title": "Simulation Mode",
+      "options": { "colorMode": "value", "graphMode": "area", "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false } },
+      "targets": [{ "expr": "orbit_royale_dos_messages_rate_limited{job=\"orbit-royale-api\"}", "legendFormat": "Limited", "refId": "A" }],
+      "title": "Rate Lim",
       "type": "stat"
     },
     {
@@ -524,19 +668,14 @@
       "fieldConfig": {
         "defaults": {
           "color": { "mode": "thresholds" },
-          "thresholds": { "mode": "absolute", "steps": [{ "color": "yellow", "value": null }] },
-          "unit": "none"
+          "thresholds": { "mode": "absolute", "steps": [{ "color": "green", "value": null }, { "color": "red", "value": 1 }] }
         }
       },
-      "gridPos": { "h": 4, "w": 4, "x": 12, "y": 38 },
+      "gridPos": { "h": 3, "w": 2, "x": 4, "y": 28 },
       "id": 53,
-      "options": {
-        "colorMode": "value",
-        "graphMode": "area",
-        "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false }
-      },
-      "targets": [{ "expr": "orbit_royale_simulation_target_bots{job=\"orbit-royale-api\"}", "legendFormat": "Target", "refId": "A" }],
-      "title": "Target Bots",
+      "options": { "colorMode": "value", "graphMode": "area", "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false } },
+      "targets": [{ "expr": "orbit_royale_dos_active_bans{job=\"orbit-royale-api\"}", "legendFormat": "Bans", "refId": "A" }],
+      "title": "IP Bans",
       "type": "stat"
     },
     {
@@ -544,52 +683,70 @@
       "fieldConfig": {
         "defaults": {
           "color": { "mode": "thresholds" },
-          "max": 100,
-          "min": 0,
-          "thresholds": { "mode": "absolute", "steps": [{ "color": "green", "value": null }, { "color": "yellow", "value": 50 }, { "color": "orange", "value": 75 }] },
-          "unit": "percent"
+          "thresholds": { "mode": "absolute", "steps": [{ "color": "green", "value": null }, { "color": "yellow", "value": 10 }, { "color": "red", "value": 100 }] }
         }
       },
-      "gridPos": { "h": 4, "w": 4, "x": 16, "y": 38 },
+      "gridPos": { "h": 3, "w": 2, "x": 6, "y": 28 },
       "id": 54,
-      "options": {
-        "minVizHeight": 75,
-        "minVizWidth": 75,
-        "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false },
-        "showThresholdLabels": false,
-        "showThresholdMarkers": true
-      },
-      "targets": [{ "expr": "orbit_royale_simulation_cycle_progress{job=\"orbit-royale-api\"}", "legendFormat": "Progress", "refId": "A" }],
-      "title": "Cycle Progress",
-      "type": "gauge"
+      "options": { "colorMode": "value", "graphMode": "area", "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false } },
+      "targets": [{ "expr": "orbit_royale_anticheat_inputs_rejected{job=\"orbit-royale-api\"}", "legendFormat": "Rejected", "refId": "A" }],
+      "title": "AC Rej",
+      "type": "stat"
     },
     {
       "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
       "fieldConfig": {
         "defaults": {
-          "color": { "mode": "palette-classic" },
-          "custom": {
-            "axisBorderShow": false,
-            "drawStyle": "line",
-            "fillOpacity": 20,
-            "gradientMode": "opacity",
-            "lineInterpolation": "smooth",
-            "lineWidth": 2,
-            "showPoints": "never"
-          },
-          "thresholds": { "mode": "absolute", "steps": [{ "color": "green", "value": null }] }
+          "color": { "mode": "thresholds" },
+          "thresholds": { "mode": "absolute", "steps": [{ "color": "orange", "value": null }] }
         }
       },
-      "gridPos": { "h": 6, "w": 12, "x": 0, "y": 42 },
+      "gridPos": { "h": 3, "w": 2, "x": 8, "y": 28 },
       "id": 55,
-      "options": {
-        "legend": { "calcs": ["mean", "max"], "displayMode": "table", "placement": "bottom", "showLegend": true },
-        "tooltip": { "mode": "multi", "sort": "desc" }
+      "options": { "colorMode": "value", "graphMode": "area", "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false } },
+      "targets": [{ "expr": "orbit_royale_anticheat_inputs_sanitized{job=\"orbit-royale-api\"}", "legendFormat": "Sanitized", "refId": "A" }],
+      "title": "Sanitized",
+      "type": "stat"
+    },
+    {
+      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "thresholds" },
+          "thresholds": { "mode": "absolute", "steps": [{ "color": "green", "value": null }, { "color": "red", "value": 1 }] }
+        }
       },
+      "gridPos": { "h": 3, "w": 2, "x": 10, "y": 28 },
+      "id": 56,
+      "options": { "colorMode": "value", "graphMode": "area", "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false } },
+      "targets": [{ "expr": "orbit_royale_anticheat_sequence_violations{job=\"orbit-royale-api\"}", "legendFormat": "Violations", "refId": "A" }],
+      "title": "Seq Viol",
+      "type": "stat"
+    },
+    {
+      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "palette-classic" },
+          "custom": {
+            "axisBorderShow": false,
+            "drawStyle": "line",
+            "fillOpacity": 20,
+            "lineWidth": 2,
+            "showPoints": "never"
+          },
+          "unit": "short"
+        }
+      },
+      "gridPos": { "h": 6, "w": 6, "x": 12, "y": 28 },
+      "id": 57,
+      "options": { "legend": { "calcs": [], "displayMode": "list", "placement": "bottom", "showLegend": true }, "tooltip": { "mode": "multi", "sort": "none" } },
       "targets": [
-        { "expr": "orbit_royale_arena_radius{job=\"orbit-royale-api\"}", "legendFormat": "Arena Radius", "refId": "A" }
+        { "expr": "rate(orbit_royale_anticheat_inputs_validated{job=\"orbit-royale-api\"}[1m])", "legendFormat": "Validated/min", "refId": "A" },
+        { "expr": "rate(orbit_royale_anticheat_inputs_rejected{job=\"orbit-royale-api\"}[1m])", "legendFormat": "Rejected/min", "refId": "B" },
+        { "expr": "rate(orbit_royale_anticheat_inputs_sanitized{job=\"orbit-royale-api\"}[1m])", "legendFormat": "Sanitized/min", "refId": "C" }
       ],
-      "title": "Arena Radius Over Time",
+      "title": "Input Validation Rate",
       "type": "timeseries"
     },
     {
@@ -601,31 +758,229 @@
             "axisBorderShow": false,
             "drawStyle": "line",
             "fillOpacity": 20,
-            "gradientMode": "opacity",
-            "lineInterpolation": "smooth",
             "lineWidth": 2,
             "showPoints": "never"
           },
-          "thresholds": { "mode": "absolute", "steps": [{ "color": "green", "value": null }] }
+          "unit": "short"
         }
       },
-      "gridPos": { "h": 6, "w": 12, "x": 12, "y": 42 },
-      "id": 56,
-      "options": {
-        "legend": { "calcs": ["lastNotNull"], "displayMode": "list", "placement": "bottom", "showLegend": true },
-        "tooltip": { "mode": "multi", "sort": "desc" }
-      },
+      "gridPos": { "h": 6, "w": 6, "x": 18, "y": 28 },
+      "id": 58,
+      "options": { "legend": { "calcs": [], "displayMode": "list", "placement": "bottom", "showLegend": true }, "tooltip": { "mode": "multi", "sort": "none" } },
       "targets": [
-        { "expr": "orbit_royale_simulation_target_bots{job=\"orbit-royale-api\"}", "legendFormat": "Target Bots", "refId": "A" },
-        { "expr": "orbit_royale_players_bot{job=\"orbit-royale-api\"}", "legendFormat": "Actual Bots", "refId": "B" }
+        { "expr": "rate(orbit_royale_dos_connections_rejected{job=\"orbit-royale-api\"}[1m])", "legendFormat": "Conn Rejected/min", "refId": "A" },
+        { "expr": "rate(orbit_royale_dos_messages_rate_limited{job=\"orbit-royale-api\"}[1m])", "legendFormat": "Rate Limited/min", "refId": "B" }
       ],
-      "title": "Simulation: Target vs Actual Bots",
+      "title": "DoS Protection Activity",
       "type": "timeseries"
+    },
+
+    {
+      "collapsed": true,
+      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 34 },
+      "id": 60,
+      "panels": [
+        {
+          "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+          "fieldConfig": {
+            "defaults": {
+              "color": { "mode": "thresholds" },
+              "thresholds": { "mode": "absolute", "steps": [{ "color": "purple", "value": null }] }
+            }
+          },
+          "gridPos": { "h": 3, "w": 3, "x": 0, "y": 35 },
+          "id": 61,
+          "options": { "colorMode": "value", "graphMode": "area", "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false } },
+          "targets": [{ "expr": "orbit_royale_arena_radius{job=\"orbit-royale-api\"}", "legendFormat": "Radius", "refId": "A" }],
+          "title": "Arena Radius",
+          "type": "stat"
+        },
+        {
+          "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+          "fieldConfig": {
+            "defaults": {
+              "color": { "mode": "thresholds" },
+              "thresholds": { "mode": "absolute", "steps": [{ "color": "purple", "value": null }] },
+              "decimals": 2
+            }
+          },
+          "gridPos": { "h": 3, "w": 3, "x": 3, "y": 35 },
+          "id": 62,
+          "options": { "colorMode": "value", "graphMode": "area", "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false } },
+          "targets": [{ "expr": "orbit_royale_arena_scale{job=\"orbit-royale-api\"} / 100", "legendFormat": "Scale", "refId": "A" }],
+          "title": "Arena Scale",
+          "type": "stat"
+        },
+        {
+          "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+          "fieldConfig": {
+            "defaults": {
+              "color": { "mode": "thresholds" },
+              "thresholds": { "mode": "absolute", "steps": [{ "color": "blue", "value": null }] }
+            }
+          },
+          "gridPos": { "h": 3, "w": 3, "x": 6, "y": 35 },
+          "id": 63,
+          "options": { "colorMode": "value", "graphMode": "area", "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false } },
+          "targets": [{ "expr": "orbit_royale_gravity_wells{job=\"orbit-royale-api\"}", "legendFormat": "Wells", "refId": "A" }],
+          "title": "Gravity Wells",
+          "type": "stat"
+        },
+        {
+          "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+          "fieldConfig": {
+            "defaults": {
+              "color": { "mode": "thresholds" },
+              "thresholds": { "mode": "absolute", "steps": [{ "color": "orange", "value": null }] }
+            }
+          },
+          "gridPos": { "h": 3, "w": 3, "x": 9, "y": 35 },
+          "id": 64,
+          "options": { "colorMode": "value", "graphMode": "area", "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false } },
+          "targets": [{ "expr": "orbit_royale_projectiles{job=\"orbit-royale-api\"}", "legendFormat": "Proj", "refId": "A" }],
+          "title": "Projectiles",
+          "type": "stat"
+        },
+        {
+          "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+          "fieldConfig": {
+            "defaults": {
+              "color": { "mode": "thresholds" },
+              "thresholds": { "mode": "absolute", "steps": [{ "color": "semi-dark-green", "value": null }] }
+            }
+          },
+          "gridPos": { "h": 3, "w": 3, "x": 12, "y": 35 },
+          "id": 65,
+          "options": { "colorMode": "value", "graphMode": "area", "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false } },
+          "targets": [{ "expr": "orbit_royale_debris{job=\"orbit-royale-api\"}", "legendFormat": "Debris", "refId": "A" }],
+          "title": "Debris",
+          "type": "stat"
+        },
+        {
+          "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+          "fieldConfig": {
+            "defaults": {
+              "color": { "mode": "palette-classic" },
+              "custom": {
+                "axisBorderShow": false,
+                "drawStyle": "line",
+                "fillOpacity": 20,
+                "lineInterpolation": "smooth",
+                "lineWidth": 2,
+                "showPoints": "never"
+              }
+            }
+          },
+          "gridPos": { "h": 6, "w": 9, "x": 15, "y": 35 },
+          "id": 66,
+          "options": { "legend": { "calcs": ["mean", "max"], "displayMode": "table", "placement": "bottom", "showLegend": true }, "tooltip": { "mode": "multi", "sort": "desc" } },
+          "targets": [
+            { "expr": "orbit_royale_projectiles{job=\"orbit-royale-api\"}", "legendFormat": "Projectiles", "refId": "A" },
+            { "expr": "orbit_royale_debris{job=\"orbit-royale-api\"}", "legendFormat": "Debris", "refId": "B" },
+            { "expr": "orbit_royale_gravity_wells{job=\"orbit-royale-api\"}", "legendFormat": "Gravity Wells", "refId": "C" }
+          ],
+          "title": "Game Entities",
+          "type": "timeseries"
+        },
+        {
+          "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+          "fieldConfig": {
+            "defaults": {
+              "color": { "mode": "palette-classic" },
+              "custom": {
+                "axisBorderShow": false,
+                "drawStyle": "line",
+                "fillOpacity": 20,
+                "lineInterpolation": "smooth",
+                "lineWidth": 2,
+                "showPoints": "never"
+              }
+            }
+          },
+          "gridPos": { "h": 3, "w": 15, "x": 0, "y": 38 },
+          "id": 67,
+          "options": { "legend": { "calcs": ["mean", "max"], "displayMode": "table", "placement": "right", "showLegend": true }, "tooltip": { "mode": "multi", "sort": "desc" } },
+          "targets": [{ "expr": "orbit_royale_arena_radius{job=\"orbit-royale-api\"}", "legendFormat": "Arena Radius", "refId": "A" }],
+          "title": "Arena Radius Over Time",
+          "type": "timeseries"
+        }
+      ],
+      "title": "Entities & Arena (click to expand)",
+      "type": "row"
+    },
+
+    {
+      "collapsed": true,
+      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 35 },
+      "id": 70,
+      "panels": [
+        {
+          "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+          "fieldConfig": {
+            "defaults": {
+              "color": { "mode": "palette-classic" },
+              "custom": {
+                "axisBorderShow": false,
+                "drawStyle": "line",
+                "fillOpacity": 20,
+                "gradientMode": "opacity",
+                "lineInterpolation": "smooth",
+                "lineWidth": 2,
+                "showPoints": "never",
+                "thresholdsStyle": { "mode": "line" }
+              },
+              "max": 100,
+              "min": 0,
+              "thresholds": { "mode": "absolute", "steps": [{ "color": "green", "value": null }, { "color": "yellow", "value": 80 }, { "color": "red", "value": 95 }] },
+              "unit": "percent"
+            }
+          },
+          "gridPos": { "h": 7, "w": 12, "x": 0, "y": 36 },
+          "id": 71,
+          "options": {
+            "legend": { "calcs": ["mean", "max"], "displayMode": "table", "placement": "bottom", "showLegend": true },
+            "tooltip": { "mode": "multi", "sort": "desc" }
+          },
+          "targets": [{ "expr": "sum by (short_id) (rate(container_cpu_usage_seconds_total{job=\"cadvisor\", id=~\"/docker/[a-f0-9]+\"}[1m])) * 100", "legendFormat": "{{short_id}}", "refId": "A" }],
+          "title": "Container CPU % (docker ps for ID→name)",
+          "type": "timeseries"
+        },
+        {
+          "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+          "fieldConfig": {
+            "defaults": {
+              "color": { "mode": "palette-classic" },
+              "custom": {
+                "axisBorderShow": false,
+                "drawStyle": "line",
+                "fillOpacity": 20,
+                "gradientMode": "opacity",
+                "lineInterpolation": "smooth",
+                "lineWidth": 2,
+                "showPoints": "never"
+              },
+              "thresholds": { "mode": "absolute", "steps": [{ "color": "green", "value": null }] },
+              "unit": "bytes"
+            }
+          },
+          "gridPos": { "h": 7, "w": 12, "x": 12, "y": 36 },
+          "id": 72,
+          "options": {
+            "legend": { "calcs": ["mean", "max"], "displayMode": "table", "placement": "bottom", "showLegend": true },
+            "tooltip": { "mode": "multi", "sort": "desc" }
+          },
+          "targets": [{ "expr": "container_memory_usage_bytes{job=\"cadvisor\", id=~\"/docker/[a-f0-9]+\"}", "legendFormat": "{{short_id}}", "refId": "A" }],
+          "title": "Container Memory (docker ps for ID→name)",
+          "type": "timeseries"
+        }
+      ],
+      "title": "Container Resources (click to expand)",
+      "type": "row"
     }
   ],
   "refresh": "2s",
   "schemaVersion": 38,
-  "tags": ["orbit-royale", "game", "rust"],
+  "tags": ["orbit-royale", "game", "rust", "consolidated"],
   "templating": {
     "list": [
       {
@@ -647,7 +1002,7 @@
     "time_options": ["5m", "15m", "1h", "6h", "12h", "24h"]
   },
   "timezone": "browser",
-  "title": "Orbit Royale - Game Server Dashboard",
+  "title": "Orbit Royale - Game Server",
   "uid": "orbit-royale-main",
-  "version": 1
+  "version": 2
 }
