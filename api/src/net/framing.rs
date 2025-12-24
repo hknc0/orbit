@@ -1,3 +1,9 @@
+//! Message framing for length-prefixed protocol
+//!
+//! Handles reading and writing framed messages over streams.
+
+#![allow(dead_code)] // Framing utilities for stream protocol
+
 use std::io;
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 

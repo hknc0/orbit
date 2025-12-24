@@ -1,3 +1,9 @@
+//! Connection management for WebTransport clients
+//!
+//! Tracks connection state, authentication, and lifecycle.
+
+#![allow(dead_code)] // Connection state machine ready for future use
+
 use std::net::SocketAddr;
 use std::time::Instant;
 

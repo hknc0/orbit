@@ -1,3 +1,9 @@
+//! Rate limiting for anti-cheat
+//!
+//! Tracks input and action rates to detect automation and spam.
+
+#![allow(dead_code)] // Rate limiter ready for future integration
+
 use std::collections::HashMap;
 use std::time::{Duration, Instant};
 

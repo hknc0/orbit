@@ -1,3 +1,9 @@
+//! Session token management
+//!
+//! Handles secure token generation and session tracking.
+
+#![allow(dead_code)] // Session management ready for future use
+
 use rand::RngCore;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;

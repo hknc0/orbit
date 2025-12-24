@@ -1,3 +1,9 @@
+//! Ban and sanction system for anti-cheat
+//!
+//! Manages player and IP bans with escalation and expiration.
+
+#![allow(dead_code)] // Sanction fields for future admin integration
+
 use std::collections::HashMap;
 use std::net::IpAddr;
 use std::time::{Duration, Instant};

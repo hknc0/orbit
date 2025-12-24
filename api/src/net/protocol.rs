@@ -406,8 +406,9 @@ pub enum GameEvent {
     },
 }
 
-/// Encode a message using bincode
+/// Encode a message using bincode (used in tests, production uses encode_pooled)
 /// Uses legacy config for fixed-size integers (compatible with TypeScript client)
+#[allow(dead_code)] // Used in tests, production uses encode_pooled
 pub fn encode<T: Serialize>(message: &T) -> Result<Vec<u8>, EncodeError> {
     bincode::serde::encode_to_vec(message, bincode::config::legacy())
         .map_err(|e| EncodeError(e.to_string()))
@@ -421,6 +422,7 @@ pub fn decode<T: for<'de> Deserialize<'de>>(data: &[u8]) -> Result<T, DecodeErro
         .map_err(|e| DecodeError(e.to_string()))
 }
 
+#[allow(dead_code)] // Used by encode() for tests
 #[derive(Debug, thiserror::Error)]
 #[error("Encode error: {0}")]
 pub struct EncodeError(String);
