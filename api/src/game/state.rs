@@ -373,6 +373,9 @@ impl Arena {
         let target_escape = (base_radius + additional).min(base_radius * 10.0).max(MIN_ESCAPE_RADIUS);
         let target_outer = target_escape - 200.0;
 
+        // Track previous radius for proportional well scaling
+        let previous_escape = self.escape_radius;
+
         // Smooth lerp toward target (called every tick at 30Hz)
         let diff = target_escape - self.escape_radius;
 
@@ -402,31 +405,34 @@ impl Arena {
         // This is what gets sent to client for UI display
         self.scale = self.escape_radius / arena::ESCAPE_RADIUS;
 
-        // Reposition wells that are now too close to center after arena growth
-        // This prevents wells from clustering at center when scaling from small to large
-        // Wells below 18% of escape_radius are pushed outward toward inner ring (25%)
-        // Uses very slow lerp for smooth, barely-perceptible movement
-        const MIN_WELL_RATIO: f32 = 0.18;
-        const TARGET_INNER_RATIO: f32 = 0.25;
-        const REPOSITION_LERP: f32 = 0.005; // Very slow (0.5% per update = ~3-4 sec to reposition)
-        const MIN_MOVE_DIST: f32 = 0.5; // Minimum movement to prevent micro-jitter
+        // Scale well positions proportionally when arena size changes
+        // Wells should maintain their ratio to escape_radius as arena grows/shrinks
+        // This keeps the visual distribution consistent regardless of arena size
+        //
+        // Example: well at 50% of 800 radius = 400 units
+        // When arena grows to 4000, well should be at 50% of 4000 = 2000 units
+        let arena_changed = (self.escape_radius - previous_escape).abs() > 0.1;
 
-        for well in self.gravity_wells.iter_mut().skip(1) {
-            // Skip supermassive at index 0
-            let dist = well.position.length();
-            let ratio = dist / self.escape_radius;
+        if arena_changed && previous_escape > 1.0 {
+            let scale_factor = self.escape_radius / previous_escape;
 
-            if ratio < MIN_WELL_RATIO && dist > 1.0 {
-                // Well is too close to center - push it outward smoothly
-                let target_dist = self.escape_radius * TARGET_INNER_RATIO;
-                let delta = (target_dist - dist) * REPOSITION_LERP;
-
-                // Only move if delta is significant (prevents jitter)
-                if delta.abs() > MIN_MOVE_DIST {
-                    let new_dist = dist + delta;
-                    let direction = well.position.normalize();
-                    well.position = direction * new_dist;
+            for well in self.gravity_wells.iter_mut().skip(1) {
+                // Skip supermassive at index 0
+                let dist = well.position.length();
+                if dist < 1.0 {
+                    continue; // Skip wells at origin
                 }
+
+                // Scale well position by the same factor arena scaled
+                let new_dist = dist * scale_factor;
+
+                // Clamp to valid range (20% to 85% of escape radius)
+                let min_dist = self.escape_radius * 0.20;
+                let max_dist = self.escape_radius * 0.85;
+                let clamped_dist = new_dist.clamp(min_dist, max_dist);
+
+                let direction = well.position.normalize();
+                well.position = direction * clamped_dist;
             }
         }
 
@@ -844,30 +850,58 @@ mod tests {
     }
 
     #[test]
-    fn test_scale_for_simulation_preserves_existing_wells() {
+    fn test_scale_for_simulation_scales_wells_proportionally() {
         let mut arena = Arena::default();
-        // Set up initial wells
-        arena.update_for_player_count(50);
-        let initial_well_positions: Vec<Vec2> = arena.gravity_wells.iter().map(|w| w.position).collect();
-        let initial_well_count = arena.gravity_wells.len();
+        let initial_escape = arena.escape_radius;
+        assert_eq!(initial_escape, 800.0, "Default arena should be 800");
 
-        // Scale for more players
-        for _ in 0..20 {
-            arena.scale_for_simulation(200);
+        // First grow arena and add wells via scale_for_simulation
+        for _ in 0..30 {
+            arena.scale_for_simulation(100);
         }
 
-        // Original wells should still be in same positions
-        for (i, initial_pos) in initial_well_positions.iter().enumerate() {
-            if i < arena.gravity_wells.len() {
-                let current_pos = arena.gravity_wells[i].position;
-                assert!((current_pos - *initial_pos).length() < 0.001,
-                    "Well {} position changed from {:?} to {:?}", i, initial_pos, current_pos);
+        // Record well ratios after initial setup
+        let setup_escape = arena.escape_radius;
+        let setup_ratios: Vec<f32> = arena.gravity_wells.iter()
+            .skip(1) // Skip supermassive
+            .map(|w| w.position.length() / setup_escape)
+            .collect();
+        let setup_well_count = arena.gravity_wells.len();
+        assert!(setup_well_count > 1, "Should have wells after setup");
+
+        // Now scale up significantly
+        for _ in 0..100 {
+            arena.scale_for_simulation(500);
+        }
+
+        let final_escape = arena.escape_radius;
+
+        // Arena should have grown
+        assert!(final_escape > setup_escape,
+            "Arena should have grown: {} > {}", final_escape, setup_escape);
+
+        // Wells should have scaled proportionally - ratios should be similar
+        for (i, &setup_ratio) in setup_ratios.iter().enumerate() {
+            if i + 1 < arena.gravity_wells.len() {
+                let current_dist = arena.gravity_wells[i + 1].position.length();
+                let current_ratio = current_dist / arena.escape_radius;
+
+                // Ratio should be within clamped range (20-85%)
+                assert!(current_ratio >= 0.19 && current_ratio <= 0.86,
+                    "Well {} ratio {} outside valid range (0.20-0.85)", i, current_ratio);
+
+                // If setup ratio was in valid range, current should be close
+                if setup_ratio >= 0.20 && setup_ratio <= 0.85 {
+                    let ratio_diff = (current_ratio - setup_ratio).abs();
+                    assert!(ratio_diff < 0.20,
+                        "Well {} ratio changed too much: {:.2} -> {:.2}", i, setup_ratio, current_ratio);
+                }
             }
         }
 
         // Should have same or more wells (never removes)
-        assert!(arena.gravity_wells.len() >= initial_well_count,
-            "Wells should not decrease: {} >= {}", arena.gravity_wells.len(), initial_well_count);
+        assert!(arena.gravity_wells.len() >= setup_well_count,
+            "Wells should not decrease: {} >= {}", arena.gravity_wells.len(), setup_well_count);
     }
 
     #[test]
