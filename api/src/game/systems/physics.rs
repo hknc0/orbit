@@ -102,11 +102,15 @@ pub fn apply_thrust(
 }
 
 /// Calculate kinetic energy for a body
+/// Used in advanced_physics feature for collision calculations
+#[allow(dead_code)]
 pub fn kinetic_energy(mass: f32, velocity: Vec2) -> f32 {
     0.5 * mass * velocity.length_sq()
 }
 
-/// Calculate momentum for a body
+/// Calculate momentum for a body (vector form)
+/// Available for advanced collision calculations
+#[allow(dead_code)]
 pub fn momentum(mass: f32, velocity: Vec2) -> Vec2 {
     velocity * mass
 }

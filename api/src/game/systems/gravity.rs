@@ -1,3 +1,9 @@
+//! Gravity system for orbital mechanics
+//!
+//! Applies gravitational forces from gravity wells to all entities.
+
+#![allow(dead_code)] // Physics utilities for orbital calculations
+
 use rayon::prelude::*;
 
 use crate::game::constants::physics::{CENTRAL_MASS, G};
@@ -86,8 +92,8 @@ pub fn calculate_central_gravity(position: Vec2, _mass: f32) -> Vec2 {
 
     let distance = distance_sq.sqrt();
 
-    // Direction toward center (negative of position normalized)
-    let direction = -position.normalize();
+    // Direction toward center (use already-computed distance to avoid recomputing)
+    let direction = -position * (1.0 / distance);
 
     // Gravitational acceleration magnitude: G * M / r^2
     let acceleration = G * CENTRAL_MASS / distance_sq;
