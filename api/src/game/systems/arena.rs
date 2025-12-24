@@ -239,7 +239,14 @@ pub fn spawn_near_well_bounded(
         .collect();
 
     if orbital_wells.is_empty() {
-        return random_spawn_position();
+        // No orbital wells - spawn at safe distance from central well
+        let mut rng = rand::thread_rng();
+        let angle = rng.gen_range(0.0..std::f32::consts::TAU);
+        // Use the first well (central) core radius for safe distance calculation
+        let safe_radius = wells.first()
+            .map(|w| w.core_radius * 4.0)
+            .unwrap_or(CORE_RADIUS * 4.0);
+        return crate::util::vec2::Vec2::from_angle(angle) * safe_radius;
     }
 
     let mut rng = rand::thread_rng();
@@ -277,8 +284,19 @@ pub fn spawn_near_well_bounded(
         }
     }
 
-    // Fallback to random spawn if can't find safe well spawn
-    random_spawn_position()
+    // Fallback: spawn near a random orbital well without safety checks
+    // This keeps players distributed across wells rather than clustering at center
+    if !orbital_wells.is_empty() {
+        let well = orbital_wells[rng.gen_range(0..orbital_wells.len())];
+        let angle = rng.gen_range(0.0..std::f32::consts::TAU);
+        let radius = rng.gen_range(ZONE_MIN..ZONE_MAX);
+        return well.position + crate::util::vec2::Vec2::from_angle(angle) * radius;
+    }
+
+    // Last resort: spawn at safe distance from center (for single-well arenas)
+    let angle = rng.gen_range(0.0..std::f32::consts::TAU);
+    let radius = CORE_RADIUS * 4.0; // Safe distance from central well
+    crate::util::vec2::Vec2::from_angle(angle) * radius
 }
 
 /// Calculate a safe spawn position near gravity wells, avoiding other players

@@ -2,7 +2,7 @@
 // Stores interpolated server state and local player prediction
 
 import { ARENA, MASS, PLAYER_COLORS } from '@/utils/Constants';
-import type { PlayerId, MatchPhase } from '@/net/Protocol';
+import type { PlayerId, MatchPhase, AIStatusSnapshot } from '@/net/Protocol';
 import type { InterpolatedState, InterpolatedPlayer, InterpolatedProjectile, InterpolatedDebris, InterpolatedGravityWell, InterpolatedNotablePlayer } from '@/net/StateSync';
 
 // Arena state
@@ -123,6 +123,9 @@ export class World {
     totalDeaths: 0,
     bestTimeAlive: 0,
   };
+
+  // AI Manager status (from server snapshot)
+  aiStatus: AIStatusSnapshot | null = null;
 
   // Update from interpolated server state
   updateFromState(state: InterpolatedState): void {

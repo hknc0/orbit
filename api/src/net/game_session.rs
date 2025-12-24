@@ -411,14 +411,38 @@ impl GameSession {
 
     /// Update arena scale and gravity wells based on player count
     /// Uses smooth scaling to avoid regenerating all wells and causing chaos
+    /// Triggers rapid collapse if excess wells exceed threshold
     fn update_arena_scale(&mut self) {
         let player_count = self.game_loop.state().players.len();
         let config = self.arena_config.read();
-        // Use smooth scaling that only adds wells incrementally (never removes/moves existing)
+
+        // Calculate target wells using same formula
+        let players_per_well = 50 / config.wells_per_50_players.max(1);
+        let target_wells = ((player_count + players_per_well - 1) / players_per_well)
+            .max(1)
+            .min(config.max_wells);
+
+        // Use smooth scaling that only adds wells incrementally
         self.game_loop
             .state_mut()
             .arena
             .scale_for_simulation(player_count, &config);
+
+        // Check if we have significant excess wells (>50% over target)
+        let excess = self.game_loop.state().arena.excess_wells(target_wells);
+        if excess > target_wells / 2 && excess > 2 {
+            // Trigger staggered collapse of excess wells
+            let collapsed = self.game_loop
+                .state_mut()
+                .arena
+                .trigger_well_collapse(target_wells);
+            if collapsed > 0 {
+                info!(
+                    "Arena scaling: triggered collapse of {} excess wells (target: {}, excess: {})",
+                    collapsed, target_wells, excess
+                );
+            }
+        }
     }
 
     /// Queue input for a player with deduplication and validation
@@ -731,7 +755,28 @@ impl GameSession {
 
     /// Get current game snapshot (full, unfiltered)
     pub fn get_snapshot(&self) -> GameSnapshot {
-        GameSnapshot::from_game_state(self.game_loop.state())
+        let mut snapshot = GameSnapshot::from_game_state(self.game_loop.state());
+
+        // Add AI manager status if available
+        if let Some(metrics) = &self.metrics {
+            let ai_enabled = metrics.ai_enabled.load(Ordering::Relaxed);
+            if ai_enabled > 0 {
+                let total = metrics.ai_decisions_total.load(Ordering::Relaxed) as u32;
+                let successful = metrics.ai_decisions_successful.load(Ordering::Relaxed) as u32;
+                let success_rate = if total > 0 { ((successful * 100) / total) as u8 } else { 0 };
+
+                snapshot.ai_status = Some(crate::net::protocol::AIStatusSnapshot {
+                    enabled: true,
+                    last_decision: None, // Could be populated from AI manager history
+                    confidence: metrics.ai_last_confidence.load(Ordering::Relaxed) as u8,
+                    success_rate,
+                    decisions_total: total,
+                    decisions_successful: successful,
+                });
+            }
+        }
+
+        snapshot
     }
 
     /// Get a filtered snapshot for a specific player using AOI

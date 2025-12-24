@@ -212,16 +212,28 @@ pub enum GravityWaveEvent {
     WellCharging { well_index: u8, position: Vec2 },
     /// Well exploded, wave created
     WellExploded { well_index: u8, position: Vec2, strength: f32 },
+    /// Well was destroyed (removed from arena after explosion)
+    WellDestroyed { well_index: u8, position: Vec2 },
 }
 
 /// Update explosion timers and create waves when wells explode
 /// Returns events for charging and explosions
 /// Config controls all timing and force parameters
-pub fn update_explosions(state: &mut GameState, config: &GravityWaveConfig, dt: f32) -> Vec<GravityWaveEvent> {
+/// `target_wells` is the desired number of orbital wells - excess wells are removed on explosion
+pub fn update_explosions(
+    state: &mut GameState,
+    config: &GravityWaveConfig,
+    dt: f32,
+    target_wells: usize,
+) -> Vec<GravityWaveEvent> {
     use crate::game::state::GravityWave;
 
     let mut events = Vec::new();
     let mut new_waves = Vec::new();
+    let mut wells_to_remove: Vec<usize> = Vec::new();
+
+    // Current orbital well count (excluding central supermassive at index 0)
+    let current_orbital_wells = state.arena.gravity_wells.len().saturating_sub(1);
 
     // Skip index 0 (central supermassive black hole - too stable to explode)
     for (i, well) in state.arena.gravity_wells.iter_mut().enumerate().skip(1) {
@@ -250,10 +262,26 @@ pub fn update_explosions(state: &mut GameState, config: &GravityWaveConfig, dt: 
             // Create the wave
             new_waves.push(GravityWave::new(well.position, strength));
 
-            // Reset timer for next explosion using config
-            well.explosion_timer = config.random_explosion_delay();
-            well.is_charging = false;
+            // Check if we have excess wells - if so, mark for removal instead of reset
+            let excess_wells = current_orbital_wells.saturating_sub(wells_to_remove.len());
+            if excess_wells > target_wells {
+                // Remove this well (arena has too many for current player count)
+                wells_to_remove.push(i);
+                events.push(GravityWaveEvent::WellDestroyed {
+                    well_index: i as u8,
+                    position: well.position,
+                });
+            } else {
+                // Reset timer for next explosion using config
+                well.explosion_timer = config.random_explosion_delay();
+                well.is_charging = false;
+            }
         }
+    }
+
+    // Remove wells in reverse order to preserve indices
+    for &idx in wells_to_remove.iter().rev() {
+        state.arena.gravity_wells.remove(idx);
     }
 
     // Add new waves to state
@@ -543,7 +571,8 @@ mod tests {
         }
 
         let initial_timer = state.arena.gravity_wells.get(1).map(|w| w.explosion_timer).unwrap_or(0.0);
-        update_explosions(&mut state, &config, DT);
+        // Use high target_wells to prevent removal
+        update_explosions(&mut state, &config, DT, 100);
 
         if state.arena.gravity_wells.len() > 1 {
             assert!(state.arena.gravity_wells[1].explosion_timer < initial_timer);
@@ -560,7 +589,8 @@ mod tests {
             state.arena.gravity_wells[1].explosion_timer = 0.0;
             state.arena.gravity_wells[1].is_charging = true;
 
-            let events = update_explosions(&mut state, &config, DT);
+            // Use high target_wells to prevent removal
+            let events = update_explosions(&mut state, &config, DT, 100);
 
             // Should create an explosion event
             assert!(events.iter().any(|e| matches!(e, GravityWaveEvent::WellExploded { .. })));
@@ -579,7 +609,8 @@ mod tests {
             state.arena.gravity_wells[1].explosion_timer = config.charge_duration - 0.1;
             state.arena.gravity_wells[1].is_charging = false;
 
-            let events = update_explosions(&mut state, &config, DT);
+            // Use high target_wells to prevent removal
+            let events = update_explosions(&mut state, &config, DT, 100);
 
             // Should create a charging event
             assert!(events.iter().any(|e| matches!(e, GravityWaveEvent::WellCharging { .. })));
@@ -771,7 +802,8 @@ mod tests {
             state.arena.gravity_wells[0].is_charging = true;
         }
 
-        let events = update_explosions(&mut state, &config, DT);
+        // Use high target_wells to prevent removal
+        let events = update_explosions(&mut state, &config, DT, 100);
 
         // Central well should NOT explode (skipped at index 0)
         assert!(!events.iter().any(|e| match e {
@@ -859,5 +891,72 @@ mod tests {
         let g2 = calculate_gravity_from_well(pos, &well);
 
         assert_eq!(g1, g2, "Gravity should be deterministic");
+    }
+
+    #[test]
+    fn test_well_removed_on_explosion_when_excess() {
+        use crate::game::constants::arena::CORE_RADIUS;
+        use crate::game::constants::physics::CENTRAL_MASS;
+
+        let mut state = GameState::new();
+        let config = GravityWaveConfig::default();
+
+        // Add 5 orbital wells
+        for i in 1..=5 {
+            let mut well = GravityWell::new(
+                Vec2::new(500.0 * i as f32, 0.0),
+                CENTRAL_MASS,
+                CORE_RADIUS,
+            );
+            well.explosion_timer = if i == 3 { 0.0 } else { 30.0 };  // Well 3 explodes
+            well.is_charging = i == 3;
+            state.arena.gravity_wells.push(well);
+        }
+
+        let initial_count = state.arena.gravity_wells.len();
+        assert_eq!(initial_count, 6);  // 1 central + 5 orbital
+
+        // Update with low target (1 well) - should remove the exploding well
+        let events = update_explosions(&mut state, &config, DT, 1);
+
+        // Should have explosion and destruction events
+        assert!(events.iter().any(|e| matches!(e, GravityWaveEvent::WellExploded { .. })));
+        assert!(events.iter().any(|e| matches!(e, GravityWaveEvent::WellDestroyed { .. })));
+
+        // Well count should decrease
+        assert_eq!(state.arena.gravity_wells.len(), initial_count - 1);
+    }
+
+    #[test]
+    fn test_well_not_removed_when_at_target() {
+        use crate::game::constants::arena::CORE_RADIUS;
+        use crate::game::constants::physics::CENTRAL_MASS;
+
+        let mut state = GameState::new();
+        let config = GravityWaveConfig::default();
+
+        // Add 2 orbital wells
+        for i in 1..=2 {
+            let mut well = GravityWell::new(
+                Vec2::new(500.0 * i as f32, 0.0),
+                CENTRAL_MASS,
+                CORE_RADIUS,
+            );
+            well.explosion_timer = if i == 1 { 0.0 } else { 30.0 };
+            well.is_charging = i == 1;
+            state.arena.gravity_wells.push(well);
+        }
+
+        let initial_count = state.arena.gravity_wells.len();
+
+        // Update with target = 2 (no excess)
+        let events = update_explosions(&mut state, &config, DT, 2);
+
+        // Should explode but NOT destroy (no excess)
+        assert!(events.iter().any(|e| matches!(e, GravityWaveEvent::WellExploded { .. })));
+        assert!(!events.iter().any(|e| matches!(e, GravityWaveEvent::WellDestroyed { .. })));
+
+        // Well count should stay the same (timer reset instead of removal)
+        assert_eq!(state.arena.gravity_wells.len(), initial_count);
     }
 }

@@ -106,6 +106,8 @@ pub struct AIManager {
     history: DecisionHistory,
     last_evaluation: Option<DateTime<Utc>>,
     pending_evaluations: Vec<usize>, // Indices of decisions awaiting outcome evaluation
+    disabled_due_to_error: bool, // Set to true on fatal errors (e.g., invalid API key)
+    consecutive_errors: u32, // Track consecutive errors for auto-disable
 }
 
 impl AIManager {
@@ -136,7 +138,30 @@ impl AIManager {
             history,
             last_evaluation: None,
             pending_evaluations: Vec::new(),
+            disabled_due_to_error: false,
+            consecutive_errors: 0,
         }
+    }
+
+    /// Check if an error is fatal (should disable the AI manager)
+    fn is_fatal_error(error: &str) -> bool {
+        let error_lower = error.to_lowercase();
+        // API key issues
+        error_lower.contains("api key") ||
+        error_lower.contains("invalid_api_key") ||
+        error_lower.contains("authentication") ||
+        error_lower.contains("unauthorized") ||
+        error_lower.contains("401") ||
+        error_lower.contains("403") ||
+        // Rate limiting - disable to avoid burning money/getting banned
+        error_lower.contains("rate limit") ||
+        error_lower.contains("rate_limit") ||
+        error_lower.contains("too many requests") ||
+        error_lower.contains("429") ||
+        // Billing/quota issues
+        error_lower.contains("insufficient") ||
+        error_lower.contains("quota") ||
+        error_lower.contains("billing")
     }
 
     /// Run the AI manager main loop
@@ -153,12 +178,21 @@ impl AIManager {
         // Mark AI as enabled in Prometheus metrics
         metrics.ai_enabled.store(1, std::sync::atomic::Ordering::Relaxed);
 
+        const MAX_CONSECUTIVE_ERRORS: u32 = 5;
+
         loop {
             interval_timer.tick().await;
+
+            // Skip if disabled due to fatal error
+            if self.disabled_due_to_error {
+                debug!("AI Manager: disabled due to previous fatal error");
+                continue;
+            }
 
             // Skip if not properly configured
             if !self.config.is_active() {
                 debug!("AI Manager: not active (missing API key or disabled)");
+                metrics.ai_enabled.store(0, std::sync::atomic::Ordering::Relaxed);
                 continue;
             }
 
@@ -248,8 +282,28 @@ impl AIManager {
                 }
                 Err(e) => {
                     error!("AI analysis failed: {}", e);
+                    self.consecutive_errors += 1;
+
+                    // Check if this is a fatal error that should disable AI
+                    if Self::is_fatal_error(&e) {
+                        error!("AI Manager: Fatal error detected, disabling AI manager: {}", e);
+                        self.disabled_due_to_error = true;
+                        metrics.ai_enabled.store(0, std::sync::atomic::Ordering::Relaxed);
+                    } else if self.consecutive_errors >= MAX_CONSECUTIVE_ERRORS {
+                        error!(
+                            "AI Manager: Too many consecutive errors ({}), disabling",
+                            self.consecutive_errors
+                        );
+                        self.disabled_due_to_error = true;
+                        metrics.ai_enabled.store(0, std::sync::atomic::Ordering::Relaxed);
+                    }
+
+                    continue;
                 }
             }
+
+            // Reset consecutive errors on success
+            self.consecutive_errors = 0;
 
             self.last_evaluation = Some(Utc::now());
 

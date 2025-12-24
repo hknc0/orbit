@@ -133,6 +133,26 @@ pub struct GameSnapshot {
     /// Echo of client's last input timestamp for RTT measurement
     #[serde(default)]
     pub echo_client_time: u64,
+    /// AI Manager status (if enabled)
+    #[serde(default)]
+    pub ai_status: Option<AIStatusSnapshot>,
+}
+
+/// AI Manager status for client display
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct AIStatusSnapshot {
+    /// Whether AI manager is enabled
+    pub enabled: bool,
+    /// Last decision summary (what the AI decided)
+    pub last_decision: Option<String>,
+    /// Confidence of last decision (0-100)
+    pub confidence: u8,
+    /// Success rate percentage (0-100)
+    pub success_rate: u8,
+    /// Total decisions made
+    pub decisions_total: u32,
+    /// Decisions successful
+    pub decisions_successful: u32,
 }
 
 /// Minimum mass to appear on minimap radar
@@ -196,6 +216,7 @@ impl GameSnapshot {
             density_grid,
             notable_players,
             echo_client_time: 0, // Set per-player in broadcast
+            ai_status: None, // Set by game_session when AI manager is active
         }
     }
 
@@ -539,6 +560,7 @@ mod tests {
             density_grid: vec![0; 64],
             notable_players: vec![],
             echo_client_time: 0,
+            ai_status: None,
         };
 
         let encoded = encode(&snapshot).unwrap();
@@ -855,6 +877,7 @@ mod encoding_tests {
             density_grid: vec![],
             notable_players: vec![],
             echo_client_time: 0,
+            ai_status: None,
         };
 
         let encoded = encode(&snapshot).unwrap();

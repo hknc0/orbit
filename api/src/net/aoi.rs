@@ -186,6 +186,8 @@ impl AOIManager {
             notable_players: full_snapshot.notable_players.clone(),
             // Set per-player in broadcast
             echo_client_time: 0,
+            // Preserve AI status from full snapshot
+            ai_status: full_snapshot.ai_status.clone(),
         }
     }
 
@@ -282,6 +284,7 @@ mod tests {
             density_grid: vec![],
             notable_players: vec![],
             echo_client_time: 0,
+            ai_status: None,
         }
     }
 
@@ -335,6 +338,7 @@ mod tests {
             density_grid: vec![],
             notable_players: vec![],
             echo_client_time: 0,
+            ai_status: None,
         };
 
         let filtered = aoi.filter_for_player(player_id, player_pos, Vec2::ZERO, &snapshot);
@@ -377,6 +381,7 @@ mod tests {
             density_grid: vec![],
             notable_players: vec![],
             echo_client_time: 0,
+            ai_status: None,
         };
 
         let filtered = aoi.filter_for_player(player_id, player_pos, Vec2::ZERO, &snapshot);
@@ -419,6 +424,7 @@ mod tests {
             density_grid: vec![],
             notable_players: vec![],
             echo_client_time: 0,
+            ai_status: None,
         };
 
         let filtered = aoi.filter_for_player(player_id, player_pos, Vec2::ZERO, &snapshot);

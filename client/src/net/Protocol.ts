@@ -68,6 +68,17 @@ export interface GameSnapshot {
   densityGrid: number[]; // 16x16 grid of player counts for minimap heatmap
   notablePlayers: NotablePlayer[]; // High-mass players for minimap radar
   echoClientTime: number; // Echo of client's last input timestamp for RTT
+  aiStatus?: AIStatusSnapshot; // AI Manager status (if enabled)
+}
+
+// AI Manager status for in-game display
+export interface AIStatusSnapshot {
+  enabled: boolean;
+  lastDecision?: string;
+  confidence: number; // 0-100
+  successRate: number; // 0-100
+  decisionsTotal: number;
+  decisionsSuccessful: number;
 }
 
 // Notable player for minimap radar (high-mass players visible everywhere)

@@ -196,6 +196,8 @@ export class Game {
 
       case 'Snapshot':
         this.stateSync.applySnapshot(message.snapshot);
+        // Update AI status from snapshot
+        this.world.aiStatus = message.snapshot.aiStatus ?? null;
         break;
 
       case 'Delta':

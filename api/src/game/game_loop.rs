@@ -171,7 +171,17 @@ impl GameLoop {
         // Update gravity wave explosions (occasional random events)
         // Only if feature is enabled via config
         if self.config.gravity_wave_config.enabled {
-            let wave_events = gravity::update_explosions(&mut self.state, &self.config.gravity_wave_config, DT);
+            // Calculate target wells based on current player count
+            // Uses same formula as ArenaScalingConfig defaults: 1 well per 50 players, max 20
+            let player_count = self.state.players.values().filter(|p| p.alive).count();
+            let target_wells = ((player_count + 49) / 50).max(1).min(20);
+
+            let wave_events = gravity::update_explosions(
+                &mut self.state,
+                &self.config.gravity_wave_config,
+                DT,
+                target_wells,
+            );
             for event in wave_events {
                 match event {
                     gravity::GravityWaveEvent::WellCharging { well_index, position } => {
@@ -179,6 +189,10 @@ impl GameLoop {
                     }
                     gravity::GravityWaveEvent::WellExploded { well_index, position, strength } => {
                         events.push(GameLoopEvent::GravityWaveExplosion { well_index, position, strength });
+                    }
+                    gravity::GravityWaveEvent::WellDestroyed { well_index, position } => {
+                        // Well was removed - could add event if clients need to know
+                        tracing::debug!("Well {} destroyed at {:?}", well_index, position);
                     }
                 }
             }
@@ -384,6 +398,7 @@ impl GameLoop {
     }
 
     /// Add AI bots to fill the game
+    /// Uses same spawn mechanics as human players (add_player handles positioning)
     pub fn fill_with_bots(&mut self, total_players: usize) {
         let current_count = self.state.players.len();
         if current_count >= total_players {
@@ -391,28 +406,15 @@ impl GameLoop {
         }
 
         let bots_needed = total_players - current_count;
-        let spawn_positions = arena::spawn_positions(total_players);
 
         for i in 0..bots_needed {
-            let bot = crate::game::state::Player {
-                id: Uuid::new_v4(),
-                name: ai::generate_bot_name(),
-                position: spawn_positions
-                    .get(current_count + i)
-                    .copied()
-                    .unwrap_or_else(arena::random_spawn_position),
-                velocity: crate::util::vec2::Vec2::ZERO,
-                rotation: 0.0,
-                mass: crate::game::constants::mass::STARTING,
-                alive: true,
-                kills: 0,
-                deaths: 0,
-                spawn_protection: crate::game::constants::spawn::PROTECTION_DURATION,
-                is_bot: true,
-                color_index: (current_count + i) as u8,
-                respawn_timer: 0.0,
-            };
-
+            // Use Player::new like humans - add_player handles spawn position
+            let bot = crate::game::state::Player::new(
+                Uuid::new_v4(),
+                ai::generate_bot_name(),
+                true, // is_bot
+                (current_count + i) as u8,
+            );
             self.add_player(bot);
         }
     }

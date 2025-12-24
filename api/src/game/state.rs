@@ -438,6 +438,50 @@ impl Arena {
         self.scale_for_simulation(target_player_count, &ArenaScalingConfig::default());
     }
 
+    /// Trigger rapid collapse of excess wells with staggered timers
+    /// Returns the number of wells queued for collapse
+    /// Wells explode in sequence (0.5s apart) to avoid performance spikes
+    /// The explosion system will remove them when they explode
+    pub fn trigger_well_collapse(&mut self, target_wells: usize) -> usize {
+        let current_orbital = self.gravity_wells.len().saturating_sub(1);
+        if current_orbital <= target_wells {
+            return 0;
+        }
+
+        let excess = current_orbital - target_wells;
+        let mut collapsed = 0;
+
+        // Set staggered timers on excess wells (skip index 0 - supermassive)
+        // Start from the end to collapse outer wells first
+        for (i, well) in self.gravity_wells.iter_mut().enumerate().skip(1).rev() {
+            if collapsed >= excess {
+                break;
+            }
+
+            // Only collapse wells that aren't already about to explode
+            if well.explosion_timer > 1.0 {
+                // Stagger: 0.5s, 1.0s, 1.5s, etc.
+                well.explosion_timer = 0.5 + (collapsed as f32 * 0.5);
+                well.is_charging = true;
+                collapsed += 1;
+                tracing::info!(
+                    "Well {} queued for collapse in {:.1}s (excess well {})",
+                    i,
+                    well.explosion_timer,
+                    collapsed
+                );
+            }
+        }
+
+        collapsed
+    }
+
+    /// Get the current number of excess wells compared to target
+    pub fn excess_wells(&self, target_wells: usize) -> usize {
+        let current_orbital = self.gravity_wells.len().saturating_sub(1);
+        current_orbital.saturating_sub(target_wells)
+    }
+
     /// Add orbital wells distributed across multiple rings for better player spread
     /// Ring positions are configurable via ArenaScalingConfig
     pub fn add_orbital_wells(&mut self, count: usize, escape_radius: f32, config: &ArenaScalingConfig) {
@@ -989,5 +1033,109 @@ mod tests {
         // Shrink delay should be reset
         assert_eq!(arena.shrink_delay_ticks, config.shrink_delay_ticks,
             "Shrink delay should be reset on grow");
+    }
+
+    #[test]
+    fn test_excess_wells_calculation() {
+        let mut arena = Arena::default();
+
+        // Start with 1 well (central supermassive)
+        assert_eq!(arena.excess_wells(1), 0);
+        assert_eq!(arena.excess_wells(5), 0);
+
+        // Add some orbital wells manually
+        use crate::game::constants::arena::CORE_RADIUS;
+        use crate::game::constants::physics::CENTRAL_MASS;
+        for i in 1..=5 {
+            arena.gravity_wells.push(GravityWell::new(
+                Vec2::new(500.0 * i as f32, 0.0),
+                CENTRAL_MASS,
+                CORE_RADIUS,
+            ));
+        }
+
+        // Now we have 6 wells total (1 central + 5 orbital)
+        assert_eq!(arena.gravity_wells.len(), 6);
+        assert_eq!(arena.excess_wells(5), 0);  // 5 orbital, target 5
+        assert_eq!(arena.excess_wells(3), 2);  // 5 orbital, target 3 = 2 excess
+        assert_eq!(arena.excess_wells(1), 4);  // 5 orbital, target 1 = 4 excess
+    }
+
+    #[test]
+    fn test_trigger_well_collapse_sets_timers() {
+        use crate::game::constants::arena::CORE_RADIUS;
+        use crate::game::constants::physics::CENTRAL_MASS;
+
+        let mut arena = Arena::default();
+
+        // Add 5 orbital wells with long timers
+        for i in 1..=5 {
+            let mut well = GravityWell::new(
+                Vec2::new(500.0 * i as f32, 0.0),
+                CENTRAL_MASS,
+                CORE_RADIUS,
+            );
+            well.explosion_timer = 30.0;  // Long timer
+            arena.gravity_wells.push(well);
+        }
+
+        // Trigger collapse to reduce to 2 target wells
+        let collapsed = arena.trigger_well_collapse(2);
+
+        // Should collapse 3 wells (5 - 2 = 3 excess)
+        assert_eq!(collapsed, 3);
+
+        // Check that 3 wells have short timers and are charging
+        let charging_count = arena.gravity_wells.iter()
+            .skip(1)  // Skip central
+            .filter(|w| w.is_charging && w.explosion_timer < 2.0)
+            .count();
+        assert_eq!(charging_count, 3);
+
+        // Check staggered timers (0.5, 1.0, 1.5)
+        let timers: Vec<f32> = arena.gravity_wells.iter()
+            .skip(1)
+            .filter(|w| w.is_charging)
+            .map(|w| w.explosion_timer)
+            .collect();
+        assert!(timers.contains(&0.5) || timers.iter().any(|t| (*t - 0.5).abs() < 0.01));
+    }
+
+    #[test]
+    fn test_trigger_well_collapse_no_excess() {
+        let mut arena = Arena::default();
+
+        // Only central well exists
+        let collapsed = arena.trigger_well_collapse(5);
+        assert_eq!(collapsed, 0);  // No excess, nothing to collapse
+    }
+
+    #[test]
+    fn test_trigger_well_collapse_skips_already_exploding() {
+        use crate::game::constants::arena::CORE_RADIUS;
+        use crate::game::constants::physics::CENTRAL_MASS;
+
+        let mut arena = Arena::default();
+
+        // Add wells - some already about to explode
+        for i in 1..=4 {
+            let mut well = GravityWell::new(
+                Vec2::new(500.0 * i as f32, 0.0),
+                CENTRAL_MASS,
+                CORE_RADIUS,
+            );
+            if i <= 2 {
+                well.explosion_timer = 0.5;  // Already exploding soon
+            } else {
+                well.explosion_timer = 30.0;  // Normal timer
+            }
+            arena.gravity_wells.push(well);
+        }
+
+        // Try to collapse 3 (target = 1, so 3 excess)
+        let collapsed = arena.trigger_well_collapse(1);
+
+        // Should only collapse 2 (the ones not already exploding)
+        assert_eq!(collapsed, 2);
     }
 }

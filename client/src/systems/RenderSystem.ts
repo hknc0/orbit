@@ -634,27 +634,44 @@ export class RenderSystem {
         this.ctx.setLineDash([]);
       }
 
-      // Player body with gradient
-      const gradient = this.ctx.createRadialGradient(
-        player.position.x - radius * 0.3,
-        player.position.y - radius * 0.3,
-        0,
-        player.position.x,
-        player.position.y,
-        radius
-      );
-      gradient.addColorStop(0, this.lightenColor(color, 30));
-      gradient.addColorStop(1, color);
+      // Player body - local player is hollow (outline only) so map is visible
+      if (isLocal) {
+        // Local player: hollow circle with player color outline
+        this.ctx.strokeStyle = color;
+        this.ctx.lineWidth = 3;
+        this.ctx.beginPath();
+        this.ctx.arc(player.position.x, player.position.y, radius, 0, Math.PI * 2);
+        this.ctx.stroke();
 
-      this.ctx.fillStyle = gradient;
-      this.ctx.beginPath();
-      this.ctx.arc(player.position.x, player.position.y, radius, 0, Math.PI * 2);
-      this.ctx.fill();
+        // Outer glow ring in player color
+        this.ctx.strokeStyle = this.colorWithAlpha(color, 0.4);
+        this.ctx.lineWidth = 2;
+        this.ctx.beginPath();
+        this.ctx.arc(player.position.x, player.position.y, radius + 4, 0, Math.PI * 2);
+        this.ctx.stroke();
+      } else {
+        // Other players: filled gradient
+        const gradient = this.ctx.createRadialGradient(
+          player.position.x - radius * 0.3,
+          player.position.y - radius * 0.3,
+          0,
+          player.position.x,
+          player.position.y,
+          radius
+        );
+        gradient.addColorStop(0, this.lightenColor(color, 30));
+        gradient.addColorStop(1, color);
+
+        this.ctx.fillStyle = gradient;
+        this.ctx.beginPath();
+        this.ctx.arc(player.position.x, player.position.y, radius, 0, Math.PI * 2);
+        this.ctx.fill();
+      }
 
       // Direction indicator
       const dirX = Math.cos(player.rotation);
       const dirY = Math.sin(player.rotation);
-      this.ctx.strokeStyle = 'rgba(255, 255, 255, 0.7)';
+      this.ctx.strokeStyle = isLocal ? color : 'rgba(255, 255, 255, 0.7)';
       this.ctx.lineWidth = 2;
       this.ctx.beginPath();
       this.ctx.moveTo(player.position.x, player.position.y);
@@ -663,15 +680,6 @@ export class RenderSystem {
         player.position.y + dirY * radius * 0.8
       );
       this.ctx.stroke();
-
-      // Local player highlight
-      if (isLocal) {
-        this.ctx.strokeStyle = 'rgba(255, 255, 255, 0.3)';
-        this.ctx.lineWidth = 2;
-        this.ctx.beginPath();
-        this.ctx.arc(player.position.x, player.position.y, radius + 3, 0, Math.PI * 2);
-        this.ctx.stroke();
-      }
 
       // Player name
       this.ctx.fillStyle = '#ffffff';
@@ -1332,40 +1340,40 @@ export class RenderSystem {
       }
     }
 
-    // === CONTROLS HINT (fades out after 10 seconds) ===
-    const hintDuration = 10000; // Show for 10 seconds
-    const hintFadeDuration = 2000; // Fade over 2 seconds
-    const timeSinceStart = Date.now() - this.gameStartTime;
-
-    if (this.gameStartTime > 0 && timeSinceStart < hintDuration + hintFadeDuration) {
-      let hintAlpha = 1;
-      if (timeSinceStart > hintDuration) {
-        hintAlpha = 1 - (timeSinceStart - hintDuration) / hintFadeDuration;
-      }
-
-      const controlsText = 'WASD/Arrows: Move  •  LMB/Shift: Boost  •  SPACE: Eject';
+    // === AI MANAGER STATUS (replaces keyboard controls hint) ===
+    if (world.aiStatus?.enabled) {
+      const ai = world.aiStatus;
+      const statusText = `AI: ${ai.decisionsTotal} decisions  •  ${ai.successRate}% success  •  ${ai.confidence}% confidence`;
       this.ctx.font = '10px Inter, system-ui, sans-serif';
-      const textWidth = this.ctx.measureText(controlsText).width;
-      const pillW = textWidth + 24;
+      const textWidth = this.ctx.measureText(statusText).width;
+      const pillW = textWidth + 32;
       const pillH = 22;
       const pillX = Math.round((canvas.width - pillW) / 2);
       const pillY = Math.round(canvas.height - padding - pillH - 2);
 
-      // Pill background
-      this.ctx.globalAlpha = hintAlpha;
-      this.ctx.fillStyle = 'rgba(15, 23, 42, 0.75)';
+      // Pill background with AI-themed color
+      this.ctx.fillStyle = 'rgba(15, 23, 42, 0.85)';
       this.ctx.beginPath();
       this.ctx.roundRect(pillX, pillY, pillW, pillH, pillH / 2);
       this.ctx.fill();
-      this.ctx.strokeStyle = 'rgba(100, 150, 255, 0.15)';
+
+      // Border color based on success rate
+      const borderColor = ai.successRate >= 70 ? 'rgba(34, 197, 94, 0.4)' : // green
+                          ai.successRate >= 50 ? 'rgba(251, 191, 36, 0.4)' : // yellow
+                          'rgba(239, 68, 68, 0.4)'; // red
+      this.ctx.strokeStyle = borderColor;
       this.ctx.lineWidth = 1;
       this.ctx.stroke();
 
-      // Text
-      this.ctx.fillStyle = '#64748b';
+      // AI icon
+      this.ctx.fillStyle = '#a78bfa'; // Purple for AI
+      this.ctx.textAlign = 'left';
+      this.ctx.fillText('🤖', pillX + 8, pillY + 15);
+
+      // Status text
+      this.ctx.fillStyle = '#94a3b8';
       this.ctx.textAlign = 'center';
-      this.ctx.fillText(controlsText, Math.round(canvas.width / 2), pillY + 15);
-      this.ctx.globalAlpha = 1;
+      this.ctx.fillText(statusText, Math.round(canvas.width / 2) + 6, pillY + 15);
     }
 
     // === EDGE INDICATORS FOR NEAREST GRAVITY WELLS ===
@@ -1723,21 +1731,15 @@ export class RenderSystem {
         this.ctx.strokeStyle = '#000000';
         this.ctx.lineWidth = 4;
         this.ctx.beginPath();
-        this.ctx.arc(pos.x, pos.y, 8, 0, Math.PI * 2);
+        this.ctx.arc(pos.x, pos.y, 7, 0, Math.PI * 2);
         this.ctx.stroke();
 
-        // Bright white ring
-        this.ctx.strokeStyle = '#ffffff';
+        // Player color ring (hollow - no fill)
+        this.ctx.strokeStyle = playerColor;
         this.ctx.lineWidth = 2;
         this.ctx.beginPath();
-        this.ctx.arc(pos.x, pos.y, 8, 0, Math.PI * 2);
+        this.ctx.arc(pos.x, pos.y, 7, 0, Math.PI * 2);
         this.ctx.stroke();
-
-        // Player color fill
-        this.ctx.fillStyle = playerColor;
-        this.ctx.beginPath();
-        this.ctx.arc(pos.x, pos.y, 6, 0, Math.PI * 2);
-        this.ctx.fill();
 
         // Direction indicator (small triangle pointing in aim direction)
         const rotation = localPlayer.rotation;
