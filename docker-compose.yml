@@ -24,9 +24,9 @@ services:
       - HOST=0.0.0.0
       - PORT=4433
       - METRICS_PORT=9090
-      - BOT_COUNT=500
+      - BOT_COUNT=10
       # Simulation mode (load testing)
-      - SIMULATION_MODE=true
+      - SIMULATION_MODE=false
       - SIMULATION_MIN_BOTS=10
       - SIMULATION_MAX_BOTS=500
       - SIMULATION_CYCLE_MINUTES=10
@@ -51,21 +51,26 @@ services:
       # - DEBRIS_SPAWN_RATE_MIDDLE_SMALL=1.0 # Small debris per second in middle zone
       # - DEBRIS_SPAWN_RATE_OUTER_SMALL=0.5  # Small debris per second in outer zone
       #
+      # Gravity System (how gravity wells affect entities)
+      # - GRAVITY_RANGE_MODE=limited        # "limited" (spatial grid) or "unlimited" (all wells)
+      # - GRAVITY_INFLUENCE_RADIUS=5000     # Max influence distance in limited mode (1000-20000)
+      #
       # Arena Scaling (dynamic arena size based on player count)
       # - ARENA_GROW_LERP=0.02              # Growth speed (0.01-0.1)
       # - ARENA_SHRINK_LERP=0.005           # Shrink speed (0.001-0.05)
       # - ARENA_SHRINK_DELAY_TICKS=150      # Delay before shrink (0-300)
       # - ARENA_MIN_RADIUS=800              # Minimum arena size (500-2000)
       # - ARENA_MAX_MULTIPLIER=10.0         # Max size multiplier (5-20)
-      # - ARENA_GROWTH_PER_PLAYER=10.0      # Units per player (5-50)
-      # - ARENA_PLAYER_THRESHOLD=10         # Players before growth (1-50)
-      # - ARENA_MAX_WELLS=20                # Maximum gravity wells (5-50)
+      # - ARENA_GROWTH_PER_PLAYER=25.0      # Units per player (5-50)
+      # - ARENA_PLAYER_THRESHOLD=1          # Players before growth (1-50)
+      # - ARENA_WELLS_PER_AREA=5000000      # Square units per well (100000-5000000, higher=fewer wells)
+      # - ARENA_MIN_WELLS=1                 # Minimum orbital wells (1-1000)
       # - ARENA_WELL_MIN_RATIO=0.20         # Min well distance ratio (0.1-0.4)
       # - ARENA_WELL_MAX_RATIO=0.85         # Max well distance ratio (0.6-0.95)
       #
       # AI Simulation Manager (autonomous parameter tuning via Claude API)
       # Requires: cargo build --features ai_manager
-      - AI_ENABLED=true                  # Enable/disable AI manager (default: false)
+      - AI_ENABLED=false                  # Enable/disable AI manager (default: false)
       - ORBIT_API_KEY=${ORBIT_API_KEY}          # Claude API key (required if enabled)
       # - AI_EVAL_INTERVAL_MINUTES=2        # Minutes between evaluations (1-60)
       # - AI_MAX_HISTORY=100                # Max decisions to keep (10-1000)
