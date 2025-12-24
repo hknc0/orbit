@@ -30,6 +30,18 @@ const GRAVITY_SCALE_FACTOR: f32 = 0.5;
 /// Prevents extreme accelerations when very close to well core
 const GRAVITY_MAX_ACCELERATION: f32 = 100.0;
 
+/// Minimum acceleration threshold below which gravity effect is ignored (units/s²)
+/// At typical mass 10000: accel = 0.5 * 10000 / dist
+/// At 50000 dist: accel = 0.1 (threshold)
+/// This is ~50 AU in game units, negligible effect
+const GRAVITY_MIN_ACCELERATION: f32 = 0.1;
+
+/// Pre-computed max distance squared for insignificance culling
+/// max_dist = GRAVITY_SCALE_FACTOR * typical_mass / GRAVITY_MIN_ACCELERATION
+/// For mass 10000: 0.5 * 10000 / 0.1 = 50000 → squared = 2.5B
+/// But we check per-well based on actual mass
+const GRAVITY_INSIGNIFICANCE_FACTOR: f32 = GRAVITY_SCALE_FACTOR / GRAVITY_MIN_ACCELERATION;
+
 // ============================================================================
 // Legacy Central Gravity Constants
 // ============================================================================
@@ -117,8 +129,10 @@ fn calculate_gravity_limited(
             let dy = cache.positions_y[idx] - py;
             let dist_sq = dx * dx + dy * dy;
 
-            // Skip wells outside influence radius or too close
-            if dist_sq > cache.min_distance_sq[idx] && dist_sq <= influence_radius_sq {
+            // Skip wells outside effective range (min of config radius and per-well max)
+            // Per-well max is mass-dependent: insignificance culling
+            let effective_max_sq = cache.max_distance_sq[idx].min(influence_radius_sq);
+            if dist_sq > cache.min_distance_sq[idx] && dist_sq < effective_max_sq {
                 let dist = dist_sq.sqrt();
                 let inv_dist = 1.0 / dist;
                 let accel = (GRAVITY_SCALE_FACTOR * cache.masses[idx] * inv_dist)
@@ -217,6 +231,9 @@ pub struct WellPositionCache {
     pub masses: Vec<f32>,
     /// Pre-computed minimum distance squared (core_radius * MULTIPLIER)^2
     pub min_distance_sq: Vec<f32>,
+    /// Pre-computed maximum distance squared for insignificance culling
+    /// Wells beyond this distance produce acceleration < GRAVITY_MIN_ACCELERATION
+    pub max_distance_sq: Vec<f32>,
 }
 
 impl WellPositionCache {
@@ -228,6 +245,7 @@ impl WellPositionCache {
             positions_y: Vec::new(),
             masses: Vec::new(),
             min_distance_sq: Vec::new(),
+            max_distance_sq: Vec::new(),
         };
 
         for well in wells {
@@ -235,14 +253,25 @@ impl WellPositionCache {
             cache.positions_x.push(well.position.x);
             cache.positions_y.push(well.position.y);
             cache.masses.push(well.mass);
+
+            // Minimum distance: too close causes extreme forces
             let min_dist = well.core_radius * WELL_MIN_DISTANCE_MULTIPLIER;
             cache.min_distance_sq.push(min_dist * min_dist);
+
+            // Maximum distance: beyond this, acceleration < GRAVITY_MIN_ACCELERATION
+            // accel = GRAVITY_SCALE_FACTOR * mass / dist
+            // GRAVITY_MIN_ACCELERATION = GRAVITY_SCALE_FACTOR * mass / max_dist
+            // max_dist = GRAVITY_SCALE_FACTOR * mass / GRAVITY_MIN_ACCELERATION
+            //          = mass * GRAVITY_INSIGNIFICANCE_FACTOR
+            let max_dist = well.mass * GRAVITY_INSIGNIFICANCE_FACTOR;
+            cache.max_distance_sq.push(max_dist * max_dist);
         }
 
         cache
     }
 
     /// Calculate total gravity at a position from all wells (cache-friendly)
+    /// Uses insignificance culling to skip wells too far away to matter
     #[inline]
     pub fn calculate_gravity(&self, px: f32, py: f32) -> Vec2 {
         let mut gx = 0.0f32;
@@ -255,9 +284,10 @@ impl WellPositionCache {
             let dy = self.positions_y[i] - py;
             let dist_sq = dx * dx + dy * dy;
 
-            // Skip if too close (branchless via conditional)
+            // Skip if too close or too far (insignificance culling)
             let min_sq = self.min_distance_sq[i];
-            if dist_sq > min_sq {
+            let max_sq = self.max_distance_sq[i];
+            if dist_sq > min_sq && dist_sq < max_sq {
                 let dist = dist_sq.sqrt();
                 let inv_dist = 1.0 / dist;
 
@@ -1422,5 +1452,89 @@ mod tests {
 
         // Velocity should have changed (player is within influence radius of wells)
         assert!(state.get_player(player_id).unwrap().velocity != initial_velocity);
+    }
+
+    // === INSIGNIFICANCE CULLING TESTS ===
+
+    #[test]
+    fn test_well_position_cache_max_distance_sq() {
+        // Test that max_distance_sq is computed correctly based on mass
+        let well = GravityWell::new(1, Vec2::ZERO, 10000.0, 20.0);
+        let wells = vec![well];
+
+        let cache = WellPositionCache::from_wells(wells.iter());
+
+        // max_dist = mass * GRAVITY_INSIGNIFICANCE_FACTOR = 10000 * (0.5 / 0.1) = 50000
+        // max_dist_sq = 50000^2 = 2.5e9
+        let expected_max_dist = 10000.0 * GRAVITY_INSIGNIFICANCE_FACTOR;
+        let expected_max_dist_sq = expected_max_dist * expected_max_dist;
+
+        assert!((cache.max_distance_sq[0] - expected_max_dist_sq).abs() < 1.0);
+    }
+
+    #[test]
+    fn test_insignificance_culling_skips_distant_wells() {
+        // Create a well with small mass (small influence range)
+        let well = GravityWell::new(1, Vec2::ZERO, 1000.0, 20.0);
+        let wells = vec![well];
+
+        let cache = WellPositionCache::from_wells(wells.iter());
+
+        // max_dist = 1000 * 5 = 5000 for mass 1000
+        // At distance > 5000, should get zero gravity
+        let gravity_far = cache.calculate_gravity(10000.0, 0.0);
+        assert_eq!(gravity_far, Vec2::ZERO, "Should cull distant well");
+
+        // At distance < 5000, should get gravity
+        let gravity_near = cache.calculate_gravity(1000.0, 0.0);
+        assert!(gravity_near.x < 0.0, "Should have gravity toward well");
+    }
+
+    #[test]
+    fn test_insignificance_culling_mass_dependent() {
+        // Large mass well should affect entities farther away
+        let well_large = GravityWell::new(1, Vec2::ZERO, 100000.0, 20.0);
+        let well_small = GravityWell::new(2, Vec2::ZERO, 1000.0, 20.0);
+
+        let cache_large = WellPositionCache::from_wells(std::iter::once(&well_large));
+        let cache_small = WellPositionCache::from_wells(std::iter::once(&well_small));
+
+        // Large mass: max_dist = 100000 * 5 = 500000
+        // Small mass: max_dist = 1000 * 5 = 5000
+
+        // At distance 10000, large well should affect, small should not
+        let gravity_large = cache_large.calculate_gravity(10000.0, 0.0);
+        let gravity_small = cache_small.calculate_gravity(10000.0, 0.0);
+
+        assert!(gravity_large.x < 0.0, "Large mass well should affect at 10000 units");
+        assert_eq!(gravity_small, Vec2::ZERO, "Small mass well should be culled at 10000 units");
+    }
+
+    #[test]
+    fn test_insignificance_threshold_accuracy() {
+        // Verify that wells just inside threshold produce > GRAVITY_MIN_ACCELERATION
+        // and wells just outside produce < GRAVITY_MIN_ACCELERATION
+        let mass = 10000.0;
+        let core_radius = 20.0;
+        let well = GravityWell::new(1, Vec2::ZERO, mass, core_radius);
+        let wells = vec![well];
+
+        let cache = WellPositionCache::from_wells(wells.iter());
+
+        // max_dist where accel = 0.1: 10000 * 0.5 / 0.1 = 50000
+        let threshold_dist = mass * GRAVITY_INSIGNIFICANCE_FACTOR;
+
+        // Just inside threshold (should have gravity)
+        let dist_inside = threshold_dist * 0.9;
+        let gravity_inside = cache.calculate_gravity(dist_inside, 0.0);
+        let accel_inside = gravity_inside.length();
+        assert!(accel_inside > GRAVITY_MIN_ACCELERATION,
+            "Acceleration inside threshold should exceed minimum: {}", accel_inside);
+
+        // Just outside threshold (should be zero due to culling)
+        let dist_outside = threshold_dist * 1.1;
+        let gravity_outside = cache.calculate_gravity(dist_outside, 0.0);
+        assert_eq!(gravity_outside, Vec2::ZERO,
+            "Gravity outside threshold should be zero (culled)");
     }
 }
