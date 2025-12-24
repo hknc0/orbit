@@ -1321,7 +1321,7 @@ pub fn start_game_loop(session: Arc<RwLock<GameSession>>) {
 /// Start the AI manager for autonomous parameter tuning (if enabled)
 /// This runs alongside the game loop and periodically analyzes metrics
 #[cfg(feature = "ai_manager")]
-pub fn start_ai_manager(session: Arc<RwLock<GameSession>>) {
+pub async fn start_ai_manager(session: Arc<RwLock<GameSession>>) {
     use crate::ai_manager::AIManager;
 
     // Load AI manager config
@@ -1333,9 +1333,9 @@ pub fn start_ai_manager(session: Arc<RwLock<GameSession>>) {
         return;
     }
 
-    // Get references needed by AI manager
+    // Get references needed by AI manager (using async read)
     let metrics = {
-        let session_guard = session.blocking_read();
+        let session_guard = session.read().await;
         match &session_guard.metrics {
             Some(m) => Arc::clone(m),
             None => {
@@ -1346,7 +1346,7 @@ pub fn start_ai_manager(session: Arc<RwLock<GameSession>>) {
     };
 
     let arena_config = {
-        let session_guard = session.blocking_read();
+        let session_guard = session.read().await;
         session_guard.arena_config()
     };
 

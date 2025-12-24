@@ -106,7 +106,7 @@ impl WebTransportServer {
 
         // Start AI manager for autonomous parameter tuning (if enabled)
         #[cfg(feature = "ai_manager")]
-        start_ai_manager(self.game_session.clone());
+        start_ai_manager(self.game_session.clone()).await;
 
         // Accept connections
         loop {
