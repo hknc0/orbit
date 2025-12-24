@@ -7,6 +7,97 @@ use crate::game::systems::arena::{get_zone, Zone};
 use crate::net::protocol::PlayerInput;
 use crate::util::vec2::Vec2;
 
+// ============================================================================
+// AI Personality Constants
+// ============================================================================
+
+/// Minimum aggression for random personality generation
+const PERSONALITY_AGGRESSION_MIN: f32 = 0.2;
+/// Maximum aggression for random personality generation
+const PERSONALITY_AGGRESSION_MAX: f32 = 0.8;
+/// Default aggression value
+const PERSONALITY_AGGRESSION_DEFAULT: f32 = 0.5;
+
+/// Minimum preferred orbit radius for random personality
+const PERSONALITY_PREFERRED_RADIUS_MIN: f32 = 250.0;
+/// Maximum preferred orbit radius for random personality
+const PERSONALITY_PREFERRED_RADIUS_MAX: f32 = 400.0;
+/// Default preferred orbit radius
+const PERSONALITY_PREFERRED_RADIUS_DEFAULT: f32 = 300.0;
+
+/// Minimum accuracy for random personality
+const PERSONALITY_ACCURACY_MIN: f32 = 0.5;
+/// Maximum accuracy for random personality
+const PERSONALITY_ACCURACY_MAX: f32 = 0.9;
+/// Default accuracy
+const PERSONALITY_ACCURACY_DEFAULT: f32 = 0.7;
+
+/// Minimum reaction variance for random personality
+const PERSONALITY_REACTION_VARIANCE_MIN: f32 = 0.1;
+/// Maximum reaction variance for random personality
+const PERSONALITY_REACTION_VARIANCE_MAX: f32 = 0.5;
+/// Default reaction variance
+const PERSONALITY_REACTION_VARIANCE_DEFAULT: f32 = 0.3;
+
+// ============================================================================
+// AI Behavior Constants
+// ============================================================================
+
+/// Multiplier for core radius to define danger zone (emergency escape trigger)
+const DANGER_ZONE_CORE_MULTIPLIER: f32 = 2.5;
+
+/// Minimum distance to well to avoid division by zero
+const WELL_MIN_DISTANCE: f32 = 0.1;
+
+/// Fallback core radius when no wells found
+const FALLBACK_CORE_RADIUS: f32 = 50.0;
+
+/// Multiplier for core radius to define minimum safe orbit radius
+const ORBIT_MIN_SAFE_RADIUS_MULTIPLIER: f32 = 3.0;
+
+/// Distance threshold from preferred radius before adjusting orbit
+const ORBIT_RADIUS_ADJUSTMENT_THRESHOLD: f32 = 20.0;
+
+/// Radial adjustment strength when correcting orbit radius
+const ORBIT_RADIAL_ADJUSTMENT_STRENGTH: f32 = 0.5;
+
+/// Velocity ratio below which boost is activated during orbit
+const ORBIT_VELOCITY_BOOST_THRESHOLD: f32 = 0.6;
+
+/// Default velocity to add for time-to-reach calculation
+const CHASE_VELOCITY_DEFAULT: f32 = 100.0;
+
+/// Prediction time multiplier for leading targets
+const CHASE_PREDICTION_TIME_MULTIPLIER: f32 = 0.5;
+
+/// Distance threshold for enabling boost during chase
+const CHASE_BOOST_DISTANCE_THRESHOLD: f32 = 100.0;
+
+/// Minimum velocity squared for idle aim adjustment
+const IDLE_VELOCITY_THRESHOLD_SQ: f32 = 10.0;
+
+// ============================================================================
+// AI Combat Constants
+// ============================================================================
+
+/// Maximum firing range
+const FIRE_MAX_RANGE: f32 = 300.0;
+
+/// Accuracy offset multiplier (higher = less accurate at low accuracy)
+const FIRE_ACCURACY_OFFSET_MULTIPLIER: f32 = 0.3;
+
+/// Minimum charge threshold before releasing shot
+const FIRE_CHARGE_THRESHOLD_MIN: f32 = 0.3;
+
+/// Random additional charge time range
+const FIRE_CHARGE_THRESHOLD_VARIANCE: f32 = 0.5;
+
+/// Probability per frame to start charging a shot
+const FIRE_START_CHARGE_PROBABILITY: f32 = 0.02;
+
+/// Mass ratio threshold to consider another player a threat
+const THREAT_MASS_RATIO: f32 = 1.2;
+
 /// AI behavior mode
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum AiBehavior {
@@ -53,10 +144,10 @@ impl AiPersonality {
     pub fn random() -> Self {
         let mut rng = rand::thread_rng();
         Self {
-            aggression: rng.gen_range(0.2..0.8),
-            preferred_radius: rng.gen_range(250.0..400.0),
-            accuracy: rng.gen_range(0.5..0.9),
-            reaction_variance: rng.gen_range(0.1..0.5),
+            aggression: rng.gen_range(PERSONALITY_AGGRESSION_MIN..PERSONALITY_AGGRESSION_MAX),
+            preferred_radius: rng.gen_range(PERSONALITY_PREFERRED_RADIUS_MIN..PERSONALITY_PREFERRED_RADIUS_MAX),
+            accuracy: rng.gen_range(PERSONALITY_ACCURACY_MIN..PERSONALITY_ACCURACY_MAX),
+            reaction_variance: rng.gen_range(PERSONALITY_REACTION_VARIANCE_MIN..PERSONALITY_REACTION_VARIANCE_MAX),
         }
     }
 }
@@ -64,10 +155,10 @@ impl AiPersonality {
 impl Default for AiPersonality {
     fn default() -> Self {
         Self {
-            aggression: 0.5,
-            preferred_radius: 300.0,
-            accuracy: 0.7,
-            reaction_variance: 0.3,
+            aggression: PERSONALITY_AGGRESSION_DEFAULT,
+            preferred_radius: PERSONALITY_PREFERRED_RADIUS_DEFAULT,
+            accuracy: PERSONALITY_ACCURACY_DEFAULT,
+            reaction_variance: PERSONALITY_REACTION_VARIANCE_DEFAULT,
         }
     }
 }
@@ -278,10 +369,10 @@ fn check_core_danger(ai: &mut AiState, bot: &Player, state: &GameState) -> bool 
         let to_well = well.position - bot.position;
         let distance = to_well.length();
 
-        // Danger zone is 2.5x core radius - gives margin for strong gravity
-        let danger_zone = well.core_radius * 2.5;
+        // Danger zone gives margin for strong gravity
+        let danger_zone = well.core_radius * DANGER_ZONE_CORE_MULTIPLIER;
 
-        if distance < danger_zone && distance > 0.1 {
+        if distance < danger_zone && distance > WELL_MIN_DISTANCE {
             // Emergency escape! Flee directly away from the core
             ai.thrust_direction = -to_well.normalize();
             ai.wants_boost = true;
@@ -302,13 +393,12 @@ fn execute_orbit(ai: &mut AiState, bot: &Player, state: &GameState) {
 
     let (well_pos, core_radius) = nearest_well
         .map(|w| (w.position, w.core_radius))
-        .unwrap_or((Vec2::ZERO, 50.0));
+        .unwrap_or((Vec2::ZERO, FALLBACK_CORE_RADIUS));
     let to_well = well_pos - bot.position;
     let current_radius = to_well.length();
 
     // CRITICAL: Check if dangerously close to core - emergency escape!
-    // Start escaping when within 2x core radius (gives margin for gravity pull)
-    let danger_zone = core_radius * 2.5;
+    let danger_zone = core_radius * DANGER_ZONE_CORE_MULTIPLIER;
     if current_radius < danger_zone {
         // Emergency: flee directly away from the well core
         ai.thrust_direction = -to_well.normalize();
@@ -317,17 +407,17 @@ fn execute_orbit(ai: &mut AiState, bot: &Player, state: &GameState) {
     }
 
     // Target radius must be safely outside the danger zone
-    let min_safe_radius = core_radius * 3.0;
+    let min_safe_radius = core_radius * ORBIT_MIN_SAFE_RADIUS_MULTIPLIER;
     let target_radius = ai.personality.preferred_radius.max(min_safe_radius);
 
     // Get perpendicular direction for orbit around the well (not origin)
     let tangent = to_well.perpendicular().normalize();
 
     // Adjust toward preferred radius from the well
-    let radial = if current_radius > target_radius + 20.0 {
-        to_well.normalize() * 0.5 // Move toward well
-    } else if current_radius < target_radius - 20.0 {
-        -to_well.normalize() * 0.5 // Move away from well
+    let radial = if current_radius > target_radius + ORBIT_RADIUS_ADJUSTMENT_THRESHOLD {
+        to_well.normalize() * ORBIT_RADIAL_ADJUSTMENT_STRENGTH // Move toward well
+    } else if current_radius < target_radius - ORBIT_RADIUS_ADJUSTMENT_THRESHOLD {
+        -to_well.normalize() * ORBIT_RADIAL_ADJUSTMENT_STRENGTH // Move away from well
     } else {
         Vec2::ZERO
     };
@@ -336,7 +426,7 @@ fn execute_orbit(ai: &mut AiState, bot: &Player, state: &GameState) {
 
     // Light boost to maintain orbit - only if significantly below orbital velocity
     let orbital_vel = crate::game::systems::gravity::orbital_velocity(current_radius);
-    ai.wants_boost = bot.velocity.length() < orbital_vel * 0.6;
+    ai.wants_boost = bot.velocity.length() < orbital_vel * ORBIT_VELOCITY_BOOST_THRESHOLD;
 }
 
 fn execute_chase(ai: &mut AiState, bot: &Player, state: &GameState) {
@@ -351,13 +441,13 @@ fn execute_chase(ai: &mut AiState, bot: &Player, state: &GameState) {
     // Lead the target based on velocity
     let to_target = target.position - bot.position;
     let distance = to_target.length();
-    let time_to_reach = distance / (bot.velocity.length() + 100.0);
-    let predicted_pos = target.position + target.velocity * time_to_reach * 0.5;
+    let time_to_reach = distance / (bot.velocity.length() + CHASE_VELOCITY_DEFAULT);
+    let predicted_pos = target.position + target.velocity * time_to_reach * CHASE_PREDICTION_TIME_MULTIPLIER;
 
     let chase_dir = (predicted_pos - bot.position).normalize();
 
     ai.thrust_direction = chase_dir;
-    ai.wants_boost = distance > 100.0;
+    ai.wants_boost = distance > CHASE_BOOST_DISTANCE_THRESHOLD;
     ai.aim_direction = chase_dir;
 }
 
@@ -430,7 +520,7 @@ fn execute_idle(ai: &mut AiState, bot: &Player) {
     ai.wants_boost = false;
 
     // Slowly turn to face velocity direction
-    if bot.velocity.length_sq() > 10.0 {
+    if bot.velocity.length_sq() > IDLE_VELOCITY_THRESHOLD_SQ {
         ai.aim_direction = bot.velocity.normalize();
     }
 }
@@ -454,7 +544,7 @@ fn update_firing(ai: &mut AiState, bot: &Player, state: &GameState, dt: f32) {
     let distance = bot.position.distance_to(target.position);
 
     // Only fire at reasonable range
-    if distance > 300.0 {
+    if distance > FIRE_MAX_RANGE {
         ai.wants_fire = false;
         ai.charge_time = 0.0;
         return;
@@ -462,7 +552,7 @@ fn update_firing(ai: &mut AiState, bot: &Player, state: &GameState, dt: f32) {
 
     // Add some inaccuracy based on personality
     let mut rng = rand::thread_rng();
-    let accuracy_offset = (1.0 - ai.personality.accuracy) * rng.gen_range(-0.3..0.3);
+    let accuracy_offset = (1.0 - ai.personality.accuracy) * rng.gen_range(-FIRE_ACCURACY_OFFSET_MULTIPLIER..FIRE_ACCURACY_OFFSET_MULTIPLIER);
     let aim_to_target = (target.position - bot.position).normalize();
     ai.aim_direction = aim_to_target.rotate(accuracy_offset);
 
@@ -471,7 +561,7 @@ fn update_firing(ai: &mut AiState, bot: &Player, state: &GameState, dt: f32) {
         ai.charge_time += dt;
 
         // Release when charged enough or randomly
-        let charge_threshold = 0.3 + rng.gen_range(0.0..0.5);
+        let charge_threshold = FIRE_CHARGE_THRESHOLD_MIN + rng.gen_range(0.0..FIRE_CHARGE_THRESHOLD_VARIANCE);
         if ai.charge_time > charge_threshold {
             ai.wants_fire = false;
         }
@@ -480,7 +570,7 @@ fn update_firing(ai: &mut AiState, bot: &Player, state: &GameState, dt: f32) {
         ai.charge_time = 0.0;
     } else {
         // Decide whether to start charging
-        if rng.gen::<f32>() < 0.02 {
+        if rng.gen::<f32>() < FIRE_START_CHARGE_PROBABILITY {
             ai.wants_fire = true;
         }
     }
@@ -501,7 +591,7 @@ fn find_nearest_players(
 
         let dist = bot.position.distance_to(player.position);
 
-        if player.mass > bot.mass * 1.2 {
+        if player.mass > bot.mass * THREAT_MASS_RATIO {
             // Threat - update if closer than current nearest
             let dominated = nearest_threat.map_or(true, |(_, d)| dist < d);
             if dominated {

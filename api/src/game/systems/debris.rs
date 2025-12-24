@@ -9,6 +9,30 @@ use crate::game::constants::arena::{CORE_RADIUS, INNER_RADIUS, MIDDLE_RADIUS, OU
 use crate::game::state::{DebrisSize, GameState, GravityWell};
 use crate::util::vec2::Vec2;
 
+// ============================================================================
+// Debris System Constants
+// ============================================================================
+
+/// Offset from core radius for inner zone minimum spawn distance
+const INNER_ZONE_CORE_OFFSET: f32 = 20.0;
+
+/// Minimum orbit radius multiplier for debris spawning near gravity wells
+/// Debris spawns at 2.5x to 5.0x the well's core radius
+const WELL_SPAWN_MIN_RADIUS_MULTIPLIER: f32 = 2.5;
+
+/// Maximum orbit radius multiplier for debris spawning near gravity wells
+const WELL_SPAWN_MAX_RADIUS_MULTIPLIER: f32 = 5.0;
+
+/// Orbital velocity boost factor for debris near gravity wells
+/// Higher gravity requires faster orbital velocity
+const WELL_ORBITAL_VELOCITY_BOOST: f32 = 1.5;
+
+/// Probability threshold for large debris near gravity wells (15%)
+const WELL_DEBRIS_LARGE_PROBABILITY: f32 = 0.15;
+
+/// Probability threshold for medium debris near gravity wells (35%, cumulative 50%)
+const WELL_DEBRIS_MEDIUM_PROBABILITY: f32 = 0.5;
+
 /// Zone for debris spawning (subset of arena zones)
 #[derive(Debug, Clone, Copy)]
 pub enum DebrisZone {
@@ -21,7 +45,7 @@ impl DebrisZone {
     /// Get the spawn radius range for this zone
     fn radius_range(&self) -> (f32, f32) {
         match self {
-            DebrisZone::Inner => (CORE_RADIUS + 20.0, INNER_RADIUS),
+            DebrisZone::Inner => (CORE_RADIUS + INNER_ZONE_CORE_OFFSET, INNER_RADIUS),
             DebrisZone::Middle => (INNER_RADIUS, MIDDLE_RADIUS),
             DebrisZone::Outer => (MIDDLE_RADIUS, OUTER_RADIUS),
         }
@@ -253,10 +277,10 @@ pub fn spawn_around_wells(state: &mut GameState, config: &DebrisSpawnConfig) {
 fn spawn_near_well(state: &mut GameState, config: &DebrisSpawnConfig, well: &GravityWell) {
     let mut rng = rand::thread_rng();
 
-    // Orbital ring: between 2x and 4x the well's core radius (death zone)
+    // Orbital ring: between 2.5x and 5x the well's core radius (death zone)
     // This creates a "safe" feeding zone just outside the danger zone
-    let min_radius = well.core_radius * 2.5;
-    let max_radius = well.core_radius * 5.0;
+    let min_radius = well.core_radius * WELL_SPAWN_MIN_RADIUS_MULTIPLIER;
+    let max_radius = well.core_radius * WELL_SPAWN_MAX_RADIUS_MULTIPLIER;
 
     let angle = rng.gen_range(0.0..std::f32::consts::TAU);
     let orbit_radius = rng.gen_range(min_radius..max_radius);
@@ -270,15 +294,15 @@ fn spawn_near_well(state: &mut GameState, config: &DebrisSpawnConfig, well: &Gra
     let orbital_angle = angle + std::f32::consts::FRAC_PI_2;
     let base_speed = rng.gen_range(config.orbital_velocity_min..config.orbital_velocity_max);
     // Boost speed near wells (more gravity = faster orbit needed)
-    let speed = base_speed * 1.5;
+    let speed = base_speed * WELL_ORBITAL_VELOCITY_BOOST;
     let velocity = Vec2::from_angle(orbital_angle) * speed;
 
     // Well debris is more likely to be medium/large (richer feeding zone)
     let size = {
         let roll = rng.gen::<f32>();
-        if roll < 0.15 {
+        if roll < WELL_DEBRIS_LARGE_PROBABILITY {
             DebrisSize::Large
-        } else if roll < 0.5 {
+        } else if roll < WELL_DEBRIS_MEDIUM_PROBABILITY {
             DebrisSize::Medium
         } else {
             DebrisSize::Small

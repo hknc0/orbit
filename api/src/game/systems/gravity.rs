@@ -10,6 +10,75 @@ use crate::game::constants::physics::{CENTRAL_MASS, G};
 use crate::game::state::{GameState, GravityWell};
 use crate::util::vec2::Vec2;
 
+// ============================================================================
+// Gravity Well Constants
+// ============================================================================
+
+/// Multiplier for core radius to determine minimum safe distance for gravity calculations
+/// Prevents extreme forces when entities are very close to well center
+const WELL_MIN_DISTANCE_MULTIPLIER: f32 = 2.0;
+
+/// Scale factor for 1/r gravity falloff (tuned for gameplay feel)
+/// At 300 units with mass 10000: 0.5 * 10000 / 300 ≈ 16.7 units/s²
+const GRAVITY_SCALE_FACTOR: f32 = 0.5;
+
+/// Maximum gravitational acceleration from a single well (units/s²)
+/// Prevents extreme accelerations when very close to well core
+const GRAVITY_MAX_ACCELERATION: f32 = 100.0;
+
+// ============================================================================
+// Legacy Central Gravity Constants
+// ============================================================================
+
+/// Minimum squared distance for legacy central gravity (prevents division by zero)
+const LEGACY_GRAVITY_MIN_DISTANCE_SQ: f32 = 100.0;
+
+/// Maximum acceleration for legacy central gravity (units/s²)
+const LEGACY_GRAVITY_MAX_ACCELERATION: f32 = 500.0;
+
+// ============================================================================
+// Inter-Entity Gravity Constants
+// ============================================================================
+
+/// Minimum squared distance for inter-entity gravity (below this, collision handles it)
+const INTER_ENTITY_MIN_DISTANCE_SQ: f32 = 100.0;
+
+/// Maximum squared distance for inter-entity gravity (beyond this, force is negligible)
+const INTER_ENTITY_MAX_DISTANCE_SQ: f32 = 1_000_000.0;
+
+/// Scale factor to make inter-entity gravity subtle relative to well gravity
+const INTER_ENTITY_GRAVITY_SCALE: f32 = 0.01;
+
+// ============================================================================
+// Orbital Mechanics Constants
+// ============================================================================
+
+/// Minimum radius for orbital velocity calculations (prevents division by zero)
+const ORBITAL_MIN_RADIUS: f32 = 10.0;
+
+// ============================================================================
+// Gravity Wave Constants
+// ============================================================================
+
+/// Mass value used to normalize well strength for wave explosions
+/// Wells with this mass produce strength 1.0
+const WAVE_STRENGTH_NORMALIZATION_MASS: f32 = 10000.0;
+
+/// Minimum strength for gravity wave explosions
+const WAVE_STRENGTH_MIN: f32 = 0.3;
+
+/// Maximum strength for gravity wave explosions
+const WAVE_STRENGTH_MAX: f32 = 1.0;
+
+/// Minimum distance from wave center to apply impulse (prevents zero direction)
+const WAVE_MIN_APPLY_DISTANCE: f32 = 1.0;
+
+/// Force multiplier for projectiles hit by gravity waves (lighter than players)
+const WAVE_PROJECTILE_FORCE_RATIO: f32 = 0.5;
+
+/// Force multiplier for debris hit by gravity waves (scatter effect)
+const WAVE_DEBRIS_FORCE_RATIO: f32 = 0.7;
+
 /// Apply gravity from all gravity wells to all entities
 /// Uses rayon for parallel iteration over players, projectiles, and debris
 pub fn update_central(state: &mut GameState, dt: f32) {
@@ -60,7 +129,7 @@ pub fn calculate_gravity_from_well(position: Vec2, well: &GravityWell) -> Vec2 {
     let distance_sq = delta.length_sq();
 
     // Prevent division by zero and extreme forces near well center
-    let min_distance_sq = (well.core_radius * 2.0).powi(2); // 2x core radius minimum
+    let min_distance_sq = (well.core_radius * WELL_MIN_DISTANCE_MULTIPLIER).powi(2);
     if distance_sq <= min_distance_sq {
         return Vec2::ZERO;
     }
@@ -72,12 +141,10 @@ pub fn calculate_gravity_from_well(position: Vec2, well: &GravityWell) -> Vec2 {
 
     // Gravitational acceleration with 1/r falloff (not 1/r²)
     // This gives a more noticeable pull at gameplay distances
-    // Scaled so at 300 units with mass 10000: 0.5 * 10000 / 300 ≈ 16.7 units/tick²
-    let gravity_scale = 0.5; // Tuned for gameplay feel
-    let acceleration = gravity_scale * well.mass / distance;
+    let acceleration = GRAVITY_SCALE_FACTOR * well.mass / distance;
 
     // Clamp to prevent extreme accelerations near core
-    let clamped_accel = acceleration.min(100.0);
+    let clamped_accel = acceleration.min(GRAVITY_MAX_ACCELERATION);
 
     direction * clamped_accel
 }
@@ -87,7 +154,7 @@ pub fn calculate_central_gravity(position: Vec2, _mass: f32) -> Vec2 {
     let distance_sq = position.length_sq();
 
     // Prevent division by zero and extreme forces at center
-    if distance_sq < 100.0 {
+    if distance_sq < LEGACY_GRAVITY_MIN_DISTANCE_SQ {
         return Vec2::ZERO;
     }
 
@@ -100,7 +167,7 @@ pub fn calculate_central_gravity(position: Vec2, _mass: f32) -> Vec2 {
     let acceleration = G * CENTRAL_MASS / distance_sq;
 
     // Clamp to prevent extreme accelerations
-    let clamped_accel = acceleration.min(500.0);
+    let clamped_accel = acceleration.min(LEGACY_GRAVITY_MAX_ACCELERATION);
 
     direction * clamped_accel
 }
@@ -135,7 +202,7 @@ pub fn update_inter_entity(state: &mut GameState, dt: f32) {
                 let distance_sq = delta.length_sq();
 
                 // Skip if too close (handled by collision) or too far
-                if distance_sq < 100.0 || distance_sq > 1_000_000.0 {
+                if distance_sq < INTER_ENTITY_MIN_DISTANCE_SQ || distance_sq > INTER_ENTITY_MAX_DISTANCE_SQ {
                     continue;
                 }
 
@@ -144,7 +211,7 @@ pub fn update_inter_entity(state: &mut GameState, dt: f32) {
 
                 // Gravitational force: F = G * m1 * m2 / r^2
                 // Scale down inter-entity gravity to be subtle
-                let force_magnitude = G * mass_i * mass_j / distance_sq * 0.01;
+                let force_magnitude = G * mass_i * mass_j / distance_sq * INTER_ENTITY_GRAVITY_SCALE;
 
                 // F = ma, so a = F/m
                 accel += direction * (force_magnitude / mass_i);
@@ -167,7 +234,7 @@ pub fn update_inter_entity(state: &mut GameState, dt: f32) {
 /// Calculate orbital velocity for a circular orbit at given radius
 pub fn orbital_velocity(radius: f32) -> f32 {
     // Prevent division by zero
-    let safe_radius = radius.max(10.0);
+    let safe_radius = radius.max(ORBITAL_MIN_RADIUS);
     // v = sqrt(G * M / r)
     (G * CENTRAL_MASS / safe_radius).sqrt()
 }
@@ -181,7 +248,7 @@ pub fn escape_velocity(radius: f32) -> f32 {
 /// Check if an entity is in a stable orbit (roughly)
 pub fn is_in_orbit(position: Vec2, velocity: Vec2, tolerance: f32) -> bool {
     let radius = position.length();
-    if radius < 10.0 {
+    if radius < ORBITAL_MIN_RADIUS {
         return false;
     }
 
@@ -257,7 +324,7 @@ pub fn update_explosions(
         // Check for explosion
         if well.explosion_timer <= 0.0 {
             // Calculate strength based on well mass (normalized)
-            let strength = (well.mass / 10000.0).clamp(0.3, 1.0);
+            let strength = (well.mass / WAVE_STRENGTH_NORMALIZATION_MASS).clamp(WAVE_STRENGTH_MIN, WAVE_STRENGTH_MAX);
 
             events.push(GravityWaveEvent::WellExploded {
                 well_id: well.id,
@@ -318,7 +385,7 @@ pub fn update_waves(state: &mut GameState, config: &GravityWaveConfig, dt: f32) 
             let delta = player.position - wave.position;
             let dist = delta.length();
 
-            if dist >= wave_inner && dist <= wave_outer && dist > 1.0 {
+            if dist >= wave_inner && dist <= wave_outer && dist > WAVE_MIN_APPLY_DISTANCE {
                 let direction = delta.normalize();
                 let distance_decay = 1.0 - (wave.radius / config.wave_max_radius).min(1.0);
                 let force = config.wave_base_impulse * wave.strength * distance_decay;
@@ -328,29 +395,29 @@ pub fn update_waves(state: &mut GameState, config: &GravityWaveConfig, dt: f32) 
             }
         }
 
-        // Apply impulse to projectiles in the wave front (50% force - lighter)
+        // Apply impulse to projectiles in the wave front (lighter than players)
         for projectile in state.projectiles.iter_mut() {
             let delta = projectile.position - wave.position;
             let dist = delta.length();
 
-            if dist >= wave_inner && dist <= wave_outer && dist > 1.0 {
+            if dist >= wave_inner && dist <= wave_outer && dist > WAVE_MIN_APPLY_DISTANCE {
                 let direction = delta.normalize();
                 let distance_decay = 1.0 - (wave.radius / config.wave_max_radius).min(1.0);
-                let force = config.wave_base_impulse * wave.strength * distance_decay * 0.5;
+                let force = config.wave_base_impulse * wave.strength * distance_decay * WAVE_PROJECTILE_FORCE_RATIO;
 
                 projectile.velocity += direction * force;
             }
         }
 
-        // Apply impulse to debris in the wave front (70% force - scatter nicely)
+        // Apply impulse to debris in the wave front (scatter effect)
         for debris in state.debris.iter_mut() {
             let delta = debris.position - wave.position;
             let dist = delta.length();
 
-            if dist >= wave_inner && dist <= wave_outer && dist > 1.0 {
+            if dist >= wave_inner && dist <= wave_outer && dist > WAVE_MIN_APPLY_DISTANCE {
                 let direction = delta.normalize();
                 let distance_decay = 1.0 - (wave.radius / config.wave_max_radius).min(1.0);
-                let force = config.wave_base_impulse * wave.strength * distance_decay * 0.7;
+                let force = config.wave_base_impulse * wave.strength * distance_decay * WAVE_DEBRIS_FORCE_RATIO;
 
                 debris.velocity += direction * force;
             }

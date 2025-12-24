@@ -8,9 +8,41 @@
 #![allow(dead_code)] // Collision event fields and helpers
 
 use crate::game::constants::{collision::*, mass::*, spawn::RESPAWN_DELAY};
-use crate::game::spatial::{SpatialEntity, SpatialEntityId, SpatialGrid};
+use crate::game::spatial::{SpatialEntity, SpatialEntityId, SpatialGrid, ENTITY_GRID_CELL_SIZE};
 use crate::game::state::{GameState, PlayerId};
 use crate::util::vec2::Vec2;
+
+// ============================================================================
+// Collision Detection Constants
+// ============================================================================
+
+/// Epsilon for numerical stability in distance checks (prevents division by near-zero)
+const COLLISION_DISTANCE_EPSILON: f32 = 0.001;
+
+/// Mass gain multiplier for decisive collision winner (slightly less than full absorption)
+const DECISIVE_COLLISION_MASS_GAIN_RATIO: f32 = 0.5;
+
+/// Mass retention for decisive collision winner (slight cost for winning)
+const DECISIVE_COLLISION_WINNER_MASS_RETENTION: f32 = 0.8;
+
+/// Mass retention for close fight winner
+const CLOSE_FIGHT_WINNER_MASS_RETENTION: f32 = 0.7;
+
+/// Mass retention for close fight loser
+const CLOSE_FIGHT_LOSER_MASS_RETENTION: f32 = 0.75;
+
+/// Relative velocity threshold for collision intensity normalization
+/// At this velocity, intensity reaches 1.0
+const COLLISION_INTENSITY_MAX_VELOCITY: f32 = 200.0;
+
+/// Cell size for debris collision spatial grid
+const DEBRIS_COLLISION_GRID_CELL_SIZE: f32 = 32.0;
+
+/// Maximum debris radius for query padding
+const DEBRIS_QUERY_MAX_RADIUS: f32 = 15.0;
+
+/// Projectile lifetime threshold for owner absorption (can absorb own projectile after this time)
+const PROJECTILE_OWNER_ABSORPTION_LIFETIME_THRESHOLD: f32 = 7.5;
 
 // Feature-gated physics helpers
 #[cfg(feature = "advanced_physics")]
@@ -69,7 +101,7 @@ fn update_player_collisions(state: &mut GameState) -> Vec<CollisionEvent> {
 
     // Build spatial grid with players (O(n))
     // Cell size of 64 units covers typical player radii (10-30)
-    let mut grid = SpatialGrid::new(64.0);
+    let mut grid = SpatialGrid::new(ENTITY_GRID_CELL_SIZE);
 
     // Insert players into grid (no need to collect, just iterate)
     for player in state.players.values() {
@@ -132,7 +164,7 @@ fn resolve_player_collision(
     let dist = delta.length();
 
     // Use epsilon check for numerical stability (exact zero is rare but near-zero can cause issues)
-    if dist < 0.001 {
+    if dist < COLLISION_DISTANCE_EPSILON {
         return None;
     }
 
@@ -146,8 +178,8 @@ fn resolve_player_collision(
     #[cfg(feature = "advanced_physics")]
     let (momentum_a, momentum_b, _energy_a, _energy_b) = {
         // Use physics helpers for momentum
-        let mom_a = momentum_magnitude(mass_a, vel_a) * vel_a_toward / vel_a.length().max(0.001);
-        let mom_b = momentum_magnitude(mass_b, vel_b) * vel_b_toward / vel_b.length().max(0.001);
+        let mom_a = momentum_magnitude(mass_a, vel_a) * vel_a_toward / vel_a.length().max(COLLISION_DISTANCE_EPSILON);
+        let mom_b = momentum_magnitude(mass_b, vel_b) * vel_b_toward / vel_b.length().max(COLLISION_DISTANCE_EPSILON);
         // Calculate kinetic energy (for future damage scaling)
         let ke_a = kinetic_energy(mass_a, vel_a);
         let ke_b = kinetic_energy(mass_b, vel_b);
@@ -190,7 +222,7 @@ fn resolve_player_collision(
         })
     } else if ratio > DECISIVE_THRESHOLD {
         // A decisively wins - kill with splash damage cost
-        let mass_gain = (mass_b * 0.5).min(ABSORPTION_CAP);
+        let mass_gain = (mass_b * DECISIVE_COLLISION_MASS_GAIN_RATIO).min(ABSORPTION_CAP);
 
         if let Some(player_b) = state.players.get_mut(&id_b) {
             player_b.alive = false;
@@ -199,7 +231,7 @@ fn resolve_player_collision(
         }
         if let Some(player_a) = state.players.get_mut(&id_a) {
             player_a.kills += 1;
-            player_a.mass = player_a.mass * 0.8 + mass_gain;
+            player_a.mass = player_a.mass * DECISIVE_COLLISION_WINNER_MASS_RETENTION + mass_gain;
         }
 
         Some(CollisionEvent::Kill {
@@ -213,17 +245,17 @@ fn resolve_player_collision(
         // Winner loses less mass
         if ratio > 1.0 {
             if let Some(p) = state.players.get_mut(&id_a) {
-                p.mass *= 0.7;
+                p.mass *= CLOSE_FIGHT_WINNER_MASS_RETENTION;
             }
             if let Some(p) = state.players.get_mut(&id_b) {
-                p.mass *= 0.75;
+                p.mass *= CLOSE_FIGHT_LOSER_MASS_RETENTION;
             }
         } else {
             if let Some(p) = state.players.get_mut(&id_a) {
-                p.mass *= 0.75;
+                p.mass *= CLOSE_FIGHT_LOSER_MASS_RETENTION;
             }
             if let Some(p) = state.players.get_mut(&id_b) {
-                p.mass *= 0.7;
+                p.mass *= CLOSE_FIGHT_WINNER_MASS_RETENTION;
             }
         }
 
@@ -235,7 +267,7 @@ fn resolve_player_collision(
         let collision_position = (pos_a + pos_b) * 0.5;
         let relative_vel = (vel_a - vel_b).length();
         // Normalize intensity: 100 units/s = 0.5, 200+ = 1.0
-        let intensity = (relative_vel / 200.0).min(1.0);
+        let intensity = (relative_vel / COLLISION_INTENSITY_MAX_VELOCITY).min(1.0);
 
         Some(CollisionEvent::Deflection {
             player_a: id_a,
@@ -245,7 +277,7 @@ fn resolve_player_collision(
         })
     } else if ratio > 1.0 / OVERWHELM_THRESHOLD {
         // B decisively wins
-        let mass_gain = (mass_a * 0.5).min(ABSORPTION_CAP);
+        let mass_gain = (mass_a * DECISIVE_COLLISION_MASS_GAIN_RATIO).min(ABSORPTION_CAP);
 
         if let Some(player_a) = state.players.get_mut(&id_a) {
             player_a.alive = false;
@@ -254,7 +286,7 @@ fn resolve_player_collision(
         }
         if let Some(player_b) = state.players.get_mut(&id_b) {
             player_b.kills += 1;
-            player_b.mass = player_b.mass * 0.8 + mass_gain;
+            player_b.mass = player_b.mass * DECISIVE_COLLISION_WINNER_MASS_RETENTION + mass_gain;
         }
 
         Some(CollisionEvent::Kill {
@@ -368,7 +400,7 @@ fn update_projectile_collisions(state: &mut GameState) -> Vec<CollisionEvent> {
             }
 
             // Can't absorb own projectile immediately
-            if player.id == owner_id && lifetime > 7.5 {
+            if player.id == owner_id && lifetime > PROJECTILE_OWNER_ABSORPTION_LIFETIME_THRESHOLD {
                 continue;
             }
 
@@ -420,7 +452,7 @@ fn update_debris_collisions(state: &mut GameState) -> Vec<CollisionEvent> {
 
     // Build spatial grid with debris (O(D))
     // Cell size of 32 units - debris is small (radius 4-11)
-    let mut grid = SpatialGrid::new(32.0);
+    let mut grid = SpatialGrid::new(DEBRIS_COLLISION_GRID_CELL_SIZE);
 
     // Store debris info indexed by ID for quick lookup after spatial query
     let debris_info: hashbrown::HashMap<u64, (usize, f32, f32)> = state
@@ -446,7 +478,7 @@ fn update_debris_collisions(state: &mut GameState) -> Vec<CollisionEvent> {
 
         let player_radius = mass_to_radius(player.mass);
         // Query radius = player radius + max debris radius (11 for large)
-        let query_radius = player_radius + 15.0;
+        let query_radius = player_radius + DEBRIS_QUERY_MAX_RADIUS;
 
         for nearby in grid.query_radius(player.position, query_radius) {
             if let SpatialEntityId::Debris(debris_id) = nearby.id {

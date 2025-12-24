@@ -7,6 +7,33 @@ use crate::game::state::PlayerId;
 use crate::net::protocol::{GameSnapshot, PlayerSnapshot};
 use crate::util::vec2::Vec2;
 
+// ============================================================================
+// AOI System Constants
+// ============================================================================
+
+/// Default full detail radius - entities within this range get full update rate
+const DEFAULT_FULL_DETAIL_RADIUS: f32 = 500.0;
+
+/// Default extended radius - entities in this range get reduced detail
+const DEFAULT_EXTENDED_RADIUS: f32 = 1000.0;
+
+/// Default maximum entities to include per client (performance cap)
+const DEFAULT_MAX_ENTITIES: usize = 100;
+
+/// Default number of top players to always include (for leaderboard visibility)
+const DEFAULT_ALWAYS_INCLUDE_TOP_N: usize = 5;
+
+/// Lookahead time in seconds for velocity-based AOI expansion
+/// Prevents pop-in when moving fast by looking ahead this many seconds
+const VELOCITY_LOOKAHEAD_TIME: f32 = 2.0;
+
+/// Maximum velocity expansion as fraction of extended radius
+/// AOI can expand by up to 50% when moving at high speed
+const VELOCITY_EXPANSION_MAX_RATIO: f32 = 0.5;
+
+/// Projectile entity cap divisor (projectiles capped at max_entities / this value)
+const PROJECTILE_CAP_DIVISOR: usize = 2;
+
 /// AOI configuration
 #[derive(Debug, Clone)]
 pub struct AOIConfig {
@@ -23,10 +50,10 @@ pub struct AOIConfig {
 impl Default for AOIConfig {
     fn default() -> Self {
         Self {
-            full_detail_radius: 500.0,   // Full detail for nearby entities
-            extended_radius: 1000.0,     // Reduced detail for medium range
-            max_entities: 100,           // Cap to prevent bandwidth explosion
-            always_include_top_n: 5,     // Always show top 5 players
+            full_detail_radius: DEFAULT_FULL_DETAIL_RADIUS,   // Full detail for nearby entities
+            extended_radius: DEFAULT_EXTENDED_RADIUS,         // Reduced detail for medium range
+            max_entities: DEFAULT_MAX_ENTITIES,               // Cap to prevent bandwidth explosion
+            always_include_top_n: DEFAULT_ALWAYS_INCLUDE_TOP_N, // Always show top N players
         }
     }
 }
@@ -64,8 +91,7 @@ impl AOIManager {
         // At 250 speed (max zoom out), player covers ~250 units/sec
         // Lookahead ~2 seconds of movement = 500 units extra radius
         let speed = player_velocity.length();
-        let lookahead_time = 2.0; // seconds of movement to look ahead
-        let velocity_expansion = (speed * lookahead_time).min(self.config.extended_radius * 0.5);
+        let velocity_expansion = (speed * VELOCITY_LOOKAHEAD_TIME).min(self.config.extended_radius * VELOCITY_EXPANSION_MAX_RATIO);
         let effective_extended_radius = self.config.extended_radius + velocity_expansion;
         let mut filtered_players = Vec::with_capacity(self.config.max_entities);
         let mut filtered_projectiles = Vec::with_capacity(self.config.max_entities);
@@ -146,7 +172,7 @@ impl AOIManager {
             }
 
             // Cap projectiles too
-            if filtered_projectiles.len() >= self.config.max_entities / 2 {
+            if filtered_projectiles.len() >= self.config.max_entities / PROJECTILE_CAP_DIVISOR {
                 break;
             }
         }

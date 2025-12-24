@@ -5,6 +5,26 @@ use crate::game::state::GameState;
 use crate::net::protocol::PlayerInput;
 use crate::util::vec2::Vec2;
 
+// ============================================================================
+// Physics System Constants
+// ============================================================================
+
+/// Multiplier for projectile cleanup boundary (1.5x escape radius)
+const PROJECTILE_BOUNDARY_MULTIPLIER: f32 = 1.5;
+
+/// Multiplier for debris cleanup boundary (1.2x escape radius)
+const DEBRIS_BOUNDARY_MULTIPLIER: f32 = 1.2;
+
+/// Minimum input magnitude squared for thrust to be applied
+/// Prevents tiny inputs from causing thrust (deadzone)
+const THRUST_INPUT_THRESHOLD_SQ: f32 = 0.01;
+
+/// Minimum input magnitude squared for aim to update rotation
+const AIM_INPUT_THRESHOLD_SQ: f32 = 0.01;
+
+/// Kinetic energy formula coefficient (1/2 * m * v²)
+const KINETIC_ENERGY_COEFFICIENT: f32 = 0.5;
+
 /// Update physics for all entities
 /// CRITICAL: Uses exponential drag (velocity *= 1 - DRAG), NOT linear drag
 /// Uses rayon for parallel iteration over players, projectiles, and debris
@@ -46,7 +66,7 @@ pub fn update(state: &mut GameState, dt: f32) {
 
     // Remove expired or out-of-bounds projectiles
     let escape_radius = state.arena.escape_radius;
-    state.projectiles.retain(|p| p.lifetime > 0.0 && p.position.length() < escape_radius * 1.5);
+    state.projectiles.retain(|p| p.lifetime > 0.0 && p.position.length() < escape_radius * PROJECTILE_BOUNDARY_MULTIPLIER);
 
     // Update debris in parallel (includes lifetime decay)
     state.debris.par_iter_mut().for_each(|debris| {
@@ -56,7 +76,7 @@ pub fn update(state: &mut GameState, dt: f32) {
     });
 
     // Remove expired or out-of-bounds debris
-    state.debris.retain(|d| d.lifetime > 0.0 && d.position.length() < escape_radius * 1.2);
+    state.debris.retain(|d| d.lifetime > 0.0 && d.position.length() < escape_radius * DEBRIS_BOUNDARY_MULTIPLIER);
 }
 
 /// Apply thrust from player input
@@ -74,7 +94,7 @@ pub fn apply_thrust(
     };
 
     // Apply thrust if player is boosting
-    if input.boost && input.thrust.length_sq() > 0.01 {
+    if input.boost && input.thrust.length_sq() > THRUST_INPUT_THRESHOLD_SQ {
         let thrust_dir = input.thrust.normalize();
 
         // Calculate thrust force (base thrust, could scale with mass)
@@ -97,7 +117,7 @@ pub fn apply_thrust(
     }
 
     // Update rotation to face aim direction if not thrusting
-    if input.aim.length_sq() > 0.01 {
+    if input.aim.length_sq() > AIM_INPUT_THRESHOLD_SQ {
         player.rotation = input.aim.normalize().angle();
     }
 
@@ -108,7 +128,7 @@ pub fn apply_thrust(
 /// Used in advanced_physics feature for collision calculations
 #[allow(dead_code)]
 pub fn kinetic_energy(mass: f32, velocity: Vec2) -> f32 {
-    0.5 * mass * velocity.length_sq()
+    KINETIC_ENERGY_COEFFICIENT * mass * velocity.length_sq()
 }
 
 /// Calculate momentum for a body (vector form)

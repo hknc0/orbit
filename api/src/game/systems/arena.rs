@@ -8,6 +8,58 @@ use crate::game::constants::arena::*;
 use crate::game::constants::spawn::RESPAWN_DELAY;
 use crate::game::state::{GameState, MatchPhase};
 
+// ============================================================================
+// Arena System Constants
+// ============================================================================
+
+/// Collapse progress shrink factor for escape/outer/middle radii (80% shrink at max collapse)
+const COLLAPSE_SHRINK_FACTOR: f32 = 0.8;
+
+/// Collapse progress shrink factor for inner radius (60% shrink at max collapse)
+const INNER_COLLAPSE_SHRINK_FACTOR: f32 = 0.6;
+
+/// Distance divisor for progressive drain rate increase outside safe zone
+/// Mass drain increases by 1x for each 100 units beyond safe radius
+const DRAIN_RATE_DISTANCE_DIVISOR: f32 = 100.0;
+
+/// Supermassive black hole safe spawn multiplier (3x core radius for safety margin)
+const SUPERMASSIVE_SAFE_SPAWN_MULTIPLIER: f32 = 3.0;
+
+/// Minimum spawn radius as fraction of outer radius
+const SPAWN_RADIUS_MIN_FRACTION: f32 = 0.2;
+
+/// Maximum spawn radius as fraction of outer radius
+const SPAWN_RADIUS_MAX_FRACTION: f32 = 0.8;
+
+/// Distance threshold for filtering orbital wells (wells near center are skipped)
+const ORBITAL_WELL_POSITION_THRESHOLD: f32 = 10.0;
+
+/// Core radius multiplier for filtering supermassive well
+const ORBITAL_WELL_CORE_FILTER_MULTIPLIER: f32 = 1.5;
+
+/// Multiplier for calculating safe spawn distance from central well
+const SAFE_SPAWN_RADIUS_MULTIPLIER: f32 = 4.0;
+
+/// Maximum spawn attempts near well before fallback
+const WELL_SPAWN_MAX_ATTEMPTS: u32 = 20;
+
+/// Safety margin multiplier for spawn position distance from well cores
+const SPAWN_CORE_SAFETY_MARGIN: f32 = 1.5;
+
+// Zone danger levels
+/// Danger level for core zone (instant death)
+const ZONE_DANGER_CORE: f32 = 1.0;
+/// Danger level for inner zone (safe)
+const ZONE_DANGER_INNER: f32 = 0.0;
+/// Danger level for middle zone (very low risk)
+const ZONE_DANGER_MIDDLE: f32 = 0.1;
+/// Danger level for outer zone (low risk)
+const ZONE_DANGER_OUTER: f32 = 0.3;
+/// Danger level for escape zone (moderate risk)
+const ZONE_DANGER_ESCAPE: f32 = 0.6;
+/// Danger level for outside zone (high risk)
+const ZONE_DANGER_OUTSIDE: f32 = 0.9;
+
 /// Arena events
 #[derive(Debug, Clone)]
 pub enum ArenaEvent {
@@ -44,10 +96,10 @@ fn update_arena_radii(state: &mut GameState) {
     let progress = phase / max_phases;
 
     // Shrink all radii toward core
-    state.arena.escape_radius = ESCAPE_RADIUS * (1.0 - progress * 0.8);
-    state.arena.outer_radius = OUTER_RADIUS * (1.0 - progress * 0.8);
-    state.arena.middle_radius = MIDDLE_RADIUS * (1.0 - progress * 0.8);
-    state.arena.inner_radius = INNER_RADIUS * (1.0 - progress * 0.6);
+    state.arena.escape_radius = ESCAPE_RADIUS * (1.0 - progress * COLLAPSE_SHRINK_FACTOR);
+    state.arena.outer_radius = OUTER_RADIUS * (1.0 - progress * COLLAPSE_SHRINK_FACTOR);
+    state.arena.middle_radius = MIDDLE_RADIUS * (1.0 - progress * COLLAPSE_SHRINK_FACTOR);
+    state.arena.inner_radius = INNER_RADIUS * (1.0 - progress * INNER_COLLAPSE_SHRINK_FACTOR);
 
     // Core doesn't change
 }
@@ -92,7 +144,7 @@ fn check_player_boundaries(state: &mut GameState, dt: f32) -> Vec<ArenaEvent> {
         let distance_from_center = player.position.length();
         if distance_from_center > safe_radius {
             let excess = distance_from_center - safe_radius;
-            let drain_rate = ESCAPE_MASS_DRAIN * (1.0 + excess / 100.0); // Faster drain farther out
+            let drain_rate = ESCAPE_MASS_DRAIN * (1.0 + excess / DRAIN_RATE_DISTANCE_DIVISOR); // Faster drain farther out
             let mass_lost = drain_rate * dt;
 
             player.mass = (player.mass - mass_lost).max(0.0);
@@ -154,12 +206,12 @@ impl Zone {
     /// Get danger level (0.0 = safe, 1.0 = deadly)
     pub fn danger_level(&self) -> f32 {
         match self {
-            Zone::Core => 1.0,
-            Zone::Inner => 0.0,
-            Zone::Middle => 0.1,
-            Zone::Outer => 0.3,
-            Zone::Escape => 0.6,
-            Zone::Outside => 0.9,
+            Zone::Core => ZONE_DANGER_CORE,
+            Zone::Inner => ZONE_DANGER_INNER,
+            Zone::Middle => ZONE_DANGER_MIDDLE,
+            Zone::Outer => ZONE_DANGER_OUTER,
+            Zone::Escape => ZONE_DANGER_ESCAPE,
+            Zone::Outside => ZONE_DANGER_OUTSIDE,
         }
     }
 
@@ -183,11 +235,11 @@ pub fn random_spawn_position_scaled(scale: f32) -> crate::util::vec2::Vec2 {
 
     // Minimum spawn radius must be outside the supermassive black hole death zone
     // Supermassive core is CORE_RADIUS * 2.5 = 125 units, so use 3.0x for safety margin
-    let supermassive_safe_radius = CORE_RADIUS * 3.0; // 150 units
+    let supermassive_safe_radius = CORE_RADIUS * SUPERMASSIVE_SAFE_SPAWN_MULTIPLIER;
 
     // Spawn across a wider range (20% to 80% of outer radius, but never inside death zone)
-    let min_radius = (OUTER_RADIUS * 0.2 * scale).max(supermassive_safe_radius);
-    let max_radius = OUTER_RADIUS * 0.8 * scale;
+    let min_radius = (OUTER_RADIUS * SPAWN_RADIUS_MIN_FRACTION * scale).max(supermassive_safe_radius);
+    let max_radius = OUTER_RADIUS * SPAWN_RADIUS_MAX_FRACTION * scale;
 
     let angle = rng.gen_range(0.0..std::f32::consts::TAU);
     let radius = rng.gen_range(min_radius..max_radius);
@@ -235,7 +287,7 @@ pub fn spawn_near_well_bounded(
     // to distribute players across orbital wells instead of clustering at center
     let orbital_wells: Vec<_> = wells
         .iter()
-        .filter(|w| w.position.length() > 10.0 || w.core_radius <= CORE_RADIUS * 1.5)
+        .filter(|w| w.position.length() > ORBITAL_WELL_POSITION_THRESHOLD || w.core_radius <= CORE_RADIUS * ORBITAL_WELL_CORE_FILTER_MULTIPLIER)
         .collect();
 
     if orbital_wells.is_empty() {
@@ -244,16 +296,15 @@ pub fn spawn_near_well_bounded(
         let angle = rng.gen_range(0.0..std::f32::consts::TAU);
         // Use the first well (central) core radius for safe distance calculation
         let safe_radius = wells.first()
-            .map(|w| w.core_radius * 4.0)
-            .unwrap_or(CORE_RADIUS * 4.0);
+            .map(|w| w.core_radius * SAFE_SPAWN_RADIUS_MULTIPLIER)
+            .unwrap_or(CORE_RADIUS * SAFE_SPAWN_RADIUS_MULTIPLIER);
         return crate::util::vec2::Vec2::from_angle(angle) * safe_radius;
     }
 
     let mut rng = rand::thread_rng();
 
     // Try multiple times to find a safe spawn position
-    const MAX_ATTEMPTS: u32 = 20;
-    for _ in 0..MAX_ATTEMPTS {
+    for _ in 0..WELL_SPAWN_MAX_ATTEMPTS {
         // Pick a random orbital well (not the central black hole)
         let well = orbital_wells[rng.gen_range(0..orbital_wells.len())];
 
@@ -270,7 +321,7 @@ pub fn spawn_near_well_bounded(
         let is_safe = wells.iter().all(|w| {
             let dist_sq = spawn_pos.distance_sq_to(w.position);
             // Use 1.5x core radius as safety margin
-            let safe_radius = w.core_radius * 1.5;
+            let safe_radius = w.core_radius * SPAWN_CORE_SAFETY_MARGIN;
             dist_sq > safe_radius * safe_radius
         });
 
@@ -295,7 +346,7 @@ pub fn spawn_near_well_bounded(
 
     // Last resort: spawn at safe distance from center (for single-well arenas)
     let angle = rng.gen_range(0.0..std::f32::consts::TAU);
-    let radius = CORE_RADIUS * 4.0; // Safe distance from central well
+    let radius = CORE_RADIUS * SAFE_SPAWN_RADIUS_MULTIPLIER; // Safe distance from central well
     crate::util::vec2::Vec2::from_angle(angle) * radius
 }
 
@@ -365,11 +416,11 @@ pub fn spawn_positions(count: usize) -> Vec<crate::util::vec2::Vec2> {
 
     // Minimum spawn radius must be outside the supermassive black hole death zone
     // Supermassive core is CORE_RADIUS * 2.5 = 125 units, so use 3.0x for safety margin
-    let supermassive_safe_radius = CORE_RADIUS * 3.0; // 150 units
+    let supermassive_safe_radius = CORE_RADIUS * SUPERMASSIVE_SAFE_SPAWN_MULTIPLIER;
 
     // Spawn across a wider range of the arena (20% to 80% of outer radius, but never inside death zone)
-    let min_radius = (OUTER_RADIUS * 0.2).max(supermassive_safe_radius);
-    let max_radius = OUTER_RADIUS * 0.8;
+    let min_radius = (OUTER_RADIUS * SPAWN_RADIUS_MIN_FRACTION).max(supermassive_safe_radius);
+    let max_radius = OUTER_RADIUS * SPAWN_RADIUS_MAX_FRACTION;
 
     (0..count)
         .map(|_| {
