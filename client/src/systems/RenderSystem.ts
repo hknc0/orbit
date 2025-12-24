@@ -862,11 +862,15 @@ export class RenderSystem {
     const ctx = this.ctx;
 
     for (const well of chargingWells) {
-      const { position, progress } = well;
+      const { progress } = well;
 
-      // Find the corresponding well to get its core radius
+      // Find the corresponding well to get current position and core radius
+      // Wells orbit, so we must use current interpolated position, not stale event position
       const wellData = world.arena.gravityWells[well.wellIndex];
-      const coreRadius = wellData?.coreRadius ?? 50;
+      if (!wellData) continue; // Well may have been removed
+
+      const position = wellData.position;
+      const coreRadius = wellData.coreRadius;
 
       // Pulsing intensity increases as explosion approaches
       const pulseSpeed = 5 + progress * 15; // Faster as it gets closer
