@@ -54,6 +54,12 @@ export class RenderSystem {
   private readonly TRAIL_POINT_LIFETIME = 400; // ms
   private readonly TRAIL_MIN_DISTANCE = 8; // minimum distance between trail points
 
+  // Screen shake effect
+  private shakeOffset = { x: 0, y: 0 };
+  private shakeIntensity = 0;
+  private readonly SHAKE_DECAY = 0.85;
+  private readonly MAX_SHAKE = 12;
+
   constructor(ctx: CanvasRenderingContext2D) {
     this.ctx = ctx;
   }
@@ -194,8 +200,13 @@ export class RenderSystem {
     this.ctx.translate(centerX, centerY);
     this.ctx.scale(this.currentZoom, this.currentZoom);
     this.ctx.translate(-centerX, -centerY);
-    // Then apply camera offset
-    this.ctx.translate(this.cameraOffset.x, this.cameraOffset.y);
+    // Update and apply shake
+    this.updateShake();
+    // Then apply camera offset with shake
+    this.ctx.translate(
+      this.cameraOffset.x + this.shakeOffset.x,
+      this.cameraOffset.y + this.shakeOffset.y
+    );
 
     // Reset any lingering canvas state that might cause visual artifacts
     this.ctx.setLineDash([]);
@@ -204,6 +215,7 @@ export class RenderSystem {
     // Render in order (back to front)
     this.renderArena(world);
     this.renderDeathEffects(world);
+    this.renderCollisionEffects(world);
     this.renderPlayerTrails(world);
     this.renderProjectiles(world);
     this.renderPlayers(world, state.input?.isBoosting ?? false);
@@ -714,6 +726,81 @@ export class RenderSystem {
         this.ctx.beginPath();
         this.ctx.arc(particleX, particleY, particleSize, 0, Math.PI * 2);
         this.ctx.fill();
+      }
+    }
+  }
+
+  // Trigger screen shake (called when local player is in collision)
+  triggerShake(intensity: number): void {
+    this.shakeIntensity = Math.min(this.shakeIntensity + intensity * 8, this.MAX_SHAKE);
+  }
+
+  // Update shake (called each frame)
+  private updateShake(): void {
+    if (this.shakeIntensity > 0.5) {
+      const angle = Math.random() * Math.PI * 2;
+      this.shakeOffset.x = Math.cos(angle) * this.shakeIntensity;
+      this.shakeOffset.y = Math.sin(angle) * this.shakeIntensity;
+      this.shakeIntensity *= this.SHAKE_DECAY;
+    } else {
+      this.shakeOffset.x = 0;
+      this.shakeOffset.y = 0;
+      this.shakeIntensity = 0;
+    }
+  }
+
+  private renderCollisionEffects(world: World): void {
+    const effects = world.getCollisionEffects();
+
+    for (const effect of effects) {
+      const { position, progress, intensity, color } = effect;
+
+      // Skip if too faded
+      if (progress < 0.05) continue;
+
+      const baseAlpha = progress * intensity;
+      const ctx = this.ctx;
+
+      // 1. Central flash (quick fade)
+      if (progress > 0.5) {
+        const flashProgress = (progress - 0.5) * 2;
+        const flashRadius = Math.max(1, 15 + (1 - flashProgress) * 20);
+
+        const gradient = ctx.createRadialGradient(
+          position.x, position.y, 0,
+          position.x, position.y, flashRadius
+        );
+        gradient.addColorStop(0, `rgba(255, 255, 255, ${flashProgress * 0.8})`);
+        gradient.addColorStop(0.5, this.colorWithAlpha(color, flashProgress * 0.5));
+        gradient.addColorStop(1, 'rgba(255, 255, 255, 0)');
+
+        ctx.fillStyle = gradient;
+        ctx.beginPath();
+        ctx.arc(position.x, position.y, flashRadius, 0, Math.PI * 2);
+        ctx.fill();
+      }
+
+      // 2. Expanding ring
+      const ringRadius = Math.max(1, 10 + (1 - progress) * 50 * intensity);
+      ctx.strokeStyle = this.colorWithAlpha(color, baseAlpha * 0.7);
+      ctx.lineWidth = Math.max(0.5, 2 + progress * 2);
+      ctx.beginPath();
+      ctx.arc(position.x, position.y, ringRadius, 0, Math.PI * 2);
+      ctx.stroke();
+
+      // 3. Particles (6 particles, no shadow blur for performance)
+      const particleCount = 6;
+      for (let i = 0; i < particleCount; i++) {
+        const angle = (i / particleCount) * Math.PI * 2;
+        const dist = (1 - progress) * 40 * intensity;
+        const px = position.x + Math.cos(angle) * dist;
+        const py = position.y + Math.sin(angle) * dist;
+        const size = Math.max(0.5, 2 + progress * 3);
+
+        ctx.fillStyle = this.colorWithAlpha(color, baseAlpha * 0.6);
+        ctx.beginPath();
+        ctx.arc(px, py, size, 0, Math.PI * 2);
+        ctx.fill();
       }
     }
   }
@@ -1771,5 +1858,7 @@ export class RenderSystem {
     this.previousSpeeds.clear();
     this.playerTrails.clear();
     this.lastTrailPositions.clear();
+    this.shakeIntensity = 0;
+    this.shakeOffset = { x: 0, y: 0 };
   }
 }

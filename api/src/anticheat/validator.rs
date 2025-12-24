@@ -189,6 +189,7 @@ mod tests {
         PlayerInput {
             sequence: 1,
             tick: 100,
+            client_time: 0,
             thrust: Vec2::new(0.5, 0.5),
             aim: Vec2::new(1.0, 0.0),
             boost: false,

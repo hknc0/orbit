@@ -27,6 +27,10 @@ pub enum CollisionEvent {
     Deflection {
         player_a: PlayerId,
         player_b: PlayerId,
+        /// Midpoint of collision for visual effects
+        position: Vec2,
+        /// Intensity 0-1 based on relative velocity (for effect scaling)
+        intensity: f32,
     },
 }
 
@@ -205,9 +209,17 @@ fn resolve_player_collision(
         check_min_mass(state, id_a);
         check_min_mass(state, id_b);
 
+        // Calculate collision midpoint and intensity for visual effects
+        let collision_position = (pos_a + pos_b) * 0.5;
+        let relative_vel = (vel_a - vel_b).length();
+        // Normalize intensity: 100 units/s = 0.5, 200+ = 1.0
+        let intensity = (relative_vel / 200.0).min(1.0);
+
         Some(CollisionEvent::Deflection {
             player_a: id_a,
             player_b: id_b,
+            position: collision_position,
+            intensity,
         })
     } else if ratio > 1.0 / OVERWHELM_THRESHOLD {
         // B decisively wins

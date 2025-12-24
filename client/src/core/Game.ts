@@ -275,6 +275,26 @@ export class Game {
         this.world.arena.collapsePhase = event.phase;
         this.world.arena.isCollapsing = true;
         break;
+
+      case 'PlayerDeflection': {
+        // Get color from one of the players involved
+        const playerA = this.world.getPlayer(event.playerA);
+        const color = playerA
+          ? this.world.getPlayerColor(playerA.colorIndex)
+          : '#ffffff';
+
+        // Add collision effect at the collision point
+        this.world.addCollisionEffect(event.position, event.intensity, color);
+
+        // Trigger screen shake if local player is involved
+        if (
+          event.playerA === this.world.localPlayerId ||
+          event.playerB === this.world.localPlayerId
+        ) {
+          this.renderSystem.triggerShake(event.intensity);
+        }
+        break;
+      }
     }
   }
 

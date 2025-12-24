@@ -205,6 +205,7 @@ export function encodeClientMessage(msg: ClientMessage): Uint8Array {
 function writePlayerInput(writer: BinaryWriter, input: PlayerInput): void {
   writer.writeU64(input.sequence);
   writer.writeU64(input.tick);
+  writer.writeU64(input.clientTime); // For RTT measurement
   writer.writeVec2(input.thrust);
   writer.writeVec2(input.aim);
   writer.writeBool(input.boost);
@@ -332,6 +333,9 @@ function readGameSnapshot(reader: BinaryReader): GameSnapshot {
     });
   }
 
+  // Read echo_client_time for RTT measurement
+  const echoClientTime = reader.readU64();
+
   return {
     tick,
     matchPhase,
@@ -347,6 +351,7 @@ function readGameSnapshot(reader: BinaryReader): GameSnapshot {
     totalAlive,
     densityGrid,
     notablePlayers,
+    echoClientTime,
   };
 }
 
@@ -481,6 +486,14 @@ function readGameEvent(reader: BinaryReader): GameEvent {
         type: 'ZoneCollapse',
         phase: reader.readU8(),
         newSafeRadius: reader.readF32(),
+      };
+    case 6: // PlayerDeflection
+      return {
+        type: 'PlayerDeflection',
+        playerA: reader.readUuid(),
+        playerB: reader.readUuid(),
+        position: { x: reader.readF32(), y: reader.readF32() },
+        intensity: reader.readF32(),
       };
     default:
       throw new Error(`Unknown game event variant: ${variant}`);

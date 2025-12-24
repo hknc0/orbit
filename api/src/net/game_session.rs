@@ -15,7 +15,7 @@ use crate::game::performance::{PerformanceMonitor, PerformanceStatus};
 use crate::game::state::{MatchPhase, Player, PlayerId};
 use crate::metrics::Metrics;
 use crate::net::aoi::{AOIConfig, AOIManager};
-use crate::net::protocol::{encode, GameSnapshot, PlayerInput, ServerMessage};
+use crate::net::protocol::{encode, GameEvent, GameSnapshot, PlayerInput, ServerMessage};
 
 /// Simulation mode configuration for load testing
 /// Scales bots up and down over time in a sinusoidal pattern
@@ -100,6 +100,8 @@ pub struct GameSession {
     session_start: std::time::Instant,
     /// Last tick when simulation target was updated (rate limiting)
     last_simulation_update_tick: u64,
+    /// Last client timestamp per player for RTT echo
+    last_client_times: HashMap<PlayerId, u64>,
 }
 
 impl GameSession {
@@ -119,7 +121,8 @@ impl GameSession {
 
         // Determine initial bot count
         let bot_count = if simulation_config.enabled {
-            // In simulation mode, start at minimum
+            // In simulation mode, start at minimum bots but configure arena for max
+            // This ensures gravity wells are properly distributed for the full scale
             info!(
                 "Simulation mode ENABLED: {} → {} bots over {} minutes",
                 simulation_config.min_bots,
@@ -144,8 +147,9 @@ impl GameSession {
         game_loop.state_mut().match_state.countdown_time = 0.0;
 
         // CRITICAL: Update arena scale BEFORE spawning bots
-        // This creates appropriate gravity wells for the target player count
-        // Without this, all bots spawn near a single well and immediately kill each other
+        // This creates appropriate gravity wells for the initial player count
+        // As players join/leave, scale_for_simulation() handles dynamic scaling
+        // and repositions wells that end up too close to center
         game_loop.state_mut().arena.update_for_player_count(bot_count);
         info!(
             "Arena configured: {} gravity wells, escape_radius={}",
@@ -193,6 +197,7 @@ impl GameSession {
             simulation_config,
             session_start: std::time::Instant::now(),
             last_simulation_update_tick: 0,
+            last_client_times: HashMap::new(),
         }
     }
 
@@ -252,6 +257,7 @@ impl GameSession {
         info!("Removing player {} from game session", player_id);
         self.game_loop.remove_player(player_id);
         self.players.remove(&player_id);
+        self.last_client_times.remove(&player_id);
 
         // Ensure we have enough bots
         self.maintain_player_count();
@@ -273,6 +279,10 @@ impl GameSession {
 
     /// Queue input for a player
     pub fn queue_input(&mut self, player_id: PlayerId, input: PlayerInput) {
+        // Track client timestamp for RTT echo
+        if input.client_time > 0 {
+            self.last_client_times.insert(player_id, input.client_time);
+        }
         self.game_loop.queue_input(player_id, input);
     }
 
@@ -515,13 +525,13 @@ impl GameSession {
     pub fn get_filtered_snapshot(&self, player_id: PlayerId) -> GameSnapshot {
         let full_snapshot = self.get_snapshot();
 
-        // Get player position for AOI filtering
-        let player_position = self.game_loop.state()
+        // Get player position and velocity for AOI filtering
+        let (player_position, player_velocity) = self.game_loop.state()
             .get_player(player_id)
-            .map(|p| p.position)
-            .unwrap_or(crate::util::vec2::Vec2::ZERO);
+            .map(|p| (p.position, p.velocity))
+            .unwrap_or((crate::util::vec2::Vec2::ZERO, crate::util::vec2::Vec2::ZERO));
 
-        self.aoi_manager.filter_for_player(player_id, player_position, &full_snapshot)
+        self.aoi_manager.filter_for_player(player_id, player_position, player_velocity, &full_snapshot)
     }
 
     /// Respawn dead players after respawn delay
@@ -686,18 +696,25 @@ pub async fn broadcast_filtered_snapshots(session: &GameSession) {
     let client_data: Vec<(PlayerId, Arc<RwLock<Option<wtransport::SendStream>>>, Vec<u8>)> =
         session.players.iter()
             .filter_map(|(&player_id, conn)| {
-                // Get player position for filtering
-                let player_position = session.game_loop.state()
+                // Get player position and velocity for filtering
+                let (player_position, player_velocity) = session.game_loop.state()
                     .get_player(player_id)
-                    .map(|p| p.position)
-                    .unwrap_or(crate::util::vec2::Vec2::ZERO);
+                    .map(|p| (p.position, p.velocity))
+                    .unwrap_or((crate::util::vec2::Vec2::ZERO, crate::util::vec2::Vec2::ZERO));
 
-                // Filter snapshot for this player
-                let filtered = session.aoi_manager.filter_for_player(
+                // Filter snapshot for this player (AOI expands based on velocity)
+                let mut filtered = session.aoi_manager.filter_for_player(
                     player_id,
                     player_position,
+                    player_velocity,
                     &full_snapshot,
                 );
+
+                // Set echo_client_time for RTT measurement
+                filtered.echo_client_time = session.last_client_times
+                    .get(&player_id)
+                    .copied()
+                    .unwrap_or(0);
 
                 // Encode the message
                 let message = ServerMessage::Snapshot(filtered);
@@ -923,6 +940,30 @@ pub fn start_game_loop(session: Arc<RwLock<GameSession>>) {
             for event in &events {
                 if let GameLoopEvent::PlayerKilled { killer_id, victim_id } = event {
                     debug!("Player {:?} killed {:?}", killer_id, victim_id);
+                }
+            }
+
+            // Broadcast game events to all players
+            for event in &events {
+                let game_event = match event {
+                    GameLoopEvent::PlayerDeflection { player_a, player_b, position, intensity } => {
+                        Some(GameEvent::PlayerDeflection {
+                            player_a: *player_a,
+                            player_b: *player_b,
+                            position: *position,
+                            intensity: *intensity,
+                        })
+                    }
+                    // Other events are already reflected in state snapshots
+                    _ => None,
+                };
+
+                if let Some(game_event) = game_event {
+                    let session_clone = session.clone();
+                    tokio::spawn(async move {
+                        let session_guard = session_clone.read().await;
+                        broadcast_message(&session_guard, &ServerMessage::Event(game_event)).await;
+                    });
                 }
             }
 

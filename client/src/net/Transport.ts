@@ -234,8 +234,12 @@ export class GameTransport {
   }
 
   private handleMessage(message: ServerMessage): void {
-    // Handle pong for RTT calculation
-    if (message.type === 'Pong') {
+    // Calculate RTT from snapshot echo (more efficient than Ping/Pong)
+    if (message.type === 'Snapshot' && message.snapshot.echoClientTime > 0) {
+      this.rtt = performance.now() - message.snapshot.echoClientTime;
+    }
+    // Fallback: handle pong for RTT when idle (no inputs being sent)
+    else if (message.type === 'Pong') {
       this.rtt = performance.now() - this.lastPingTime;
     }
 
@@ -243,9 +247,11 @@ export class GameTransport {
   }
 
   private startPingInterval(): void {
+    // Ping is now just a fallback for when no inputs are being sent
+    // Primary RTT measurement comes from snapshot echo
     this.pingInterval = window.setInterval(() => {
       this.sendPing().catch(() => {});
-    }, 1000);
+    }, 5000);
   }
 
   private stopPingInterval(): void {

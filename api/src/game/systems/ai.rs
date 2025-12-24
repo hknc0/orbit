@@ -158,6 +158,7 @@ impl AiManager {
         Some(PlayerInput {
             sequence: tick,
             tick,
+            client_time: 0, // Bots don't need RTT measurement
             thrust: ai.thrust_direction,
             aim: ai.aim_direction,
             boost: ai.wants_boost,

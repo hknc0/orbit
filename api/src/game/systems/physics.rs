@@ -252,6 +252,7 @@ mod tests {
         let input = PlayerInput {
             sequence: 1,
             tick: 1,
+            client_time: 0,
             thrust: Vec2::new(1.0, 0.0),
             aim: Vec2::ZERO,
             boost: true,
@@ -273,6 +274,7 @@ mod tests {
         let input = PlayerInput {
             sequence: 1,
             tick: 1,
+            client_time: 0,
             thrust: Vec2::new(1.0, 0.0),
             aim: Vec2::ZERO,
             boost: true,
@@ -293,6 +295,7 @@ mod tests {
         let input = PlayerInput {
             sequence: 1,
             tick: 1,
+            client_time: 0,
             thrust: Vec2::new(1.0, 0.0),
             aim: Vec2::ZERO,
             boost: false, // Not boosting

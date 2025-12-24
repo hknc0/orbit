@@ -149,6 +149,7 @@ export class StateSync {
       totalAlive: baseEntry.snapshot.totalAlive,
       densityGrid: baseEntry.snapshot.densityGrid,
       notablePlayers: baseEntry.snapshot.notablePlayers,
+      echoClientTime: baseEntry.snapshot.echoClientTime,
     };
 
     // Apply player deltas

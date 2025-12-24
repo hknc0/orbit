@@ -344,6 +344,34 @@ impl Arena {
             self.shrink_delay_ticks = SHRINK_DELAY_TICKS;
         }
 
+        // Reposition wells that are now too close to center after arena growth
+        // This prevents wells from clustering at center when scaling from small to large
+        // Wells below 18% of escape_radius are pushed outward toward inner ring (25%)
+        // Uses very slow lerp for smooth, barely-perceptible movement
+        const MIN_WELL_RATIO: f32 = 0.18;
+        const TARGET_INNER_RATIO: f32 = 0.25;
+        const REPOSITION_LERP: f32 = 0.005; // Very slow (0.5% per update = ~3-4 sec to reposition)
+        const MIN_MOVE_DIST: f32 = 0.5; // Minimum movement to prevent micro-jitter
+
+        for well in self.gravity_wells.iter_mut().skip(1) {
+            // Skip supermassive at index 0
+            let dist = well.position.length();
+            let ratio = dist / self.escape_radius;
+
+            if ratio < MIN_WELL_RATIO && dist > 1.0 {
+                // Well is too close to center - push it outward smoothly
+                let target_dist = self.escape_radius * TARGET_INNER_RATIO;
+                let delta = (target_dist - dist) * REPOSITION_LERP;
+
+                // Only move if delta is significant (prevents jitter)
+                if delta.abs() > MIN_MOVE_DIST {
+                    let new_dist = dist + delta;
+                    let direction = well.position.normalize();
+                    well.position = direction * new_dist;
+                }
+            }
+        }
+
         // Add new wells if needed (never remove existing ones during gameplay)
         // Wells are distributed across inner/middle/outer rings
         if target_wells > current_orbital_wells {

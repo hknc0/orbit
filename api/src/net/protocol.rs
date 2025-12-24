@@ -52,6 +52,9 @@ pub struct PlayerInput {
     pub sequence: u64,
     /// Server tick this input is for
     pub tick: u64,
+    /// Client timestamp for RTT measurement (ms since page load)
+    #[serde(default)]
+    pub client_time: u64,
     /// Thrust direction (normalized, -1 to 1 on each axis)
     pub thrust: Vec2,
     /// Aim direction (normalized)
@@ -124,6 +127,9 @@ pub struct GameSnapshot {
     /// Notable players (high mass) for minimap radar - shown regardless of AOI
     #[serde(default)]
     pub notable_players: Vec<NotablePlayer>,
+    /// Echo of client's last input timestamp for RTT measurement
+    #[serde(default)]
+    pub echo_client_time: u64,
 }
 
 /// Minimum mass to appear on minimap radar
@@ -181,6 +187,7 @@ impl GameSnapshot {
             total_alive,
             density_grid,
             notable_players,
+            echo_client_time: 0, // Set per-player in broadcast
         }
     }
 
@@ -341,6 +348,15 @@ pub enum GameEvent {
     MatchEnded { winner_id: Option<PlayerId>, winner_name: Option<String> },
     /// Zone is collapsing
     ZoneCollapse { phase: u8, new_safe_radius: f32 },
+    /// Two players collided and deflected (both survived)
+    PlayerDeflection {
+        player_a: PlayerId,
+        player_b: PlayerId,
+        /// Collision midpoint position
+        position: Vec2,
+        /// Intensity 0-1 for visual effect scaling
+        intensity: f32,
+    },
 }
 
 /// Encode a message using bincode
@@ -393,6 +409,7 @@ mod tests {
         let input = PlayerInput {
             sequence: 42,
             tick: 100,
+            client_time: 0,
             thrust: Vec2::new(0.5, -0.3),
             aim: Vec2::new(1.0, 0.0),
             boost: true,
@@ -467,6 +484,7 @@ mod tests {
             total_alive: 1,
             density_grid: vec![0; 64],
             notable_players: vec![],
+            echo_client_time: 0,
         };
 
         let encoded = encode(&snapshot).unwrap();
@@ -780,6 +798,7 @@ mod encoding_tests {
             total_alive: 1,
             density_grid: vec![],
             notable_players: vec![],
+            echo_client_time: 0,
         };
 
         let encoded = encode(&snapshot).unwrap();

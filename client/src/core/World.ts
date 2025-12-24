@@ -29,11 +29,23 @@ export interface LeaderboardEntry {
 const KILL_EFFECT_DURATION = 1500;
 // Death effect duration in ms
 const DEATH_EFFECT_DURATION = 800;
+// Collision effect duration in ms
+const COLLISION_EFFECT_DURATION = 300;
+// Max collision effects at once
+const MAX_COLLISION_EFFECTS = 10;
 
 // Death effect data
 interface DeathEffect {
   position: { x: number; y: number };
   timestamp: number;
+  color: string;
+}
+
+// Collision effect data
+interface CollisionEffect {
+  position: { x: number; y: number };
+  timestamp: number;
+  intensity: number;
   color: string;
 }
 
@@ -67,6 +79,9 @@ export class World {
 
   // Death effects (explosion at death location)
   private deathEffects: DeathEffect[] = [];
+
+  // Collision effects (flash + ring at collision point)
+  private collisionEffects: CollisionEffect[] = [];
 
   // Previous alive states to detect deaths
   private lastAliveStates: Map<PlayerId, { alive: boolean; position: { x: number; y: number }; color: string }> = new Map();
@@ -157,6 +172,11 @@ export class World {
     // Clean up old death effects
     this.deathEffects = this.deathEffects.filter(
       (effect) => now - effect.timestamp < DEATH_EFFECT_DURATION
+    );
+
+    // Clean up old collision effects
+    this.collisionEffects = this.collisionEffects.filter(
+      (effect) => now - effect.timestamp < COLLISION_EFFECT_DURATION
     );
 
     // Clean up tracking for players no longer in state (prevents stale data accumulation)
@@ -342,6 +362,40 @@ export class World {
     }));
   }
 
+  // Add a collision effect (called when PlayerDeflection event received)
+  addCollisionEffect(
+    position: { x: number; y: number },
+    intensity: number,
+    color: string
+  ): void {
+    // Enforce max effects limit
+    if (this.collisionEffects.length >= MAX_COLLISION_EFFECTS) {
+      this.collisionEffects.shift(); // Remove oldest
+    }
+    this.collisionEffects.push({
+      position: { x: position.x, y: position.y },
+      timestamp: Date.now(),
+      intensity,
+      color,
+    });
+  }
+
+  // Get active collision effects for rendering
+  getCollisionEffects(): Array<{
+    position: { x: number; y: number };
+    progress: number;
+    intensity: number;
+    color: string;
+  }> {
+    const now = Date.now();
+    return this.collisionEffects.map((effect) => ({
+      position: effect.position,
+      progress: 1 - (now - effect.timestamp) / COLLISION_EFFECT_DURATION,
+      intensity: effect.intensity,
+      color: effect.color,
+    }));
+  }
+
   // Get session stats for HUD
   getSessionStats() {
     return {
@@ -358,6 +412,7 @@ export class World {
     this.recentKills.clear();
     this.lastKillCounts.clear();
     this.deathEffects = [];
+    this.collisionEffects = [];
     this.lastAliveStates.clear();
     this.sessionStats = {
       bestMass: 0,

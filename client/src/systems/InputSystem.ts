@@ -227,6 +227,7 @@ export class InputSystem {
     const input: PlayerInput = {
       sequence,
       tick,
+      clientTime: Math.floor(performance.now()), // For RTT measurement
       thrust,
       aim: this.aimDirection.clone(),
       boost: this.isBoostHeld,

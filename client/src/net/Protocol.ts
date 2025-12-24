@@ -32,6 +32,7 @@ export type ServerMessage =
 export interface PlayerInput {
   sequence: number;
   tick: number;
+  clientTime: number; // Client timestamp for RTT measurement
   thrust: Vec2;
   aim: Vec2;
   boost: boolean;
@@ -65,6 +66,7 @@ export interface GameSnapshot {
   totalAlive: number;    // Total alive players (before AOI filtering)
   densityGrid: number[]; // 16x16 grid of player counts for minimap heatmap
   notablePlayers: NotablePlayer[]; // High-mass players for minimap radar
+  echoClientTime: number; // Echo of client's last input timestamp for RTT
 }
 
 // Notable player for minimap radar (high-mass players visible everywhere)
@@ -140,13 +142,21 @@ export type GameEvent =
   | { type: 'PlayerLeft'; playerId: PlayerId; name: string }
   | { type: 'MatchStarted' }
   | { type: 'MatchEnded'; winnerId: PlayerId | null; winnerName: string | null }
-  | { type: 'ZoneCollapse'; phase: number; newSafeRadius: number };
+  | { type: 'ZoneCollapse'; phase: number; newSafeRadius: number }
+  | {
+      type: 'PlayerDeflection';
+      playerA: PlayerId;
+      playerB: PlayerId;
+      position: { x: number; y: number };
+      intensity: number;
+    };
 
 // Create a default player input
 export function createPlayerInput(sequence: number, tick: number): PlayerInput {
   return {
     sequence,
     tick,
+    clientTime: Math.floor(performance.now()), // For RTT measurement
     thrust: new Vec2(0, 0),
     aim: new Vec2(1, 0),
     boost: false,

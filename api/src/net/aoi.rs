@@ -41,20 +41,32 @@ impl AOIManager {
         Self { config }
     }
 
-    /// Filter a game snapshot for a specific player based on their position
+    /// Filter a game snapshot for a specific player based on their position and velocity
     ///
     /// Returns a personalized snapshot containing:
     /// - The player themselves (always)
-    /// - Nearby players within AOI radius
+    /// - Nearby players within AOI radius (expanded based on speed)
     /// - Top N players by score (for leaderboard)
     /// - Nearby projectiles
     /// - All gravity wells (they're sparse and important)
+    ///
+    /// AOI radius is expanded when player is moving fast to prevent pop-in:
+    /// - At rest: uses configured extended_radius
+    /// - At high speed: expanded by up to 50% in direction of movement
     pub fn filter_for_player(
         &self,
         player_id: PlayerId,
         player_position: Vec2,
+        player_velocity: Vec2,
         full_snapshot: &GameSnapshot,
     ) -> GameSnapshot {
+        // Expand AOI based on speed to prevent pop-in when moving fast
+        // At 250 speed (max zoom out), player covers ~250 units/sec
+        // Lookahead ~2 seconds of movement = 500 units extra radius
+        let speed = player_velocity.length();
+        let lookahead_time = 2.0; // seconds of movement to look ahead
+        let velocity_expansion = (speed * lookahead_time).min(self.config.extended_radius * 0.5);
+        let effective_extended_radius = self.config.extended_radius + velocity_expansion;
         let mut filtered_players = Vec::with_capacity(self.config.max_entities);
         let mut filtered_projectiles = Vec::with_capacity(self.config.max_entities);
 
@@ -101,7 +113,7 @@ impl AOIManager {
                 let distance = (p.position - player_position).length();
                 (p, distance)
             })
-            .filter(|(_, distance)| *distance <= self.config.extended_radius)
+            .filter(|(_, distance)| *distance <= effective_extended_radius)
             .collect();
 
         // Sort by distance (closest first)
@@ -125,10 +137,10 @@ impl AOIManager {
                 .collect();
         }
 
-        // Filter projectiles by distance
+        // Filter projectiles by distance (using velocity-expanded radius)
         for proj in &full_snapshot.projectiles {
             let distance = (proj.position - player_position).length();
-            if distance <= self.config.extended_radius {
+            if distance <= effective_extended_radius {
                 filtered_projectiles.push(proj.clone());
             }
 
@@ -157,6 +169,8 @@ impl AOIManager {
             density_grid: full_snapshot.density_grid.clone(),
             // Preserve notable players for minimap radar
             notable_players: full_snapshot.notable_players.clone(),
+            // Set per-player in broadcast
+            echo_client_time: 0,
         }
     }
 
@@ -250,6 +264,7 @@ mod tests {
             total_alive: player_len,
             density_grid: vec![],
             notable_players: vec![],
+            echo_client_time: 0,
         }
     }
 
@@ -263,7 +278,7 @@ mod tests {
         snapshot.players[0].id = player_id;
         snapshot.players[0].position = player_pos;
 
-        let filtered = aoi.filter_for_player(player_id, player_pos, &snapshot);
+        let filtered = aoi.filter_for_player(player_id, player_pos, Vec2::ZERO, &snapshot);
 
         // Self should always be included
         assert!(filtered.players.iter().any(|p| p.id == player_id));
@@ -301,9 +316,10 @@ mod tests {
             total_alive: 3,
             density_grid: vec![],
             notable_players: vec![],
+            echo_client_time: 0,
         };
 
-        let filtered = aoi.filter_for_player(player_id, player_pos, &snapshot);
+        let filtered = aoi.filter_for_player(player_id, player_pos, Vec2::ZERO, &snapshot);
 
         // Should include self and nearby player, but not far player
         assert_eq!(filtered.players.len(), 2);
@@ -341,9 +357,10 @@ mod tests {
             total_alive: 3,
             density_grid: vec![],
             notable_players: vec![],
+            echo_client_time: 0,
         };
 
-        let filtered = aoi.filter_for_player(player_id, player_pos, &snapshot);
+        let filtered = aoi.filter_for_player(player_id, player_pos, Vec2::ZERO, &snapshot);
 
         // Should include all 3 because top N is 3
         assert_eq!(filtered.players.len(), 3);
@@ -381,9 +398,10 @@ mod tests {
             total_alive: 1,
             density_grid: vec![],
             notable_players: vec![],
+            echo_client_time: 0,
         };
 
-        let filtered = aoi.filter_for_player(player_id, player_pos, &snapshot);
+        let filtered = aoi.filter_for_player(player_id, player_pos, Vec2::ZERO, &snapshot);
 
         // Should include 2 nearby projectiles, exclude far one
         assert_eq!(filtered.projectiles.len(), 2);
@@ -407,7 +425,7 @@ mod tests {
         snapshot.players[0].id = player_id;
         snapshot.players[0].position = player_pos;
 
-        let filtered = aoi.filter_for_player(player_id, player_pos, &snapshot);
+        let filtered = aoi.filter_for_player(player_id, player_pos, Vec2::ZERO, &snapshot);
 
         // Should be capped at max_entities
         assert!(filtered.players.len() <= max_entities);
@@ -447,7 +465,7 @@ mod tests {
             },
         ];
 
-        let filtered = aoi.filter_for_player(player_id, player_pos, &snapshot);
+        let filtered = aoi.filter_for_player(player_id, player_pos, Vec2::ZERO, &snapshot);
 
         // All gravity wells should be preserved
         assert_eq!(filtered.gravity_wells.len(), 2);
@@ -477,7 +495,7 @@ mod tests {
         snapshot.players[49].id = player_id;
         snapshot.players[49].position = player_pos;
 
-        let filtered = aoi.filter_for_player(player_id, player_pos, &snapshot);
+        let filtered = aoi.filter_for_player(player_id, player_pos, Vec2::ZERO, &snapshot);
 
         // Local player MUST be included regardless of their position in the list
         assert!(
@@ -513,7 +531,7 @@ mod tests {
             snapshot.players[i].kills = 100 - i as u32;
         }
 
-        let filtered = aoi.filter_for_player(player_id, player_pos, &snapshot);
+        let filtered = aoi.filter_for_player(player_id, player_pos, Vec2::ZERO, &snapshot);
 
         // Local player MUST be in the filtered list
         assert!(
@@ -542,7 +560,7 @@ mod tests {
         snapshot.players[0].position = player_pos;
         snapshot.players[0].kills = 1000;  // Make them top scorer
 
-        let filtered = aoi.filter_for_player(player_id, player_pos, &snapshot);
+        let filtered = aoi.filter_for_player(player_id, player_pos, Vec2::ZERO, &snapshot);
 
         // Count occurrences of local player
         let self_count = filtered.players.iter().filter(|p| p.id == player_id).count();
@@ -581,7 +599,7 @@ mod tests {
             snapshot.players[i].position = Vec2::new(50.0 + ((i - 15) as f32) * 25.0, 0.0);
         }
 
-        let filtered = aoi.filter_for_player(player_id, player_pos, &snapshot);
+        let filtered = aoi.filter_for_player(player_id, player_pos, Vec2::ZERO, &snapshot);
 
         // With max_entities = 5 (1 self + 4 others), we should have the closest 4 others
         // Check that NO far players (500+ units) are included
@@ -629,7 +647,7 @@ mod tests {
             snapshot.players[i].position = Vec2::new(300.0 + (i as f32) * 10.0, 0.0);
         }
 
-        let filtered = aoi.filter_for_player(player_id, player_pos, &snapshot);
+        let filtered = aoi.filter_for_player(player_id, player_pos, Vec2::ZERO, &snapshot);
 
         // ALL close players (collision range) MUST be included
         for close_id in close_ids {
