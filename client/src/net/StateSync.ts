@@ -13,6 +13,7 @@ import type {
 
 // Gravity well for rendering
 export interface InterpolatedGravityWell {
+  id: number;
   position: Vec2;
   mass: number;
   coreRadius: number;
@@ -338,6 +339,7 @@ export class StateSync {
       arenaSafeRadius: snapshot.arenaSafeRadius,
       arenaScale: snapshot.arenaScale,
       gravityWells: snapshot.gravityWells.map((w) => ({
+        id: w.id,
         position: w.position.clone(),
         mass: w.mass,
         coreRadius: w.coreRadius,
@@ -447,17 +449,20 @@ export class StateSync {
       }
     }
 
-    // Interpolate gravity wells
-    const gravityWells: InterpolatedGravityWell[] = after.gravityWells.map((afterWell, i) => {
-      const beforeWell = before.gravityWells[i];
+    // Interpolate gravity wells - build lookup map for O(1) access
+    const beforeWellMap = new Map(before.gravityWells.map(w => [w.id, w]));
+    const gravityWells: InterpolatedGravityWell[] = after.gravityWells.map((afterWell) => {
+      const beforeWell = beforeWellMap.get(afterWell.id);
       if (beforeWell) {
         return {
+          id: afterWell.id,
           position: vec2Lerp(beforeWell.position, afterWell.position, t),
           mass: beforeWell.mass + (afterWell.mass - beforeWell.mass) * t,
           coreRadius: beforeWell.coreRadius + (afterWell.coreRadius - beforeWell.coreRadius) * t,
         };
       }
       return {
+        id: afterWell.id,
         position: afterWell.position.clone(),
         mass: afterWell.mass,
         coreRadius: afterWell.coreRadius,

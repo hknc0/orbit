@@ -300,13 +300,13 @@ export class Game {
 
       case 'GravityWellCharging': {
         // Add charging effect for warning
-        this.world.addChargingWell(event.position, event.wellIndex);
+        this.world.addChargingWell(event.position, event.wellId);
         break;
       }
 
       case 'GravityWaveExplosion': {
         // Add expanding wave effect
-        this.world.addGravityWaveEffect(event.position, event.strength, event.wellIndex);
+        this.world.addGravityWaveEffect(event.position, event.strength, event.wellId);
 
         // Trigger screen shake based on distance to local player
         const localPlayer = this.world.getLocalPlayer();

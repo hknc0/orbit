@@ -23,6 +23,7 @@ export interface LeaderboardEntry {
   name: string;
   mass: number;
   kills: number;
+  isBot: boolean;
 }
 
 // Kill effect duration in ms
@@ -60,14 +61,14 @@ interface GravityWaveEffect {
   position: { x: number; y: number };
   timestamp: number;
   strength: number;
-  wellIndex: number;
+  wellId: number;
 }
 
 // Charging well data (warning before explosion)
 interface ChargingWell {
   position: { x: number; y: number };
   timestamp: number;
-  wellIndex: number;
+  wellId: number;
 }
 
 export class World {
@@ -368,6 +369,7 @@ export class World {
         name: this.getPlayerName(p.id),
         mass: p.mass,
         kills: p.kills,
+        isBot: p.isBot,
       }))
       .sort((a, b) => b.mass - a.mass);
   }
@@ -432,13 +434,13 @@ export class World {
   }
 
   // Add a charging well effect (called when GravityWellCharging event received)
-  addChargingWell(position: { x: number; y: number }, wellIndex: number): void {
+  addChargingWell(position: { x: number; y: number }, wellId: number): void {
     // Remove any existing charging for this well
-    this.chargingWells = this.chargingWells.filter((w) => w.wellIndex !== wellIndex);
+    this.chargingWells = this.chargingWells.filter((w) => w.wellId !== wellId);
     this.chargingWells.push({
       position: { x: position.x, y: position.y },
       timestamp: Date.now(),
-      wellIndex,
+      wellId,
     });
   }
 
@@ -446,10 +448,10 @@ export class World {
   addGravityWaveEffect(
     position: { x: number; y: number },
     strength: number,
-    wellIndex: number
+    wellId: number
   ): void {
     // Remove charging state for this well
-    this.chargingWells = this.chargingWells.filter((w) => w.wellIndex !== wellIndex);
+    this.chargingWells = this.chargingWells.filter((w) => w.wellId !== wellId);
 
     // Enforce max effects limit
     if (this.gravityWaveEffects.length >= MAX_WAVE_EFFECTS) {
@@ -459,7 +461,7 @@ export class World {
       position: { x: position.x, y: position.y },
       timestamp: Date.now(),
       strength,
-      wellIndex,
+      wellId,
     });
   }
 
@@ -483,7 +485,7 @@ export class World {
   getChargingWells(): Array<{
     position: { x: number; y: number };
     progress: number; // 0 = just started charging, 1 = about to explode
-    wellIndex: number;
+    wellId: number;
   }> {
     const now = Date.now();
     return this.chargingWells
@@ -491,7 +493,7 @@ export class World {
       .map((well) => ({
         position: well.position,
         progress: (now - well.timestamp) / WAVE_CHARGE_DURATION,
-        wellIndex: well.wellIndex,
+        wellId: well.wellId,
       }));
   }
 

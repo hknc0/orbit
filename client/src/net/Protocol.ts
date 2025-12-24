@@ -42,6 +42,7 @@ export interface PlayerInput {
 
 // Gravity well in the arena
 export interface GravityWellSnapshot {
+  id: number; // Unique stable well ID
   position: Vec2;
   mass: number;
   coreRadius: number;
@@ -171,14 +172,19 @@ export type GameEvent =
     }
   | {
       type: 'GravityWellCharging';
-      wellIndex: number;
+      wellId: number;
       position: { x: number; y: number };
     }
   | {
       type: 'GravityWaveExplosion';
-      wellIndex: number;
+      wellId: number;
       position: { x: number; y: number };
       strength: number;
+    }
+  | {
+      type: 'GravityWellDestroyed';
+      wellId: number;
+      position: { x: number; y: number };
     };
 
 // Create a default player input

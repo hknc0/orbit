@@ -331,9 +331,8 @@ export class RenderSystem {
 
     // Render gravity wells (suns) - each is its own "solar system"
     if (wells.length > 0) {
-      for (let i = 0; i < wells.length; i++) {
-        const well = wells[i];
-        this.renderGravityWell(well.position.x, well.position.y, well.coreRadius, well.mass, i);
+      for (const well of wells) {
+        this.renderGravityWell(well.position.x, well.position.y, well.coreRadius, well.mass, well.id);
 
         // Draw orbit zones around each well (subtle rings)
         this.renderWellZones(well.position.x, well.position.y, well.coreRadius);
@@ -377,9 +376,9 @@ export class RenderSystem {
     this.ctx.stroke();
   }
 
-  private renderGravityWell(x: number, y: number, coreRadius: number, mass: number, wellIndex: number): void {
-    // Central supermassive black hole is always index 0 and near origin
-    const isCentral = wellIndex === 0 && Math.abs(x) < 50 && Math.abs(y) < 50;
+  private renderGravityWell(x: number, y: number, coreRadius: number, mass: number, wellId: number): void {
+    // Central supermassive black hole is always id 0 and near origin
+    const isCentral = wellId === 0 && Math.abs(x) < 50 && Math.abs(y) < 50;
 
     if (isCentral) {
       // === SUPERMASSIVE BLACK HOLE ===
@@ -439,9 +438,9 @@ export class RenderSystem {
       // === NORMAL GRAVITY WELL (star/sun) ===
       // Different star types based on position hash for variety
 
-      // Generate deterministic "random" values from well index (stable identifier)
-      // Using index instead of position prevents flickering as wells orbit
-      const seed = Math.abs(wellIndex * 7919 + 104729) % 10000;
+      // Generate deterministic "random" values from well id (stable identifier)
+      // Using id instead of position prevents flickering as wells orbit
+      const seed = Math.abs(wellId * 7919 + 104729) % 10000;
       const starType = seed % 6; // 6 different star types
       const variation = (seed % 100) / 100; // 0-1 for subtle variations
 
@@ -681,15 +680,28 @@ export class RenderSystem {
       );
       this.ctx.stroke();
 
-      // Player name
-      this.ctx.fillStyle = '#ffffff';
-      this.ctx.font = '12px Inter, system-ui, sans-serif';
+      // Player name with human/bot hint
+      const nameY = player.position.y - radius - 10;
+      const playerName = world.getPlayerName(player.id);
+
+      // Bot names are dimmed, humans are bright white with cyan dot
       this.ctx.textAlign = 'center';
-      this.ctx.fillText(
-        world.getPlayerName(player.id),
-        player.position.x,
-        player.position.y - radius - 10
-      );
+      this.ctx.font = player.isBot ? '11px Inter, system-ui, sans-serif' : '12px Inter, system-ui, sans-serif';
+
+      if (player.isBot) {
+        this.ctx.fillStyle = '#64748b';
+        this.ctx.fillText(playerName, player.position.x, nameY);
+      } else if (!isLocal) {
+        // Other human player: cyan dot + name
+        this.ctx.fillStyle = '#22d3ee';
+        this.ctx.fillText('•', player.position.x - this.ctx.measureText(playerName).width / 2 - 8, nameY);
+        this.ctx.fillStyle = '#ffffff';
+        this.ctx.fillText(playerName, player.position.x, nameY);
+      } else {
+        // Local player: just white name
+        this.ctx.fillStyle = '#ffffff';
+        this.ctx.fillText(playerName, player.position.x, nameY);
+      }
     }
   }
 
@@ -859,14 +871,18 @@ export class RenderSystem {
   // Render charging wells (pulsing warning before explosion)
   private renderChargingWells(world: World): void {
     const chargingWells = world.getChargingWells();
+    if (chargingWells.length === 0) return;
+
     const ctx = this.ctx;
+    // Build lookup map for O(1) well access (scales to 1000s of wells)
+    const wellMap = new Map(world.arena.gravityWells.map(w => [w.id, w]));
 
     for (const well of chargingWells) {
       const { progress } = well;
 
       // Find the corresponding well to get current position and core radius
       // Wells orbit, so we must use current interpolated position, not stale event position
-      const wellData = world.arena.gravityWells[well.wellIndex];
+      const wellData = wellMap.get(well.wellId);
       if (!wellData) continue; // Well may have been removed
 
       const position = wellData.position;
@@ -1274,11 +1290,23 @@ export class RenderSystem {
         this.ctx.fillText(`${index + 1}`, Math.round(lbPanelX + 16), y + 4);
       }
 
-      // Name - cyan for local, white for others
-      this.ctx.fillStyle = isLocal ? '#00ffff' : '#e2e8f0';
-      this.ctx.font = `${isLocal ? 'bold ' : ''}11px Inter, system-ui, sans-serif`;
+      // Name - cyan for local, white+dot for humans, dim gray for bots
       const name = entry.name.length > 9 ? entry.name.slice(0, 9) + '…' : entry.name;
-      this.ctx.fillText(name, Math.round(lbPanelX + 32), y + 4);
+      this.ctx.font = `${isLocal ? 'bold ' : ''}11px Inter, system-ui, sans-serif`;
+
+      if (isLocal) {
+        this.ctx.fillStyle = '#00ffff';
+        this.ctx.fillText(name, Math.round(lbPanelX + 32), y + 4);
+      } else if (entry.isBot) {
+        this.ctx.fillStyle = '#64748b';
+        this.ctx.fillText(name, Math.round(lbPanelX + 32), y + 4);
+      } else {
+        // Other human: cyan dot + white name
+        this.ctx.fillStyle = '#22d3ee';
+        this.ctx.fillText('•', Math.round(lbPanelX + 30), y + 4);
+        this.ctx.fillStyle = '#e2e8f0';
+        this.ctx.fillText(name, Math.round(lbPanelX + 38), y + 4);
+      }
 
       // Mini mass bar
       const barX = lbPanelX + 100;

@@ -311,6 +311,7 @@ function readGameSnapshot(reader: BinaryReader): GameSnapshot {
   const gravityWells: GravityWellSnapshot[] = [];
   for (let i = 0; i < wellCount; i++) {
     gravityWells.push({
+      id: reader.readU32(),
       position: reader.readVec2(),
       mass: reader.readF32(),
       coreRadius: reader.readF32(),
@@ -514,15 +515,21 @@ function readGameEvent(reader: BinaryReader): GameEvent {
     case 7: // GravityWellCharging
       return {
         type: 'GravityWellCharging',
-        wellIndex: reader.readU8(),
+        wellId: reader.readU32(),
         position: { x: reader.readF32(), y: reader.readF32() },
       };
     case 8: // GravityWaveExplosion
       return {
         type: 'GravityWaveExplosion',
-        wellIndex: reader.readU8(),
+        wellId: reader.readU32(),
         position: { x: reader.readF32(), y: reader.readF32() },
         strength: reader.readF32(),
+      };
+    case 9: // GravityWellDestroyed
+      return {
+        type: 'GravityWellDestroyed',
+        wellId: reader.readU32(),
+        position: { x: reader.readF32(), y: reader.readF32() },
       };
     default:
       throw new Error(`Unknown game event variant: ${variant}`);
