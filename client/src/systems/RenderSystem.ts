@@ -1854,7 +1854,7 @@ export class RenderSystem {
     this.ctx.font = '10px Inter, system-ui, sans-serif';
     this.ctx.textAlign = 'right';
 
-    const scaleText = `✧ ${currentScale.toFixed(1)}`;
+    const scaleText = `${currentScale.toFixed(1)} AU`;
     const arrowColor = this.scaleDirection === 'growing' ? 'rgba(74, 222, 128, 0.9)' :
                        this.scaleDirection === 'shrinking' ? 'rgba(251, 146, 60, 0.9)' :
                        'rgba(148, 163, 184, 0.3)';
