@@ -8,7 +8,7 @@ use std::collections::HashMap;
 use std::time::{Duration, Instant};
 use uuid::Uuid;
 
-use crate::config::{DebrisSpawnConfig, GravityWaveConfig};
+use crate::config::{ArenaScalingConfig, DebrisSpawnConfig, GravityConfig, GravityWaveConfig};
 use crate::game::constants::physics::{DT, TICK_RATE};
 use crate::game::match_result::{check_match_end, determine_result, MatchEndReason, MatchResult};
 use crate::game::state::{GameState, MatchPhase, PlayerId, WellId};
@@ -62,8 +62,10 @@ pub enum GameLoopEvent {
 pub struct GameLoopConfig {
     pub tick_rate: u32,
     pub enable_inter_entity_gravity: bool,
+    pub gravity_config: GravityConfig,
     pub gravity_wave_config: GravityWaveConfig,
     pub debris_spawn_config: DebrisSpawnConfig,
+    pub arena_scaling_config: ArenaScalingConfig,
 }
 
 impl Default for GameLoopConfig {
@@ -71,8 +73,10 @@ impl Default for GameLoopConfig {
         Self {
             tick_rate: TICK_RATE,
             enable_inter_entity_gravity: false,
+            gravity_config: GravityConfig::default(),
             gravity_wave_config: GravityWaveConfig::default(),
             debris_spawn_config: DebrisSpawnConfig::default(),
+            arena_scaling_config: ArenaScalingConfig::default(),
         }
     }
 }
@@ -167,7 +171,7 @@ impl GameLoop {
         self.process_ai_inputs();
 
         // Run physics systems
-        gravity::update_central(&mut self.state, DT);
+        gravity::update_central_with_config(&mut self.state, &self.config.gravity_config, DT);
         if self.config.enable_inter_entity_gravity {
             gravity::update_inter_entity(&mut self.state, DT);
         }
@@ -176,11 +180,12 @@ impl GameLoop {
         // Update gravity wave explosions (occasional random events)
         // Only if feature is enabled via config
         if self.config.gravity_wave_config.enabled {
-            // Calculate target wells based on current player count
-            // Uses same formula as ArenaScalingConfig defaults: 1 well per 50 players, max 20
-            // Use total players (not just alive) since dead players will respawn
-            let player_count = self.state.players.len();
-            let target_wells = ((player_count + 49) / 50).max(1).min(20);
+            // Calculate target wells based on arena area (not player count)
+            let escape_radius = self.state.arena.escape_radius;
+            let arena_area = std::f32::consts::PI * escape_radius * escape_radius;
+            let config = &self.config.arena_scaling_config;
+            let target_wells = ((arena_area / config.wells_per_area).ceil() as usize)
+                .max(config.min_wells);
 
             let wave_events = gravity::update_explosions(
                 &mut self.state,

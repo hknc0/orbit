@@ -2,6 +2,127 @@ use std::net::{IpAddr, Ipv4Addr};
 
 use crate::game::constants::{debris_spawning, gravity_waves};
 
+// ============================================================================
+// Configuration Validation Constants
+// ============================================================================
+
+/// Gravity influence radius bounds (world units)
+/// Min: Minimum meaningful influence distance for limited mode
+/// Max: Maximum practical range (beyond this, use unlimited mode)
+mod gravity_bounds {
+    pub const INFLUENCE_RADIUS_MIN: f32 = 1000.0;
+    pub const INFLUENCE_RADIUS_MAX: f32 = 20000.0;
+}
+
+/// Arena scaling bounds
+mod arena_bounds {
+    /// Well count bounds (prevents excessive memory usage from malicious config)
+    pub const MIN_WELLS_LOWER: usize = 1;
+    pub const MIN_WELLS_UPPER: usize = 1000;
+
+    /// Area per well bounds (square units)
+    /// Lower = more wells, Upper = fewer wells
+    pub const WELLS_PER_AREA_MIN: f32 = 100_000.0;
+    pub const WELLS_PER_AREA_MAX: f32 = 5_000_000.0;
+}
+
+/// Safely parse a float from string, rejecting NaN and Infinity values
+/// Returns None for invalid, NaN, or infinite values
+#[inline]
+fn parse_safe_f32(s: &str) -> Option<f32> {
+    s.parse::<f32>().ok().filter(|v| v.is_finite())
+}
+
+/// Gravity calculation mode
+/// Controls how wells exert influence on entities
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum GravityRangeMode {
+    /// Limited range: Only wells within influence_radius affect entities
+    /// Uses spatial grid for O(nearby) lookups - efficient for dense well fields
+    #[default]
+    Limited,
+    /// Unlimited range: All wells affect all entities regardless of distance
+    /// Uses cache-optimized batch processing for O(W) per entity
+    Unlimited,
+}
+
+impl GravityRangeMode {
+    /// Parse from string (case-insensitive)
+    pub fn from_str(s: &str) -> Option<Self> {
+        match s.to_lowercase().as_str() {
+            "limited" => Some(Self::Limited),
+            "unlimited" => Some(Self::Unlimited),
+            _ => None,
+        }
+    }
+}
+
+/// Gravity system configuration
+/// Controls gravity calculation behavior and performance tuning
+#[derive(Debug, Clone)]
+pub struct GravityConfig {
+    /// Gravity calculation mode (limited vs unlimited range)
+    pub range_mode: GravityRangeMode,
+    /// Influence radius for limited mode (units)
+    /// Wells beyond this distance don't affect entities
+    pub influence_radius: f32,
+}
+
+impl Default for GravityConfig {
+    fn default() -> Self {
+        Self {
+            range_mode: GravityRangeMode::Limited,
+            influence_radius: 5000.0,
+        }
+    }
+}
+
+impl GravityConfig {
+    /// Load config from environment variables, falling back to defaults
+    pub fn from_env() -> Self {
+        let mut config = Self::default();
+
+        // Gravity range mode
+        if let Ok(val) = std::env::var("GRAVITY_RANGE_MODE") {
+            if let Some(mode) = GravityRangeMode::from_str(&val) {
+                config.range_mode = mode;
+            } else {
+                tracing::warn!(
+                    "Invalid GRAVITY_RANGE_MODE '{}', must be 'limited' or 'unlimited', using default",
+                    val
+                );
+            }
+        }
+
+        // Influence radius (only used in limited mode)
+        if let Ok(val) = std::env::var("GRAVITY_INFLUENCE_RADIUS") {
+            if let Some(parsed) = parse_safe_f32(&val) {
+                if (gravity_bounds::INFLUENCE_RADIUS_MIN..=gravity_bounds::INFLUENCE_RADIUS_MAX)
+                    .contains(&parsed)
+                {
+                    config.influence_radius = parsed;
+                } else {
+                    tracing::warn!(
+                        "GRAVITY_INFLUENCE_RADIUS must be {}-{}, using default",
+                        gravity_bounds::INFLUENCE_RADIUS_MIN,
+                        gravity_bounds::INFLUENCE_RADIUS_MAX
+                    );
+                }
+            } else {
+                tracing::warn!("GRAVITY_INFLUENCE_RADIUS invalid value, using default");
+            }
+        }
+
+        tracing::info!(
+            "Gravity config: mode={:?}, influence_radius={}",
+            config.range_mode,
+            config.influence_radius
+        );
+
+        config
+    }
+}
+
 /// Server configuration
 #[derive(Debug, Clone)]
 #[allow(dead_code)] // Fields are part of public API, may be used by consumers
@@ -516,10 +637,11 @@ pub struct ArenaScalingConfig {
     pub well_min_ratio: f32,
     /// Maximum well distance ratio from center (0.6-0.95)
     pub well_max_ratio: f32,
-    /// Additional wells per 50 players (1-5)
-    pub wells_per_50_players: usize,
-    /// Maximum gravity wells (5-50)
-    pub max_wells: usize,
+    /// Square units per gravity well (area-based scaling)
+    /// Lower = more wells. Default 500_000 = 1 well per 500K sq units
+    pub wells_per_area: f32,
+    /// Minimum wells regardless of area (1+)
+    pub min_wells: usize,
 
     // Well ring distribution (percentages of escape_radius)
     pub ring_inner_min: f32,
@@ -546,8 +668,8 @@ impl Default for ArenaScalingConfig {
             player_threshold: 1,
             well_min_ratio: 0.20,
             well_max_ratio: 0.85,
-            wells_per_50_players: 1,
-            max_wells: 20,
+            wells_per_area: 500_000.0, // 1 well per 500K square units
+            min_wells: 3,
             ring_inner_min: 0.25,
             ring_inner_max: 0.40,
             ring_middle_min: 0.45,
@@ -658,12 +780,36 @@ impl ArenaScalingConfig {
             }
         }
 
-        if let Ok(val) = std::env::var("ARENA_MAX_WELLS") {
-            if let Ok(parsed) = val.parse::<usize>() {
-                if parsed >= 5 && parsed <= 50 {
-                    config.max_wells = parsed;
+        // Area-based well scaling (CRITICAL: must reject NaN/Infinity to prevent division issues)
+        if let Ok(val) = std::env::var("ARENA_WELLS_PER_AREA") {
+            if let Some(parsed) = parse_safe_f32(&val) {
+                if (arena_bounds::WELLS_PER_AREA_MIN..=arena_bounds::WELLS_PER_AREA_MAX)
+                    .contains(&parsed)
+                {
+                    config.wells_per_area = parsed;
                 } else {
-                    tracing::warn!("ARENA_MAX_WELLS must be 5-50, using default");
+                    tracing::warn!(
+                        "ARENA_WELLS_PER_AREA must be {}-{}, using default",
+                        arena_bounds::WELLS_PER_AREA_MIN,
+                        arena_bounds::WELLS_PER_AREA_MAX
+                    );
+                }
+            } else {
+                tracing::warn!("ARENA_WELLS_PER_AREA invalid value, using default");
+            }
+        }
+
+        if let Ok(val) = std::env::var("ARENA_MIN_WELLS") {
+            if let Ok(parsed) = val.parse::<usize>() {
+                if (arena_bounds::MIN_WELLS_LOWER..=arena_bounds::MIN_WELLS_UPPER).contains(&parsed)
+                {
+                    config.min_wells = parsed;
+                } else {
+                    tracing::warn!(
+                        "ARENA_MIN_WELLS must be {}-{}, using default",
+                        arena_bounds::MIN_WELLS_LOWER,
+                        arena_bounds::MIN_WELLS_UPPER
+                    );
                 }
             }
         }
@@ -717,11 +863,12 @@ impl ArenaScalingConfig {
         }
 
         tracing::info!(
-            "Arena scaling: grow_lerp={}, shrink_lerp={}, delay={}, max_wells={}",
+            "Arena scaling: grow_lerp={}, shrink_lerp={}, delay={}, wells_per_area={}, min_wells={}",
             config.grow_lerp,
             config.shrink_lerp,
             config.shrink_delay_ticks,
-            config.max_wells
+            config.wells_per_area,
+            config.min_wells
         );
 
         config
@@ -917,9 +1064,45 @@ mod tests {
         assert_eq!(config.shrink_lerp, 0.005);
         assert_eq!(config.shrink_delay_ticks, 150);
         assert_eq!(config.min_escape_radius, 800.0);
-        assert_eq!(config.max_wells, 20);
+        assert_eq!(config.wells_per_area, 500_000.0);
+        assert_eq!(config.min_wells, 3);
         assert_eq!(config.ring_inner_min, 0.25);
         assert_eq!(config.ring_outer_max, 0.90);
+    }
+
+    #[test]
+    fn test_gravity_range_mode_from_str() {
+        assert_eq!(
+            GravityRangeMode::from_str("limited"),
+            Some(GravityRangeMode::Limited)
+        );
+        assert_eq!(
+            GravityRangeMode::from_str("LIMITED"),
+            Some(GravityRangeMode::Limited)
+        );
+        assert_eq!(
+            GravityRangeMode::from_str("unlimited"),
+            Some(GravityRangeMode::Unlimited)
+        );
+        assert_eq!(
+            GravityRangeMode::from_str("UNLIMITED"),
+            Some(GravityRangeMode::Unlimited)
+        );
+        assert_eq!(GravityRangeMode::from_str("invalid"), None);
+        assert_eq!(GravityRangeMode::from_str(""), None);
+    }
+
+    #[test]
+    fn test_gravity_range_mode_default() {
+        let mode = GravityRangeMode::default();
+        assert_eq!(mode, GravityRangeMode::Limited);
+    }
+
+    #[test]
+    fn test_gravity_config_defaults() {
+        let config = GravityConfig::default();
+        assert_eq!(config.range_mode, GravityRangeMode::Limited);
+        assert_eq!(config.influence_radius, 5000.0);
     }
 
     #[test]

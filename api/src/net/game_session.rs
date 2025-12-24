@@ -416,17 +416,17 @@ impl GameSession {
         let player_count = self.game_loop.state().players.len();
         let config = self.arena_config.read();
 
-        // Calculate target wells using same formula
-        let players_per_well = 50 / config.wells_per_50_players.max(1);
-        let target_wells = ((player_count + players_per_well - 1) / players_per_well)
-            .max(1)
-            .min(config.max_wells);
-
         // Use smooth scaling that only adds wells incrementally
         self.game_loop
             .state_mut()
             .arena
             .scale_for_simulation(player_count, &config);
+
+        // Calculate target wells based on arena area (must be done after scaling)
+        let escape_radius = self.game_loop.state().arena.escape_radius;
+        let arena_area = std::f32::consts::PI * escape_radius * escape_radius;
+        let target_wells = ((arena_area / config.wells_per_area).ceil() as usize)
+            .max(config.min_wells);
 
         // Check if we have significant excess wells (>50% over target)
         let excess = self.game_loop.state().arena.excess_wells(target_wells);

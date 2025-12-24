@@ -11,6 +11,7 @@ use uuid::Uuid;
 
 use crate::config::ArenaScalingConfig;
 use crate::game::constants::{arena, mass, spawn};
+use crate::game::spatial::WellSpatialGrid;
 use crate::util::vec2::Vec2;
 
 /// Unique player identifier
@@ -257,6 +258,9 @@ pub struct Arena {
     /// Gravity wells stored by ID for O(1) lookup/removal (scales to 1000s of wells)
     #[serde(default)]
     pub gravity_wells: HashMap<WellId, GravityWell>,
+    /// Spatial grid for efficient well lookups (used in limited gravity mode)
+    #[serde(skip)]
+    pub well_grid: WellSpatialGrid,
     /// Shrink delay counter - arena only shrinks after this reaches 0
     /// Prevents sudden shrinking when players leave temporarily
     #[serde(default)]
@@ -275,7 +279,12 @@ impl Default for Arena {
         use crate::game::constants::physics::CENTRAL_MASS;
         let central_well = GravityWell::new(CENTRAL_WELL_ID, Vec2::ZERO, CENTRAL_MASS, arena::CORE_RADIUS);
         let mut wells = HashMap::with_capacity(32);
-        wells.insert(CENTRAL_WELL_ID, central_well);
+        wells.insert(CENTRAL_WELL_ID, central_well.clone());
+
+        // Initialize well grid with the central well
+        let mut well_grid = WellSpatialGrid::default();
+        well_grid.insert(CENTRAL_WELL_ID, central_well.position);
+
         Self {
             core_radius: arena::CORE_RADIUS,
             inner_radius: arena::INNER_RADIUS,
@@ -288,6 +297,7 @@ impl Default for Arena {
             time_until_collapse: arena::COLLAPSE_INTERVAL,
             scale: 1.0,
             gravity_wells: wells,
+            well_grid,
             shrink_delay_ticks: 0,
             next_well_id: 1, // Central well uses ID 0
         }
@@ -325,13 +335,29 @@ impl Arena {
     }
 
     /// Remove a well by ID - O(1) with HashMap. Returns the removed well if found.
+    /// Also removes from spatial grid for gravity calculations.
     pub fn remove_well(&mut self, id: WellId) -> Option<GravityWell> {
-        self.gravity_wells.remove(&id)
+        if let Some(well) = self.gravity_wells.remove(&id) {
+            self.well_grid.remove(id, well.position);
+            Some(well)
+        } else {
+            None
+        }
     }
 
     /// Insert a well into the arena
+    /// Also inserts into spatial grid for gravity calculations.
     pub fn insert_well(&mut self, well: GravityWell) {
+        self.well_grid.insert(well.id, well.position);
         self.gravity_wells.insert(well.id, well);
+    }
+
+    /// Rebuild the well spatial grid from current gravity_wells
+    /// Call this when wells have been modified directly without using insert_well
+    pub fn rebuild_well_grid(&mut self) {
+        self.well_grid.rebuild(
+            self.gravity_wells.iter().map(|(&id, w)| (id, w.position))
+        );
     }
 
     /// Get all wells as a slice-like iterator (for gravity calculations)
@@ -422,13 +448,6 @@ impl Arena {
         let min_escape = config.min_escape_radius;
         let max_escape = config.min_escape_radius * config.max_escape_multiplier;
 
-        // Calculate target number of wells (not counting central supermassive)
-        let players_per_well = 50 / config.wells_per_50_players.max(1);
-        let target_wells = ((target_player_count + players_per_well - 1) / players_per_well)
-            .max(1)
-            .min(config.max_wells);
-        let current_orbital_wells = self.gravity_wells.len().saturating_sub(1);
-
         // Calculate target arena size based on player count
         let additional = (target_player_count.saturating_sub(config.player_threshold) as f32)
             * config.growth_per_player;
@@ -436,6 +455,13 @@ impl Arena {
             .min(max_escape)
             .max(min_escape);
         let target_outer = target_escape - 200.0;
+
+        // Calculate target number of wells based on arena area
+        // Area = PI * r^2, wells = area / wells_per_area
+        let arena_area = std::f32::consts::PI * target_escape * target_escape;
+        let target_wells = ((arena_area / config.wells_per_area).ceil() as usize)
+            .max(config.min_wells);
+        let current_orbital_wells = self.gravity_wells.len().saturating_sub(1);
 
         // Track previous radius for proportional well scaling
         let previous_escape = self.escape_radius;
@@ -490,6 +516,10 @@ impl Arena {
                 let direction = well.position.normalize();
                 well.position = direction * clamped_dist;
             }
+
+            // CRITICAL: Rebuild well grid after position changes
+            // Without this, gravity calculations use stale positions
+            self.rebuild_well_grid();
         }
 
         // Add new wells if needed (never remove existing ones during gameplay)
@@ -616,7 +646,8 @@ impl Arena {
 
             let well_id = self.alloc_well_id();
             let well = GravityWell::new(well_id, best_pos, well_mass, well_core);
-            self.gravity_wells.insert(well_id, well);
+            // Use insert_well to also update the spatial grid
+            self.insert_well(well);
         }
     }
 
@@ -1051,20 +1082,44 @@ mod tests {
     }
 
     #[test]
-    fn test_scale_for_simulation_well_cap() {
+    fn test_scale_for_simulation_area_based_wells() {
         use crate::config::ArenaScalingConfig;
         let config = ArenaScalingConfig::default();
         let mut arena = Arena::default();
 
-        // Even with huge player count, wells should be capped
+        // Small stable player count to test min_wells
         for _ in 0..100 {
-            arena.scale_for_simulation(10000, &config);
+            arena.scale_for_simulation(5, &config);
         }
 
-        // -1 because central supermassive doesn't count toward the cap
+        // -1 because central supermassive doesn't count toward the orbital wells
         let orbital_wells = arena.gravity_wells.len() - 1;
-        assert!(orbital_wells <= config.max_wells,
-            "Orbital wells should be capped at {}, got {}", config.max_wells, orbital_wells);
+
+        // Wells should be at least min_wells
+        assert!(orbital_wells >= config.min_wells,
+            "Should have at least {} wells, got {}", config.min_wells, orbital_wells);
+
+        // Now test with larger player count - wells should grow
+        let wells_before = orbital_wells;
+        for _ in 0..200 {
+            arena.scale_for_simulation(500, &config);
+        }
+
+        let wells_after = arena.gravity_wells.len() - 1;
+
+        // Wells should increase as arena area grows
+        // Note: wells only add, never remove during gameplay (scale_for_simulation)
+        assert!(wells_after >= wells_before,
+            "Wells should not decrease: before={}, after={}", wells_before, wells_after);
+
+        // Calculate expected wells based on final area
+        let arena_area = std::f32::consts::PI * arena.escape_radius * arena.escape_radius;
+        let expected_wells = ((arena_area / config.wells_per_area).ceil() as usize)
+            .max(config.min_wells);
+
+        // Wells should be reasonable (at least expected, since we only add during growth)
+        assert!(wells_after >= expected_wells,
+            "Should have at least {} wells for this area, got {}", expected_wells, wells_after);
     }
 
     #[test]

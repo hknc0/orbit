@@ -1,13 +1,17 @@
 //! Gravity system for orbital mechanics
 //!
 //! Applies gravitational forces from gravity wells to all entities.
+//! Supports two modes:
+//! - Limited: Uses spatial grid for O(nearby) well lookups (default)
+//! - Unlimited: All wells affect all entities with cache-optimized processing
 
 #![allow(dead_code)] // Physics utilities for orbital calculations
 
 use rayon::prelude::*;
 
+use crate::config::{GravityConfig, GravityRangeMode};
 use crate::game::constants::physics::{CENTRAL_MASS, G};
-use crate::game::state::{GameState, GravityWell};
+use crate::game::state::{GameState, GravityWell, WellId};
 use crate::util::vec2::Vec2;
 
 // ============================================================================
@@ -79,8 +83,249 @@ const WAVE_PROJECTILE_FORCE_RATIO: f32 = 0.5;
 /// Force multiplier for debris hit by gravity waves (scatter effect)
 const WAVE_DEBRIS_FORCE_RATIO: f32 = 0.7;
 
-/// Apply gravity from all gravity wells to all entities
-/// Uses rayon for parallel iteration over players, projectiles, and debris
+// ============================================================================
+// Gravity Mode Dispatch
+// ============================================================================
+
+/// Apply gravity from gravity wells to all entities
+/// Dispatches to limited or unlimited mode based on config
+pub fn update_central_with_config(state: &mut GameState, config: &GravityConfig, dt: f32) {
+    match config.range_mode {
+        GravityRangeMode::Limited => update_central_limited(state, config, dt),
+        GravityRangeMode::Unlimited => update_central_unlimited(state, dt),
+    }
+}
+
+/// Calculate gravity acceleration from nearby wells using spatial grid + cache
+/// Returns (gx, gy) acceleration components
+#[inline(always)]
+fn calculate_gravity_limited(
+    px: f32,
+    py: f32,
+    position: Vec2,
+    well_grid: &crate::game::spatial::WellSpatialGrid,
+    cache: &WellPositionCache,
+    id_to_index: &std::collections::HashMap<WellId, usize>,
+    influence_radius_sq: f32,
+) -> (f32, f32) {
+    let mut gx = 0.0f32;
+    let mut gy = 0.0f32;
+
+    for well_id in well_grid.query_nearby(position) {
+        if let Some(&idx) = id_to_index.get(&well_id) {
+            let dx = cache.positions_x[idx] - px;
+            let dy = cache.positions_y[idx] - py;
+            let dist_sq = dx * dx + dy * dy;
+
+            // Skip wells outside influence radius or too close
+            if dist_sq > cache.min_distance_sq[idx] && dist_sq <= influence_radius_sq {
+                let dist = dist_sq.sqrt();
+                let inv_dist = 1.0 / dist;
+                let accel = (GRAVITY_SCALE_FACTOR * cache.masses[idx] * inv_dist)
+                    .min(GRAVITY_MAX_ACCELERATION);
+                gx += dx * inv_dist * accel;
+                gy += dy * inv_dist * accel;
+            }
+        }
+    }
+
+    (gx, gy)
+}
+
+/// Limited mode: Use spatial grid to only consider nearby wells
+/// O(nearby_wells) per entity - efficient when wells are sparse relative to entities
+///
+/// PERFORMANCE: Uses WellPositionCache built once per tick instead of cloning HashMap.
+/// The cache provides O(1) indexed lookup for well data queried from the spatial grid.
+fn update_central_limited(state: &mut GameState, config: &GravityConfig, dt: f32) {
+    let influence_radius_sq = config.influence_radius * config.influence_radius;
+
+    // Build cache once per tick - struct-of-arrays for cache locality
+    // Also build ID-to-index map for O(1) lookups from spatial grid queries
+    let cache = WellPositionCache::from_wells(state.arena.gravity_wells.values());
+    let id_to_index: std::collections::HashMap<WellId, usize> = cache
+        .ids
+        .iter()
+        .enumerate()
+        .map(|(i, &id)| (id, i))
+        .collect();
+
+    // Apply gravity to players in parallel
+    state.players.par_values_mut().for_each(|player| {
+        if !player.alive {
+            return;
+        }
+        let (gx, gy) = calculate_gravity_limited(
+            player.position.x,
+            player.position.y,
+            player.position,
+            &state.arena.well_grid,
+            &cache,
+            &id_to_index,
+            influence_radius_sq,
+        );
+        player.velocity.x += gx * dt;
+        player.velocity.y += gy * dt;
+    });
+
+    // Apply gravity to projectiles in parallel
+    state.projectiles.par_iter_mut().for_each(|projectile| {
+        let (gx, gy) = calculate_gravity_limited(
+            projectile.position.x,
+            projectile.position.y,
+            projectile.position,
+            &state.arena.well_grid,
+            &cache,
+            &id_to_index,
+            influence_radius_sq,
+        );
+        projectile.velocity.x += gx * dt;
+        projectile.velocity.y += gy * dt;
+    });
+
+    // Apply gravity to debris in parallel
+    state.debris.par_iter_mut().for_each(|debris| {
+        let (gx, gy) = calculate_gravity_limited(
+            debris.position.x,
+            debris.position.y,
+            debris.position,
+            &state.arena.well_grid,
+            &cache,
+            &id_to_index,
+            influence_radius_sq,
+        );
+        debris.velocity.x += gx * dt;
+        debris.velocity.y += gy * dt;
+    });
+}
+
+// ============================================================================
+// Cache-Optimized Unlimited Mode
+// ============================================================================
+
+/// Cache-friendly well position data for batch gravity calculations
+/// Uses struct-of-arrays layout for better CPU cache utilization
+#[derive(Clone)]
+pub struct WellPositionCache {
+    /// Well IDs (for reference only)
+    pub ids: Vec<WellId>,
+    /// X coordinates of well positions
+    pub positions_x: Vec<f32>,
+    /// Y coordinates of well positions
+    pub positions_y: Vec<f32>,
+    /// Well masses
+    pub masses: Vec<f32>,
+    /// Pre-computed minimum distance squared (core_radius * MULTIPLIER)^2
+    pub min_distance_sq: Vec<f32>,
+}
+
+impl WellPositionCache {
+    /// Build cache from gravity wells
+    pub fn from_wells<'a>(wells: impl Iterator<Item = &'a GravityWell>) -> Self {
+        let mut cache = Self {
+            ids: Vec::new(),
+            positions_x: Vec::new(),
+            positions_y: Vec::new(),
+            masses: Vec::new(),
+            min_distance_sq: Vec::new(),
+        };
+
+        for well in wells {
+            cache.ids.push(well.id);
+            cache.positions_x.push(well.position.x);
+            cache.positions_y.push(well.position.y);
+            cache.masses.push(well.mass);
+            let min_dist = well.core_radius * WELL_MIN_DISTANCE_MULTIPLIER;
+            cache.min_distance_sq.push(min_dist * min_dist);
+        }
+
+        cache
+    }
+
+    /// Calculate total gravity at a position from all wells (cache-friendly)
+    #[inline]
+    pub fn calculate_gravity(&self, px: f32, py: f32) -> Vec2 {
+        let mut gx = 0.0f32;
+        let mut gy = 0.0f32;
+        let len = self.ids.len();
+
+        // Branchless inner loop for auto-vectorization
+        for i in 0..len {
+            let dx = self.positions_x[i] - px;
+            let dy = self.positions_y[i] - py;
+            let dist_sq = dx * dx + dy * dy;
+
+            // Skip if too close (branchless via conditional)
+            let min_sq = self.min_distance_sq[i];
+            if dist_sq > min_sq {
+                let dist = dist_sq.sqrt();
+                let inv_dist = 1.0 / dist;
+
+                // Normalized direction
+                let dir_x = dx * inv_dist;
+                let dir_y = dy * inv_dist;
+
+                // 1/r gravity with clamping
+                let accel = (GRAVITY_SCALE_FACTOR * self.masses[i] * inv_dist)
+                    .min(GRAVITY_MAX_ACCELERATION);
+
+                gx += dir_x * accel;
+                gy += dir_y * accel;
+            }
+        }
+
+        Vec2::new(gx, gy)
+    }
+
+    /// Number of wells in cache
+    #[inline]
+    pub fn len(&self) -> usize {
+        self.ids.len()
+    }
+
+    /// Check if cache is empty
+    #[inline]
+    pub fn is_empty(&self) -> bool {
+        self.ids.is_empty()
+    }
+}
+
+/// Unlimited mode: All wells affect all entities
+/// Uses cache-optimized batch processing for O(W) per entity
+fn update_central_unlimited(state: &mut GameState, dt: f32) {
+    // Build cache once per tick (struct-of-arrays for cache locality)
+    let cache = WellPositionCache::from_wells(state.arena.gravity_wells.values());
+
+    // Apply gravity to players in parallel
+    state.players.par_values_mut().for_each(|player| {
+        if !player.alive {
+            return;
+        }
+
+        let gravity = cache.calculate_gravity(player.position.x, player.position.y);
+        player.velocity += gravity * dt;
+    });
+
+    // Apply gravity to projectiles in parallel
+    state.projectiles.par_iter_mut().for_each(|projectile| {
+        let gravity = cache.calculate_gravity(projectile.position.x, projectile.position.y);
+        projectile.velocity += gravity * dt;
+    });
+
+    // Apply gravity to debris in parallel
+    state.debris.par_iter_mut().for_each(|debris| {
+        let gravity = cache.calculate_gravity(debris.position.x, debris.position.y);
+        debris.velocity += gravity * dt;
+    });
+}
+
+// ============================================================================
+// Legacy API (for backward compatibility)
+// ============================================================================
+
+/// Apply gravity from all gravity wells to all entities (legacy API)
+/// Uses unlimited mode for backward compatibility
+/// Prefer update_central_with_config for new code
 pub fn update_central(state: &mut GameState, dt: f32) {
     // Collect wells into Vec for parallel iteration (HashMap doesn't support parallel access)
     let wells: Vec<GravityWell> = state.arena.gravity_wells.values().cloned().collect();
@@ -272,7 +517,6 @@ pub fn is_in_orbit(position: Vec2, velocity: Vec2, tolerance: f32) -> bool {
 // === GRAVITY WAVE EXPLOSION SYSTEM ===
 
 use crate::config::GravityWaveConfig;
-use crate::game::state::WellId;
 
 /// Events generated by the gravity wave system
 #[derive(Debug)]
@@ -1066,5 +1310,117 @@ mod tests {
 
         // Well count should stay the same (timer reset instead of removal)
         assert_eq!(state.arena.gravity_wells.len(), initial_count);
+    }
+
+    // === WELL POSITION CACHE TESTS ===
+
+    #[test]
+    fn test_well_position_cache_from_wells() {
+        let well1 = GravityWell::new(1, Vec2::new(100.0, 200.0), 10000.0, 50.0);
+        let well2 = GravityWell::new(2, Vec2::new(300.0, 400.0), 8000.0, 40.0);
+        let wells = vec![well1, well2];
+
+        let cache = WellPositionCache::from_wells(wells.iter());
+
+        assert_eq!(cache.len(), 2);
+        assert!(!cache.is_empty());
+        assert_eq!(cache.positions_x[0], 100.0);
+        assert_eq!(cache.positions_y[0], 200.0);
+        assert_eq!(cache.masses[0], 10000.0);
+    }
+
+    #[test]
+    fn test_well_position_cache_gravity() {
+        let well1 = GravityWell::new(1, Vec2::new(200.0, 0.0), 10000.0, 20.0);
+        let wells = vec![well1.clone()];
+
+        let cache = WellPositionCache::from_wells(wells.iter());
+
+        // Calculate gravity toward the well
+        let gravity = cache.calculate_gravity(0.0, 0.0);
+
+        // Gravity from cache should match direct calculation
+        let expected = calculate_gravity_from_well(Vec2::ZERO, &well1);
+
+        assert!((gravity.x - expected.x).abs() < 0.001);
+        assert!((gravity.y - expected.y).abs() < 0.001);
+    }
+
+    #[test]
+    fn test_well_position_cache_multiple_wells() {
+        // Two wells on opposite sides should mostly cancel
+        let well1 = GravityWell::new(1, Vec2::new(-100.0, 0.0), 10000.0, 20.0);
+        let well2 = GravityWell::new(2, Vec2::new(100.0, 0.0), 10000.0, 20.0);
+        let wells = vec![well1, well2];
+
+        let cache = WellPositionCache::from_wells(wells.iter());
+        let gravity = cache.calculate_gravity(0.0, 0.0);
+
+        // Should mostly cancel out
+        assert!(gravity.x.abs() < 1.0);
+        assert!(gravity.y.abs() < 0.001);
+    }
+
+    #[test]
+    fn test_well_position_cache_min_distance() {
+        // Gravity should be zero when inside minimum distance
+        let well = GravityWell::new(1, Vec2::ZERO, 10000.0, 50.0);
+        let wells = vec![well];
+
+        let cache = WellPositionCache::from_wells(wells.iter());
+
+        // Inside 2x core radius (100) should be zero
+        let gravity = cache.calculate_gravity(50.0, 0.0);
+        assert_eq!(gravity.x, 0.0);
+        assert_eq!(gravity.y, 0.0);
+    }
+
+    #[test]
+    fn test_well_position_cache_empty() {
+        let wells: Vec<GravityWell> = vec![];
+        let cache = WellPositionCache::from_wells(wells.iter());
+
+        assert!(cache.is_empty());
+        assert_eq!(cache.len(), 0);
+
+        // Should return zero gravity
+        let gravity = cache.calculate_gravity(100.0, 100.0);
+        assert_eq!(gravity, Vec2::ZERO);
+    }
+
+    // === GRAVITY MODE TESTS ===
+
+    #[test]
+    fn test_update_central_with_config_unlimited() {
+        use crate::config::{GravityConfig, GravityRangeMode};
+
+        let (mut state, player_id) = create_test_state();
+        let config = GravityConfig {
+            range_mode: GravityRangeMode::Unlimited,
+            influence_radius: 5000.0,
+        };
+
+        let initial_velocity = state.get_player(player_id).unwrap().velocity;
+        update_central_with_config(&mut state, &config, DT);
+
+        // Velocity should have changed toward the wells
+        assert!(state.get_player(player_id).unwrap().velocity != initial_velocity);
+    }
+
+    #[test]
+    fn test_update_central_with_config_limited() {
+        use crate::config::{GravityConfig, GravityRangeMode};
+
+        let (mut state, player_id) = create_test_state();
+        let config = GravityConfig {
+            range_mode: GravityRangeMode::Limited,
+            influence_radius: 5000.0,
+        };
+
+        let initial_velocity = state.get_player(player_id).unwrap().velocity;
+        update_central_with_config(&mut state, &config, DT);
+
+        // Velocity should have changed (player is within influence radius of wells)
+        assert!(state.get_player(player_id).unwrap().velocity != initial_velocity);
     }
 }
