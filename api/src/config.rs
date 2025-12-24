@@ -668,7 +668,7 @@ impl Default for ArenaScalingConfig {
             player_threshold: 1,
             well_min_ratio: 0.20,
             well_max_ratio: 0.85,
-            wells_per_area: 2_000_000.0, // 1 well per 2M square units (fewer wells)
+            wells_per_area: 5_000_000.0, // 1 well per 5M square units (sparse wells)
             min_wells: 1, // Only 1 minimum for small arenas
             ring_inner_min: 0.25,
             ring_inner_max: 0.40,
@@ -1064,7 +1064,7 @@ mod tests {
         assert_eq!(config.shrink_lerp, 0.005);
         assert_eq!(config.shrink_delay_ticks, 150);
         assert_eq!(config.min_escape_radius, 800.0);
-        assert_eq!(config.wells_per_area, 2_000_000.0);
+        assert_eq!(config.wells_per_area, 5_000_000.0);
         assert_eq!(config.min_wells, 1);
         assert_eq!(config.ring_inner_min, 0.25);
         assert_eq!(config.ring_outer_max, 0.90);
