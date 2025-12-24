@@ -1,6 +1,6 @@
 use std::net::{IpAddr, Ipv4Addr};
 
-use crate::game::constants::gravity_waves;
+use crate::game::constants::{debris_spawning, gravity_waves};
 
 /// Server configuration
 #[derive(Debug, Clone)]
@@ -254,6 +254,231 @@ impl GravityWaveConfig {
     }
 }
 
+/// Debris spawning configuration
+/// Controls the random debris particles that players can collect for mass
+/// All values can be overridden via DEBRIS_* environment variables
+#[derive(Debug, Clone)]
+pub struct DebrisSpawnConfig {
+    /// Master switch - when false, no debris spawns
+    pub enabled: bool,
+    /// Maximum debris count in the game
+    pub max_count: usize,
+    /// Initial debris spawn counts per zone
+    pub initial_inner: usize,
+    pub initial_middle: usize,
+    pub initial_outer: usize,
+    /// Spawn rates per second per zone for each size
+    pub spawn_rate_inner_small: f32,
+    pub spawn_rate_middle_small: f32,
+    pub spawn_rate_outer_small: f32,
+    pub spawn_rate_inner_medium: f32,
+    pub spawn_rate_middle_medium: f32,
+    pub spawn_rate_outer_medium: f32,
+    pub spawn_rate_inner_large: f32,
+    pub spawn_rate_middle_large: f32,
+    pub spawn_rate_outer_large: f32,
+    /// Orbital velocity range for spawned debris
+    pub orbital_velocity_min: f32,
+    pub orbital_velocity_max: f32,
+    /// Debris lifetime in seconds before decay
+    pub lifetime: f32,
+}
+
+impl Default for DebrisSpawnConfig {
+    fn default() -> Self {
+        Self {
+            enabled: debris_spawning::ENABLED,
+            max_count: debris_spawning::MAX_COUNT,
+            initial_inner: debris_spawning::INITIAL_INNER,
+            initial_middle: debris_spawning::INITIAL_MIDDLE,
+            initial_outer: debris_spawning::INITIAL_OUTER,
+            spawn_rate_inner_small: debris_spawning::SPAWN_RATE_INNER_SMALL,
+            spawn_rate_middle_small: debris_spawning::SPAWN_RATE_MIDDLE_SMALL,
+            spawn_rate_outer_small: debris_spawning::SPAWN_RATE_OUTER_SMALL,
+            spawn_rate_inner_medium: debris_spawning::SPAWN_RATE_INNER_MEDIUM,
+            spawn_rate_middle_medium: debris_spawning::SPAWN_RATE_MIDDLE_MEDIUM,
+            spawn_rate_outer_medium: debris_spawning::SPAWN_RATE_OUTER_MEDIUM,
+            spawn_rate_inner_large: debris_spawning::SPAWN_RATE_INNER_LARGE,
+            spawn_rate_middle_large: debris_spawning::SPAWN_RATE_MIDDLE_LARGE,
+            spawn_rate_outer_large: debris_spawning::SPAWN_RATE_OUTER_LARGE,
+            orbital_velocity_min: debris_spawning::ORBITAL_VELOCITY_MIN,
+            orbital_velocity_max: debris_spawning::ORBITAL_VELOCITY_MAX,
+            lifetime: debris_spawning::LIFETIME,
+        }
+    }
+}
+
+impl DebrisSpawnConfig {
+    /// Load config from environment variables, falling back to defaults
+    pub fn from_env() -> Self {
+        let mut config = Self::default();
+
+        // Feature flag
+        if let Ok(val) = std::env::var("DEBRIS_SPAWN_ENABLED") {
+            config.enabled = val.to_lowercase() == "true" || val == "1";
+        }
+
+        // Max count
+        if let Ok(val) = std::env::var("DEBRIS_MAX_COUNT") {
+            if let Ok(parsed) = val.parse::<usize>() {
+                if parsed > 0 && parsed <= 1000 {
+                    config.max_count = parsed;
+                } else {
+                    tracing::warn!("DEBRIS_MAX_COUNT must be 1-1000, using default");
+                }
+            }
+        }
+
+        // Initial spawn counts
+        if let Ok(val) = std::env::var("DEBRIS_INITIAL_INNER") {
+            if let Ok(parsed) = val.parse::<usize>() {
+                config.initial_inner = parsed.min(500);
+            }
+        }
+        if let Ok(val) = std::env::var("DEBRIS_INITIAL_MIDDLE") {
+            if let Ok(parsed) = val.parse::<usize>() {
+                config.initial_middle = parsed.min(500);
+            }
+        }
+        if let Ok(val) = std::env::var("DEBRIS_INITIAL_OUTER") {
+            if let Ok(parsed) = val.parse::<usize>() {
+                config.initial_outer = parsed.min(500);
+            }
+        }
+
+        // Spawn rates - inner zone
+        if let Ok(val) = std::env::var("DEBRIS_SPAWN_RATE_INNER_SMALL") {
+            if let Ok(parsed) = val.parse::<f32>() {
+                if parsed >= 0.0 && parsed <= 20.0 {
+                    config.spawn_rate_inner_small = parsed;
+                }
+            }
+        }
+        if let Ok(val) = std::env::var("DEBRIS_SPAWN_RATE_INNER_MEDIUM") {
+            if let Ok(parsed) = val.parse::<f32>() {
+                if parsed >= 0.0 && parsed <= 10.0 {
+                    config.spawn_rate_inner_medium = parsed;
+                }
+            }
+        }
+        if let Ok(val) = std::env::var("DEBRIS_SPAWN_RATE_INNER_LARGE") {
+            if let Ok(parsed) = val.parse::<f32>() {
+                if parsed >= 0.0 && parsed <= 5.0 {
+                    config.spawn_rate_inner_large = parsed;
+                }
+            }
+        }
+
+        // Spawn rates - middle zone
+        if let Ok(val) = std::env::var("DEBRIS_SPAWN_RATE_MIDDLE_SMALL") {
+            if let Ok(parsed) = val.parse::<f32>() {
+                if parsed >= 0.0 && parsed <= 20.0 {
+                    config.spawn_rate_middle_small = parsed;
+                }
+            }
+        }
+        if let Ok(val) = std::env::var("DEBRIS_SPAWN_RATE_MIDDLE_MEDIUM") {
+            if let Ok(parsed) = val.parse::<f32>() {
+                if parsed >= 0.0 && parsed <= 10.0 {
+                    config.spawn_rate_middle_medium = parsed;
+                }
+            }
+        }
+        if let Ok(val) = std::env::var("DEBRIS_SPAWN_RATE_MIDDLE_LARGE") {
+            if let Ok(parsed) = val.parse::<f32>() {
+                if parsed >= 0.0 && parsed <= 5.0 {
+                    config.spawn_rate_middle_large = parsed;
+                }
+            }
+        }
+
+        // Spawn rates - outer zone
+        if let Ok(val) = std::env::var("DEBRIS_SPAWN_RATE_OUTER_SMALL") {
+            if let Ok(parsed) = val.parse::<f32>() {
+                if parsed >= 0.0 && parsed <= 20.0 {
+                    config.spawn_rate_outer_small = parsed;
+                }
+            }
+        }
+        if let Ok(val) = std::env::var("DEBRIS_SPAWN_RATE_OUTER_MEDIUM") {
+            if let Ok(parsed) = val.parse::<f32>() {
+                if parsed >= 0.0 && parsed <= 10.0 {
+                    config.spawn_rate_outer_medium = parsed;
+                }
+            }
+        }
+        if let Ok(val) = std::env::var("DEBRIS_SPAWN_RATE_OUTER_LARGE") {
+            if let Ok(parsed) = val.parse::<f32>() {
+                if parsed >= 0.0 && parsed <= 5.0 {
+                    config.spawn_rate_outer_large = parsed;
+                }
+            }
+        }
+
+        // Orbital velocity range
+        if let Ok(val) = std::env::var("DEBRIS_ORBITAL_VELOCITY_MIN") {
+            if let Ok(parsed) = val.parse::<f32>() {
+                if parsed >= 0.0 && parsed <= 100.0 {
+                    config.orbital_velocity_min = parsed;
+                }
+            }
+        }
+        if let Ok(val) = std::env::var("DEBRIS_ORBITAL_VELOCITY_MAX") {
+            if let Ok(parsed) = val.parse::<f32>() {
+                if parsed >= config.orbital_velocity_min && parsed <= 200.0 {
+                    config.orbital_velocity_max = parsed;
+                }
+            }
+        }
+
+        // Lifetime
+        if let Ok(val) = std::env::var("DEBRIS_LIFETIME") {
+            if let Ok(parsed) = val.parse::<f32>() {
+                if parsed >= 10.0 && parsed <= 300.0 {
+                    config.lifetime = parsed;
+                }
+            }
+        }
+
+        // Log config
+        if config.enabled {
+            tracing::info!(
+                "Debris spawning enabled: max_count={}, initial={}/{}/{}",
+                config.max_count,
+                config.initial_inner,
+                config.initial_middle,
+                config.initial_outer
+            );
+        } else {
+            tracing::info!("Debris spawning disabled");
+        }
+
+        config
+    }
+
+    /// Get total spawn rate for a zone (all sizes combined)
+    pub fn total_spawn_rate(&self, zone: &str) -> f32 {
+        match zone {
+            "inner" => {
+                self.spawn_rate_inner_small
+                    + self.spawn_rate_inner_medium
+                    + self.spawn_rate_inner_large
+            }
+            "middle" => {
+                self.spawn_rate_middle_small
+                    + self.spawn_rate_middle_medium
+                    + self.spawn_rate_middle_large
+            }
+            "outer" => {
+                self.spawn_rate_outer_small
+                    + self.spawn_rate_outer_medium
+                    + self.spawn_rate_outer_large
+            }
+            _ => 0.0,
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -289,5 +514,23 @@ mod tests {
         let delay = config.random_explosion_delay();
         assert!(delay >= config.min_explosion_delay);
         assert!(delay <= config.max_explosion_delay);
+    }
+
+    #[test]
+    fn test_debris_spawn_config_defaults() {
+        let config = DebrisSpawnConfig::default();
+        assert!(config.enabled);
+        assert_eq!(config.max_count, 200);
+        assert_eq!(config.initial_inner, 50);
+        assert_eq!(config.initial_middle, 40);
+        assert_eq!(config.initial_outer, 30);
+        assert_eq!(config.spawn_rate_inner_small, 2.0);
+    }
+
+    #[test]
+    fn test_debris_spawn_total_rate() {
+        let config = DebrisSpawnConfig::default();
+        let inner_total = config.total_spawn_rate("inner");
+        assert!((inner_total - 2.6).abs() < 0.01); // 2.0 + 0.5 + 0.1 = 2.6
     }
 }

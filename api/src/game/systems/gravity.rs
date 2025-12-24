@@ -256,7 +256,7 @@ pub fn update_explosions(state: &mut GameState, config: &GravityWaveConfig, dt: 
     events
 }
 
-/// Update active gravity waves - expand them and apply forces to players
+/// Update active gravity waves - expand them and apply forces to players, projectiles, and debris
 /// Config controls wave speed, thickness, and impulse force
 pub fn update_waves(state: &mut GameState, config: &GravityWaveConfig, dt: f32) {
     // Expand waves and apply forces
@@ -265,33 +265,54 @@ pub fn update_waves(state: &mut GameState, config: &GravityWaveConfig, dt: f32) 
         wave.radius += config.wave_speed * dt;
         wave.age += dt;
 
+        // Wave front boundaries
+        let wave_inner = (wave.radius - config.wave_front_thickness * 0.5).max(0.0);
+        let wave_outer = wave.radius + config.wave_front_thickness * 0.5;
+
         // Apply impulse to players in the wave front
         for player in state.players.values_mut() {
             if !player.alive || wave.hit_players.contains(&player.id) {
                 continue;
             }
 
-            // Check if player is in the wave front
             let delta = player.position - wave.position;
             let dist = delta.length();
 
-            // Wave front is between prev_radius and current radius (with thickness)
-            let wave_inner = (wave.radius - config.wave_front_thickness * 0.5).max(0.0);
-            let wave_outer = wave.radius + config.wave_front_thickness * 0.5;
-
             if dist >= wave_inner && dist <= wave_outer && dist > 1.0 {
-                // Player is in the wave front - apply impulse
                 let direction = delta.normalize();
-
-                // Force decays with distance from wave center
                 let distance_decay = 1.0 - (wave.radius / config.wave_max_radius).min(1.0);
                 let force = config.wave_base_impulse * wave.strength * distance_decay;
 
-                // Apply impulse (instant velocity change)
                 player.velocity += direction * force;
-
-                // Mark as hit so we don't apply again
                 wave.hit_players.push(player.id);
+            }
+        }
+
+        // Apply impulse to projectiles in the wave front (50% force - lighter)
+        for projectile in state.projectiles.iter_mut() {
+            let delta = projectile.position - wave.position;
+            let dist = delta.length();
+
+            if dist >= wave_inner && dist <= wave_outer && dist > 1.0 {
+                let direction = delta.normalize();
+                let distance_decay = 1.0 - (wave.radius / config.wave_max_radius).min(1.0);
+                let force = config.wave_base_impulse * wave.strength * distance_decay * 0.5;
+
+                projectile.velocity += direction * force;
+            }
+        }
+
+        // Apply impulse to debris in the wave front (70% force - scatter nicely)
+        for debris in state.debris.iter_mut() {
+            let delta = debris.position - wave.position;
+            let dist = delta.length();
+
+            if dist >= wave_inner && dist <= wave_outer && dist > 1.0 {
+                let direction = delta.normalize();
+                let distance_decay = 1.0 - (wave.radius / config.wave_max_radius).min(1.0);
+                let force = config.wave_base_impulse * wave.strength * distance_decay * 0.7;
+
+                debris.velocity += direction * force;
             }
         }
     }

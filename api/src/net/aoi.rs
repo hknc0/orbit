@@ -69,6 +69,7 @@ impl AOIManager {
         let effective_extended_radius = self.config.extended_radius + velocity_expansion;
         let mut filtered_players = Vec::with_capacity(self.config.max_entities);
         let mut filtered_projectiles = Vec::with_capacity(self.config.max_entities);
+        let mut filtered_debris = Vec::with_capacity(self.config.max_entities);
 
         // CRITICAL: First, find and add the local player BEFORE processing others
         // This ensures they're never excluded by the max_entities cap
@@ -150,6 +151,19 @@ impl AOIManager {
             }
         }
 
+        // Filter debris by distance (using velocity-expanded radius)
+        for debris in &full_snapshot.debris {
+            let distance = (debris.position - player_position).length();
+            if distance <= effective_extended_radius {
+                filtered_debris.push(debris.clone());
+            }
+
+            // Cap debris
+            if filtered_debris.len() >= self.config.max_entities {
+                break;
+            }
+        }
+
         GameSnapshot {
             tick: full_snapshot.tick,
             match_phase: full_snapshot.match_phase,
@@ -157,6 +171,7 @@ impl AOIManager {
             countdown: full_snapshot.countdown,
             players: filtered_players,
             projectiles: filtered_projectiles,
+            debris: filtered_debris,
             arena_collapse_phase: full_snapshot.arena_collapse_phase,
             arena_safe_radius: full_snapshot.arena_safe_radius,
             arena_scale: full_snapshot.arena_scale,
@@ -256,6 +271,7 @@ mod tests {
             countdown: 0.0,
             players,
             projectiles: vec![],
+            debris: vec![],
             arena_collapse_phase: 0,
             arena_safe_radius: 800.0,
             arena_scale: 1.0,
@@ -308,6 +324,7 @@ mod tests {
                 create_player_snapshot(Uuid::new_v4(), Vec2::new(500.0, 0.0), 2),  // Far away
             ],
             projectiles: vec![],
+            debris: vec![],
             arena_collapse_phase: 0,
             arena_safe_radius: 800.0,
             arena_scale: 1.0,
@@ -349,6 +366,7 @@ mod tests {
                 create_player_snapshot(Uuid::new_v4(), Vec2::new(5000.0, 5000.0), 50),  // Far, second place
             ],
             projectiles: vec![],
+            debris: vec![],
             arena_collapse_phase: 0,
             arena_safe_radius: 800.0,
             arena_scale: 1.0,
@@ -390,6 +408,7 @@ mod tests {
                 create_projectile_snapshot(2, Vec2::new(200.0, 0.0)),  // Within extended
                 create_projectile_snapshot(3, Vec2::new(1000.0, 0.0)), // Far
             ],
+            debris: vec![],
             arena_collapse_phase: 0,
             arena_safe_radius: 800.0,
             arena_scale: 1.0,

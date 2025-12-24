@@ -58,6 +58,7 @@ export interface GameSnapshot {
   countdown: number;
   players: PlayerSnapshot[];
   projectiles: ProjectileSnapshot[];
+  debris: DebrisSnapshot[]; // Collectible particles
   arenaCollapsePhase: number;
   arenaSafeRadius: number;
   arenaScale: number;
@@ -100,6 +101,13 @@ export interface ProjectileSnapshot {
   position: Vec2;
   velocity: Vec2;
   mass: number;
+}
+
+// Debris (collectible particle) state in snapshot
+export interface DebrisSnapshot {
+  id: number;
+  position: Vec2;
+  size: number; // 0=Small, 1=Medium, 2=Large
 }
 
 // Delta update (incremental changes)

@@ -3,7 +3,7 @@
 
 import { ARENA, MASS, PLAYER_COLORS } from '@/utils/Constants';
 import type { PlayerId, MatchPhase } from '@/net/Protocol';
-import type { InterpolatedState, InterpolatedPlayer, InterpolatedProjectile, InterpolatedGravityWell, InterpolatedNotablePlayer } from '@/net/StateSync';
+import type { InterpolatedState, InterpolatedPlayer, InterpolatedProjectile, InterpolatedDebris, InterpolatedGravityWell, InterpolatedNotablePlayer } from '@/net/StateSync';
 
 // Arena state
 export interface ArenaState {
@@ -264,6 +264,11 @@ export class World {
   // Get all projectiles
   getProjectiles(): Map<number, InterpolatedProjectile> {
     return this.state?.projectiles ?? new Map();
+  }
+
+  // Get all debris
+  getDebris(): Map<number, InterpolatedDebris> {
+    return this.state?.debris ?? new Map();
   }
 
   // Get match phase

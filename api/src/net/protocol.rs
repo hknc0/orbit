@@ -107,6 +107,9 @@ pub struct GameSnapshot {
     pub countdown: f32,
     pub players: Vec<PlayerSnapshot>,
     pub projectiles: Vec<ProjectileSnapshot>,
+    /// Debris (collectible particles) in view
+    #[serde(default)]
+    pub debris: Vec<DebrisSnapshot>,
     pub arena_collapse_phase: u8,
     pub arena_safe_radius: f32,
     /// Arena scale factor (1.0 = default size)
@@ -173,6 +176,11 @@ impl GameSnapshot {
                 .projectiles
                 .iter()
                 .map(ProjectileSnapshot::from_projectile)
+                .collect(),
+            debris: state
+                .debris
+                .iter()
+                .map(DebrisSnapshot::from_debris)
                 .collect(),
             arena_collapse_phase: state.arena.collapse_phase,
             arena_safe_radius: state.arena.current_safe_radius(),
@@ -294,6 +302,29 @@ impl ProjectileSnapshot {
             position: proj.position,
             velocity: proj.velocity,
             mass: proj.mass,
+        }
+    }
+}
+
+/// Debris (collectible particle) snapshot
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DebrisSnapshot {
+    pub id: u64,
+    pub position: Vec2,
+    pub size: u8, // 0=Small, 1=Medium, 2=Large
+}
+
+impl DebrisSnapshot {
+    pub fn from_debris(debris: &crate::game::state::Debris) -> Self {
+        use crate::game::state::DebrisSize;
+        Self {
+            id: debris.id,
+            position: debris.position,
+            size: match debris.size {
+                DebrisSize::Small => 0,
+                DebrisSize::Medium => 1,
+                DebrisSize::Large => 2,
+            },
         }
     }
 }
@@ -488,6 +519,11 @@ mod tests {
                 color_index: 2,
             }],
             projectiles: vec![],
+            debris: vec![DebrisSnapshot {
+                id: 1,
+                position: Vec2::new(50.0, 50.0),
+                size: 0,
+            }],
             arena_collapse_phase: 2,
             arena_safe_radius: 600.0,
             arena_scale: 1.0,
@@ -516,6 +552,7 @@ mod tests {
         assert_eq!(decoded.players[0].name, "TestPlayer");
         assert_eq!(decoded.gravity_wells.len(), 1);
         assert_eq!(decoded.density_grid.len(), 64);
+        assert_eq!(decoded.debris.len(), 1);
     }
 
     #[test]
@@ -806,6 +843,7 @@ mod encoding_tests {
                 color_index: 2,
             }],
             projectiles: vec![],
+            debris: vec![],
             arena_collapse_phase: 1,
             arena_safe_radius: 500.0,
             arena_scale: 1.0,

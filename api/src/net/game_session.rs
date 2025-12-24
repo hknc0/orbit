@@ -9,7 +9,7 @@ use tokio::sync::RwLock;
 use tokio::time::{interval, Instant};
 use tracing::{debug, info, warn};
 
-use crate::config::GravityWaveConfig;
+use crate::config::{DebrisSpawnConfig, GravityWaveConfig};
 use crate::game::constants::{ai, physics};
 use crate::game::game_loop::{GameLoop, GameLoopConfig, GameLoopEvent};
 use crate::game::performance::{PerformanceMonitor, PerformanceStatus};
@@ -141,11 +141,13 @@ impl GameSession {
             count
         };
 
-        // Load gravity wave config from environment
+        // Load configs from environment
         let gravity_wave_config = GravityWaveConfig::from_env();
+        let debris_spawn_config = DebrisSpawnConfig::from_env();
 
         let mut game_loop = GameLoop::new(GameLoopConfig {
             gravity_wave_config,
+            debris_spawn_config: debris_spawn_config.clone(),
             ..GameLoopConfig::default()
         });
 
@@ -166,6 +168,16 @@ impl GameSession {
 
         // Fill with bots initially
         game_loop.fill_with_bots(bot_count);
+
+        // Spawn initial debris (since we skip countdown phase)
+        if debris_spawn_config.enabled {
+            use crate::game::systems::debris;
+            debris::spawn_initial(game_loop.state_mut(), &debris_spawn_config);
+            info!(
+                "Spawned {} initial debris particles",
+                game_loop.state().debris.len()
+            );
+        }
 
         // Create AOI manager with view-based radii (not arena-based)
         // Camera zoom ranges 0.45x-1.0x, screen ~2000px diagonal = ~4500 world units at max zoom out

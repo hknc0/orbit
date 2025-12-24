@@ -44,14 +44,19 @@ pub fn update(state: &mut GameState, dt: f32) {
         projectile.lifetime -= dt;
     });
 
-    // Remove expired projectiles (sequential - modifies collection)
-    state.projectiles.retain(|p| p.lifetime > 0.0);
+    // Remove expired or out-of-bounds projectiles
+    let escape_radius = state.arena.escape_radius;
+    state.projectiles.retain(|p| p.lifetime > 0.0 && p.position.length() < escape_radius * 1.5);
 
-    // Update debris in parallel
+    // Update debris in parallel (includes lifetime decay)
     state.debris.par_iter_mut().for_each(|debris| {
         debris.velocity *= drag_factor;
         debris.position += debris.velocity * dt;
+        debris.lifetime -= dt;
     });
+
+    // Remove expired or out-of-bounds debris
+    state.debris.retain(|d| d.lifetime > 0.0 && d.position.length() < escape_radius * 1.2);
 }
 
 /// Apply thrust from player input

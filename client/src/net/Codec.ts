@@ -11,6 +11,7 @@ import type {
   GameEvent,
   PlayerSnapshot,
   ProjectileSnapshot,
+  DebrisSnapshot,
   PlayerDelta,
   ProjectileDelta,
   MatchPhase,
@@ -296,6 +297,12 @@ function readGameSnapshot(reader: BinaryReader): GameSnapshot {
     projectiles.push(readProjectileSnapshot(reader));
   }
 
+  const debrisCount = reader.readU64();
+  const debris: DebrisSnapshot[] = [];
+  for (let i = 0; i < debrisCount; i++) {
+    debris.push(readDebrisSnapshot(reader));
+  }
+
   const arenaCollapsePhase = reader.readU8();
   const arenaSafeRadius = reader.readF32();
   const arenaScale = reader.readF32();
@@ -343,6 +350,7 @@ function readGameSnapshot(reader: BinaryReader): GameSnapshot {
     countdown,
     players,
     projectiles,
+    debris,
     arenaCollapsePhase,
     arenaSafeRadius,
     arenaScale,
@@ -379,6 +387,14 @@ function readProjectileSnapshot(reader: BinaryReader): ProjectileSnapshot {
     position: reader.readVec2(),
     velocity: reader.readVec2(),
     mass: reader.readF32(),
+  };
+}
+
+function readDebrisSnapshot(reader: BinaryReader): DebrisSnapshot {
+  return {
+    id: reader.readU64(),
+    position: reader.readVec2(),
+    size: reader.readU8(),
   };
 }
 

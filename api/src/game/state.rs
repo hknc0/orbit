@@ -138,15 +138,18 @@ pub struct Debris {
     pub position: Vec2,
     pub velocity: Vec2,
     pub size: DebrisSize,
+    pub lifetime: f32,
 }
 
 impl Debris {
     pub fn new(id: EntityId, position: Vec2, velocity: Vec2, size: DebrisSize) -> Self {
+        use crate::game::constants::debris_spawning::LIFETIME;
         Self {
             id,
             position,
             velocity,
             size,
+            lifetime: LIFETIME,
         }
     }
 
@@ -609,6 +612,14 @@ impl GameState {
     pub fn add_debris(&mut self, position: Vec2, velocity: Vec2, size: DebrisSize) -> EntityId {
         let id = self.next_entity_id();
         self.debris.push(Debris::new(id, position, velocity, size));
+        id
+    }
+
+    pub fn add_debris_with_lifetime(&mut self, position: Vec2, velocity: Vec2, size: DebrisSize, lifetime: f32) -> EntityId {
+        let id = self.next_entity_id();
+        let mut debris = Debris::new(id, position, velocity, size);
+        debris.lifetime = lifetime;
+        self.debris.push(debris);
         id
     }
 }

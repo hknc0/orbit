@@ -2,11 +2,11 @@ use std::collections::HashMap;
 use std::time::{Duration, Instant};
 use uuid::Uuid;
 
-use crate::config::GravityWaveConfig;
+use crate::config::{DebrisSpawnConfig, GravityWaveConfig};
 use crate::game::constants::physics::{DT, TICK_RATE};
 use crate::game::match_result::{check_match_end, determine_result, MatchEndReason, MatchResult};
 use crate::game::state::{GameState, MatchPhase, PlayerId};
-use crate::game::systems::{ai, arena, collision, gravity, physics, projectile};
+use crate::game::systems::{ai, arena, collision, debris, gravity, physics, projectile};
 use crate::net::protocol::PlayerInput;
 use crate::util::vec2::Vec2;
 
@@ -52,6 +52,7 @@ pub struct GameLoopConfig {
     pub tick_rate: u32,
     pub enable_inter_entity_gravity: bool,
     pub gravity_wave_config: GravityWaveConfig,
+    pub debris_spawn_config: DebrisSpawnConfig,
 }
 
 impl Default for GameLoopConfig {
@@ -60,6 +61,7 @@ impl Default for GameLoopConfig {
             tick_rate: TICK_RATE,
             enable_inter_entity_gravity: false,
             gravity_wave_config: GravityWaveConfig::default(),
+            debris_spawn_config: DebrisSpawnConfig::default(),
         }
     }
 }
@@ -70,6 +72,7 @@ pub struct GameLoop {
     state: GameState,
     ai_manager: ai::AiManager,
     charge_manager: projectile::ChargeManager,
+    debris_spawn_state: debris::DebrisSpawnState,
     pending_inputs: HashMap<PlayerId, Vec<PlayerInput>>,
     last_tick_time: Instant,
     accumulator: Duration,
@@ -82,6 +85,7 @@ impl GameLoop {
             state: GameState::new(),
             ai_manager: ai::AiManager::new(),
             charge_manager: projectile::ChargeManager::new(),
+            debris_spawn_state: debris::DebrisSpawnState::new(),
             pending_inputs: HashMap::new(),
             last_tick_time: Instant::now(),
             accumulator: Duration::ZERO,
@@ -206,6 +210,14 @@ impl GameLoop {
             }
         }
 
+        // Spawn new debris over time (if enabled)
+        debris::update(
+            &mut self.state,
+            &self.config.debris_spawn_config,
+            &mut self.debris_spawn_state,
+            DT,
+        );
+
         // Update match time
         self.state.match_state.match_time += DT;
 
@@ -290,6 +302,10 @@ impl GameLoop {
                 if self.state.match_state.countdown_time <= 0.0 {
                     self.state.match_state.phase = MatchPhase::Playing;
                     self.state.match_state.match_time = 0.0;
+
+                    // Spawn initial debris when match starts
+                    debris::spawn_initial(&mut self.state, &self.config.debris_spawn_config);
+
                     return Some(GameLoopEvent::PhaseChange {
                         phase: MatchPhase::Playing,
                         countdown: 0.0,
@@ -390,6 +406,7 @@ impl GameLoop {
         self.state = GameState::new();
         self.ai_manager = ai::AiManager::new();
         self.charge_manager = projectile::ChargeManager::new();
+        self.debris_spawn_state = debris::DebrisSpawnState::new();
         self.pending_inputs.clear();
     }
 }

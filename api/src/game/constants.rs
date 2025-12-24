@@ -141,6 +141,64 @@ pub mod net {
     pub const INPUT_BUFFER_SIZE: usize = 10;
 }
 
+/// Debris (collectible particle) spawning constants
+/// Debris spawns randomly across zones for players to collect and gain mass
+/// All values can be overridden via DEBRIS_* environment variables
+pub mod debris_spawning {
+    /// Master switch to enable/disable debris spawning
+    /// When false, no debris will spawn (useful for testing)
+    /// ENV: DEBRIS_SPAWN_ENABLED (true/false)
+    pub const ENABLED: bool = true;
+
+    /// Maximum number of debris particles in the game at once
+    /// Higher values = more crowded, but impacts performance
+    /// ENV: DEBRIS_MAX_COUNT
+    pub const MAX_COUNT: usize = 200;
+
+    /// Initial debris count spawned at game start per zone
+    /// ENV: DEBRIS_INITIAL_INNER, DEBRIS_INITIAL_MIDDLE, DEBRIS_INITIAL_OUTER
+    pub const INITIAL_INNER: usize = 50;
+    pub const INITIAL_MIDDLE: usize = 40;
+    pub const INITIAL_OUTER: usize = 30;
+
+    /// Spawn rates per second per zone for small debris
+    /// Inner zone (near gravity wells) has highest spawn rate
+    /// ENV: DEBRIS_SPAWN_RATE_INNER_SMALL, etc.
+    pub const SPAWN_RATE_INNER_SMALL: f32 = 2.0;
+    pub const SPAWN_RATE_MIDDLE_SMALL: f32 = 1.0;
+    pub const SPAWN_RATE_OUTER_SMALL: f32 = 0.5;
+
+    /// Spawn rates per second per zone for medium debris
+    /// Medium debris is rarer but worth more mass
+    /// ENV: DEBRIS_SPAWN_RATE_INNER_MEDIUM, etc.
+    pub const SPAWN_RATE_INNER_MEDIUM: f32 = 0.5;
+    pub const SPAWN_RATE_MIDDLE_MEDIUM: f32 = 0.3;
+    pub const SPAWN_RATE_OUTER_MEDIUM: f32 = 0.1;
+
+    /// Spawn rates per second per zone for large debris
+    /// Large debris is rare but very valuable
+    /// ENV: DEBRIS_SPAWN_RATE_INNER_LARGE, etc.
+    pub const SPAWN_RATE_INNER_LARGE: f32 = 0.1;
+    pub const SPAWN_RATE_MIDDLE_LARGE: f32 = 0.05;
+    pub const SPAWN_RATE_OUTER_LARGE: f32 = 0.02;
+
+    /// Size distribution weights when spawning (for random selection)
+    /// Higher weight = more likely to spawn that size
+    pub const WEIGHT_SMALL: f32 = 0.7;
+    pub const WEIGHT_MEDIUM: f32 = 0.25;
+    pub const WEIGHT_LARGE: f32 = 0.05;
+
+    /// Initial orbital velocity range for spawned debris (units/second)
+    /// Debris gets a small orbital velocity to make it orbit naturally
+    pub const ORBITAL_VELOCITY_MIN: f32 = 10.0;
+    pub const ORBITAL_VELOCITY_MAX: f32 = 30.0;
+
+    /// Debris lifetime in seconds before it decays and disappears
+    /// Keeps the arena fresh - old uncollected debris fades away
+    /// ENV: DEBRIS_LIFETIME
+    pub const LIFETIME: f32 = 90.0;
+}
+
 /// Gravity wave explosion constants
 /// Wells randomly explode creating expanding shockwaves that push players outward
 /// All values can be overridden via GRAVITY_WAVE_* environment variables

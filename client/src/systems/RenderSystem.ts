@@ -219,6 +219,7 @@ export class RenderSystem {
     this.renderDeathEffects(world);
     this.renderCollisionEffects(world);
     this.renderPlayerTrails(world);
+    this.renderDebris(world);
     this.renderProjectiles(world);
     this.renderPlayers(world, state.input?.isBoosting ?? false);
 
@@ -511,6 +512,38 @@ export class RenderSystem {
       this.ctx.fillStyle = centerGlow;
       this.ctx.beginPath();
       this.ctx.arc(x, y, coreRadius * 0.4, 0, Math.PI * 2);
+      this.ctx.fill();
+    }
+  }
+
+  // Debris sizes: Small=3, Medium=5, Large=8
+  private static readonly DEBRIS_RADIUS = [3, 5, 8];
+  // Debris colors: greenish for small, yellowish for medium, orange for large
+  private static readonly DEBRIS_COLORS = [
+    'rgba(100, 200, 100, 0.8)',  // Small - dim green
+    'rgba(200, 200, 100, 0.9)',  // Medium - yellow
+    'rgba(255, 180, 80, 1.0)',   // Large - bright orange
+  ];
+
+  private renderDebris(world: World): void {
+    const debris = world.getDebris();
+    if (debris.size === 0) return;
+
+    // Batch draw by size for efficiency
+    for (let size = 0; size < 3; size++) {
+      const radius = RenderSystem.DEBRIS_RADIUS[size];
+      const color = RenderSystem.DEBRIS_COLORS[size];
+
+      this.ctx.fillStyle = color;
+      this.ctx.beginPath();
+
+      for (const d of debris.values()) {
+        if (d.size !== size) continue;
+        // Draw debris as small filled circle
+        this.ctx.moveTo(d.position.x + radius, d.position.y);
+        this.ctx.arc(d.position.x, d.position.y, radius, 0, Math.PI * 2);
+      }
+
       this.ctx.fill();
     }
   }

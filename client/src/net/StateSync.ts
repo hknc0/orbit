@@ -26,6 +26,7 @@ export interface InterpolatedState {
   countdown: number;
   players: Map<PlayerId, InterpolatedPlayer>;
   projectiles: Map<number, InterpolatedProjectile>;
+  debris: Map<number, InterpolatedDebris>; // Collectible particles
   arenaCollapsePhase: number;
   arenaSafeRadius: number;
   arenaScale: number;
@@ -65,6 +66,12 @@ export interface InterpolatedProjectile {
   position: Vec2;
   velocity: Vec2;
   mass: number;
+}
+
+export interface InterpolatedDebris {
+  id: number;
+  position: Vec2;
+  size: number; // 0=Small, 1=Medium, 2=Large
 }
 
 interface SnapshotEntry {
@@ -141,6 +148,7 @@ export class StateSync {
       countdown: baseEntry.snapshot.countdown,
       players: [...baseEntry.snapshot.players],
       projectiles: [...baseEntry.snapshot.projectiles],
+      debris: [...baseEntry.snapshot.debris],
       arenaCollapsePhase: baseEntry.snapshot.arenaCollapsePhase,
       arenaSafeRadius: baseEntry.snapshot.arenaSafeRadius,
       arenaScale: baseEntry.snapshot.arenaScale,
@@ -309,6 +317,15 @@ export class StateSync {
       });
     }
 
+    const debris = new Map<number, InterpolatedDebris>();
+    for (const d of snapshot.debris) {
+      debris.set(d.id, {
+        id: d.id,
+        position: d.position.clone(),
+        size: d.size,
+      });
+    }
+
     return {
       tick: snapshot.tick,
       matchPhase: snapshot.matchPhase,
@@ -316,6 +333,7 @@ export class StateSync {
       countdown: snapshot.countdown,
       players,
       projectiles,
+      debris,
       arenaCollapsePhase: snapshot.arenaCollapsePhase,
       arenaSafeRadius: snapshot.arenaSafeRadius,
       arenaScale: snapshot.arenaScale,
@@ -409,6 +427,26 @@ export class StateSync {
       }
     }
 
+    // Interpolate debris (no velocity, just position)
+    const debris = new Map<number, InterpolatedDebris>();
+    for (const afterDebris of after.debris) {
+      const beforeDebris = before.debris.find((d) => d.id === afterDebris.id);
+
+      if (beforeDebris) {
+        debris.set(afterDebris.id, {
+          id: afterDebris.id,
+          position: vec2Lerp(beforeDebris.position, afterDebris.position, t),
+          size: afterDebris.size,
+        });
+      } else {
+        debris.set(afterDebris.id, {
+          id: afterDebris.id,
+          position: afterDebris.position.clone(),
+          size: afterDebris.size,
+        });
+      }
+    }
+
     // Interpolate gravity wells
     const gravityWells: InterpolatedGravityWell[] = after.gravityWells.map((afterWell, i) => {
       const beforeWell = before.gravityWells[i];
@@ -433,6 +471,7 @@ export class StateSync {
       countdown: before.countdown + (after.countdown - before.countdown) * t,
       players,
       projectiles,
+      debris,
       arenaCollapsePhase: after.arenaCollapsePhase,
       arenaSafeRadius:
         before.arenaSafeRadius + (after.arenaSafeRadius - before.arenaSafeRadius) * t,
