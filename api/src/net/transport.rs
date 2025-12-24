@@ -7,24 +7,42 @@ use std::net::SocketAddr;
 use std::sync::Arc;
 use tokio::sync::RwLock;
 
-use crate::anticheat::sanctions::BanList;
 use crate::config::ServerConfig;
 use crate::game::state::PlayerId;
-use crate::lobby::manager::LobbyManager;
 use crate::metrics::Metrics;
 use crate::net::dos_protection::DoSProtection;
 use crate::net::game_session::{start_game_loop, send_to_player, GameSession};
-use crate::net::protocol::{decode, encode, ClientMessage, ServerMessage};
+use crate::net::protocol::{decode, ClientMessage, ServerMessage};
 use crate::net::tls::TlsConfig;
+
+// Feature-gated imports
+#[cfg(feature = "anticheat")]
+use crate::anticheat::sanctions::BanList;
+#[cfg(feature = "lobby")]
+use crate::lobby::manager::LobbyManager;
+
+// Type aliases for feature-gated types
+#[cfg(feature = "lobby")]
+type LobbyManagerType = LobbyManager;
+#[cfg(not(feature = "lobby"))]
+type LobbyManagerType = ();
+
+#[cfg(feature = "anticheat")]
+type BanListType = BanList;
+#[cfg(not(feature = "anticheat"))]
+type BanListType = ();
 
 /// WebTransport server
 pub struct WebTransportServer {
     config: ServerConfig,
     tls_config: TlsConfig,
-    lobby_manager: Arc<RwLock<LobbyManager>>,
-    ban_list: Arc<RwLock<BanList>>,
+    #[allow(dead_code)]
+    lobby_manager: Arc<RwLock<LobbyManagerType>>,
+    #[allow(dead_code)]
+    ban_list: Arc<RwLock<BanListType>>,
     dos_protection: Arc<RwLock<DoSProtection>>,
     game_session: Arc<RwLock<GameSession>>,
+    #[allow(dead_code)]
     metrics: Arc<Metrics>,
 }
 
@@ -32,8 +50,8 @@ impl WebTransportServer {
     /// Create a new WebTransport server
     pub async fn new(
         config: ServerConfig,
-        lobby_manager: Arc<RwLock<LobbyManager>>,
-        ban_list: Arc<RwLock<BanList>>,
+        lobby_manager: Arc<RwLock<LobbyManagerType>>,
+        ban_list: Arc<RwLock<BanListType>>,
         metrics: Arc<Metrics>,
     ) -> anyhow::Result<Self> {
         let tls_config = TlsConfig::generate_self_signed().await?;
@@ -105,19 +123,38 @@ impl WebTransportServer {
 /// Handle a single WebTransport connection
 async fn handle_connection(
     incoming: wtransport::endpoint::IncomingSession,
-    _lobby_manager: Arc<RwLock<LobbyManager>>,
-    _ban_list: Arc<RwLock<BanList>>,
+    _lobby_manager: Arc<RwLock<LobbyManagerType>>,
+    ban_list: Arc<RwLock<BanListType>>,
     dos_protection: Arc<RwLock<DoSProtection>>,
     game_session: Arc<RwLock<GameSession>>,
 ) -> anyhow::Result<()> {
-    use tokio::io::{AsyncReadExt, AsyncWriteExt};
     use std::net::{IpAddr, Ipv4Addr};
+    #[cfg(feature = "dos_ratelimit")]
+    use crate::net::dos_protection::DoSError;
 
     let session_request = incoming.await?;
 
     // Use a placeholder IP - WebTransport doesn't easily expose peer IP
     // In production, this should be extracted from a proxy header or QUIC connection
     let client_ip = IpAddr::V4(Ipv4Addr::new(0, 0, 0, 0));
+
+    // Check ban list before accepting connection (feature-gated)
+    #[cfg(feature = "anticheat")]
+    {
+        let bans = ban_list.read().await;
+        if let Some(ban) = bans.is_banned(None, Some(client_ip)) {
+            let remaining = ban.remaining()
+                .map(|d| format!("{:.0}s", d.as_secs_f32()))
+                .unwrap_or_else(|| "permanent".to_string());
+            tracing::warn!(
+                "Connection rejected - IP banned: {:?}, remaining: {}, reason: {}",
+                client_ip, remaining, ban.reason
+            );
+            return Err(anyhow::anyhow!("Connection banned: {}", ban.reason));
+        }
+    }
+    #[cfg(not(feature = "anticheat"))]
+    let _ = &ban_list; // Suppress unused warning
 
     // Check DoS protection before accepting connection
     let connection_id = {
@@ -152,6 +189,10 @@ async fn handle_connection(
     loop {
         let player_id_clone = player_id.clone();
         let game_session_clone = game_session.clone();
+        #[cfg(feature = "dos_ratelimit")]
+        let dos_clone = dos_protection.clone();
+        #[cfg(feature = "dos_ratelimit")]
+        let conn_id = connection_id;
 
         tokio::select! {
             // Handle bidirectional streams
@@ -165,6 +206,8 @@ async fn handle_connection(
 
                         let player_id = player_id_clone.clone();
                         let game_session = game_session_clone.clone();
+                        #[cfg(feature = "dos_ratelimit")]
+                        let dos_for_stream = dos_clone.clone();
 
                         // Spawn task to handle this stream
                         tokio::spawn(async move {
@@ -199,6 +242,31 @@ async fn handle_connection(
                                     Err(e) => {
                                         tracing::debug!("Stream read error: {}", e);
                                         break;
+                                    }
+                                }
+
+                                // Rate limit check (feature-gated)
+                                #[cfg(feature = "dos_ratelimit")]
+                                {
+                                    let mut dos = dos_for_stream.write().await;
+                                    match dos.check_message(conn_id, msg_len) {
+                                        Ok(()) => {}
+                                        Err(DoSError::RateLimitExceeded) => {
+                                            tracing::warn!("Rate limit exceeded for conn_id: {}", conn_id);
+                                            continue; // Drop message but keep connection
+                                        }
+                                        Err(DoSError::MessageTooLarge(size)) => {
+                                            tracing::warn!("Message too large: {} bytes, conn_id: {}", size, conn_id);
+                                            continue;
+                                        }
+                                        Err(DoSError::ViolationLimitExceeded) => {
+                                            tracing::warn!("Too many violations, disconnecting conn_id: {}", conn_id);
+                                            break; // Disconnect client
+                                        }
+                                        Err(e) => {
+                                            tracing::warn!("DoS check failed: {:?}", e);
+                                            continue;
+                                        }
                                     }
                                 }
 
@@ -379,6 +447,24 @@ async fn handle_connection(
             datagram = connection.receive_datagram() => {
                 match datagram {
                     Ok(data) => {
+                        // Rate limit check for datagrams (feature-gated)
+                        // PERFORMANCE: Only check every 10th datagram to avoid lock contention
+                        // Datagrams are already size-limited and from established connections
+                        #[cfg(feature = "dos_ratelimit")]
+                        {
+                            static DATAGRAM_COUNTER: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+                            let count = DATAGRAM_COUNTER.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+
+                            // Only check every 10th datagram (reduces lock contention by 90%)
+                            if count % 10 == 0 {
+                                let mut dos = dos_clone.write().await;
+                                if let Err(e) = dos.check_message(conn_id, data.len()) {
+                                    tracing::debug!("Datagram rate limited: {:?}", e);
+                                    continue;
+                                }
+                            }
+                        }
+
                         // Try to decode as PlayerInput
                         match decode::<ClientMessage>(&data) {
                             Ok(ClientMessage::Input(input)) => {
