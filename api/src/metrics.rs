@@ -3,14 +3,14 @@
 //! Exposes game server metrics in Prometheus format for Grafana dashboards.
 //! Default endpoint: http://localhost:9090/metrics
 
-use std::collections::{HashMap, VecDeque};
+use std::collections::VecDeque;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 use parking_lot::RwLock;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpListener;
-use tracing::{info, warn, debug};
+use tracing::{info, debug};
 
 /// Metrics registry for the game server
 #[derive(Debug)]
@@ -60,6 +60,25 @@ pub struct Metrics {
     pub simulation_target_bots: AtomicU64,  // Current target bot count
     pub simulation_cycle_progress: AtomicU64, // Progress through cycle (0-100)
 
+    // Extended metrics (feature-gated: metrics_extended)
+    // AOI (Area of Interest) filtering stats
+    pub aoi_original_players: AtomicU64,     // Players before AOI filtering
+    pub aoi_filtered_players: AtomicU64,     // Players after AOI filtering
+    pub aoi_reduction_percent: AtomicU64,    // Bandwidth reduction percentage (0-100)
+    pub aoi_original_projectiles: AtomicU64, // Projectiles before filtering
+    pub aoi_filtered_projectiles: AtomicU64, // Projectiles after filtering
+
+    // Anti-cheat metrics (feature-gated)
+    pub anticheat_inputs_validated: AtomicU64,   // Total inputs validated
+    pub anticheat_inputs_rejected: AtomicU64,    // Inputs rejected (invalid)
+    pub anticheat_inputs_sanitized: AtomicU64,   // Inputs sanitized (fixed)
+    pub anticheat_sequence_violations: AtomicU64, // Sequence validation failures
+
+    // DoS protection metrics
+    pub dos_connections_rejected: AtomicU64,   // Connections rejected by DoS
+    pub dos_messages_rate_limited: AtomicU64,  // Messages dropped by rate limit
+    pub dos_active_bans: AtomicU64,            // Currently banned IPs
+
     // Rolling tick times for percentile calculation (VecDeque for O(1) pop_front)
     tick_history: RwLock<VecDeque<u64>>,
 }
@@ -94,6 +113,21 @@ impl Metrics {
             simulation_enabled: AtomicU64::new(0),
             simulation_target_bots: AtomicU64::new(0),
             simulation_cycle_progress: AtomicU64::new(0),
+            // Extended metrics
+            aoi_original_players: AtomicU64::new(0),
+            aoi_filtered_players: AtomicU64::new(0),
+            aoi_reduction_percent: AtomicU64::new(0),
+            aoi_original_projectiles: AtomicU64::new(0),
+            aoi_filtered_projectiles: AtomicU64::new(0),
+            // Anti-cheat metrics
+            anticheat_inputs_validated: AtomicU64::new(0),
+            anticheat_inputs_rejected: AtomicU64::new(0),
+            anticheat_inputs_sanitized: AtomicU64::new(0),
+            anticheat_sequence_violations: AtomicU64::new(0),
+            // DoS metrics
+            dos_connections_rejected: AtomicU64::new(0),
+            dos_messages_rate_limited: AtomicU64::new(0),
+            dos_active_bans: AtomicU64::new(0),
             tick_history: RwLock::new(VecDeque::with_capacity(1000)),
         }
     }
@@ -226,6 +260,40 @@ impl Metrics {
             self.simulation_target_bots.load(Ordering::Relaxed));
         metric!("orbit_royale_simulation_cycle_progress", "Simulation cycle progress (0-100%)", "gauge",
             self.simulation_cycle_progress.load(Ordering::Relaxed));
+
+        // Extended metrics (feature-gated)
+        #[cfg(feature = "metrics_extended")]
+        {
+            // AOI filtering metrics
+            metric!("orbit_royale_aoi_original_players", "Players before AOI filtering", "gauge",
+                self.aoi_original_players.load(Ordering::Relaxed));
+            metric!("orbit_royale_aoi_filtered_players", "Players after AOI filtering", "gauge",
+                self.aoi_filtered_players.load(Ordering::Relaxed));
+            metric!("orbit_royale_aoi_reduction_percent", "AOI bandwidth reduction percentage", "gauge",
+                self.aoi_reduction_percent.load(Ordering::Relaxed));
+            metric!("orbit_royale_aoi_original_projectiles", "Projectiles before filtering", "gauge",
+                self.aoi_original_projectiles.load(Ordering::Relaxed));
+            metric!("orbit_royale_aoi_filtered_projectiles", "Projectiles after filtering", "gauge",
+                self.aoi_filtered_projectiles.load(Ordering::Relaxed));
+
+            // Anti-cheat metrics
+            metric!("orbit_royale_anticheat_inputs_validated", "Total inputs validated", "counter",
+                self.anticheat_inputs_validated.load(Ordering::Relaxed));
+            metric!("orbit_royale_anticheat_inputs_rejected", "Inputs rejected as invalid", "counter",
+                self.anticheat_inputs_rejected.load(Ordering::Relaxed));
+            metric!("orbit_royale_anticheat_inputs_sanitized", "Inputs sanitized", "counter",
+                self.anticheat_inputs_sanitized.load(Ordering::Relaxed));
+            metric!("orbit_royale_anticheat_sequence_violations", "Sequence validation failures", "counter",
+                self.anticheat_sequence_violations.load(Ordering::Relaxed));
+
+            // DoS protection metrics
+            metric!("orbit_royale_dos_connections_rejected", "Connections rejected by DoS protection", "counter",
+                self.dos_connections_rejected.load(Ordering::Relaxed));
+            metric!("orbit_royale_dos_messages_rate_limited", "Messages dropped by rate limit", "counter",
+                self.dos_messages_rate_limited.load(Ordering::Relaxed));
+            metric!("orbit_royale_dos_active_bans", "Currently active IP bans", "gauge",
+                self.dos_active_bans.load(Ordering::Relaxed));
+        }
 
         output
     }

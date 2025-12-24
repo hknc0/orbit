@@ -4,7 +4,7 @@
 //! dramatically reducing bandwidth usage at scale.
 
 use crate::game::state::PlayerId;
-use crate::net::protocol::{GameSnapshot, PlayerSnapshot, ProjectileSnapshot, GravityWellSnapshot};
+use crate::net::protocol::{GameSnapshot, PlayerSnapshot};
 use crate::util::vec2::Vec2;
 
 /// AOI configuration
@@ -225,6 +225,7 @@ pub struct AOIStats {
 mod tests {
     use super::*;
     use crate::game::state::MatchPhase;
+    use crate::net::protocol::{GravityWellSnapshot, ProjectileSnapshot};
     use uuid::Uuid;
 
     fn create_player_snapshot(id: Uuid, position: Vec2, kills: u32) -> PlayerSnapshot {
