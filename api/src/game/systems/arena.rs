@@ -84,6 +84,11 @@ fn check_player_boundaries(state: &mut GameState, dt: f32) -> Vec<ArenaEvent> {
         }
 
         // Check outside safe zone (mass drain) - distance from arena center
+        // Skip mass drain for spawn-protected players (they're invulnerable)
+        if player.spawn_protection > 0.0 {
+            continue;
+        }
+
         let distance_from_center = player.position.length();
         if distance_from_center > safe_radius {
             let excess = distance_from_center - safe_radius;
@@ -564,6 +569,106 @@ mod tests {
     }
 
     #[test]
+    fn test_spawn_protection_prevents_arena_mass_drain() {
+        use crate::game::constants::mass::STARTING;
+        use crate::game::constants::physics::DT;
+
+        let (mut state, _) = create_test_state();
+
+        // Create a player outside the safe zone but with spawn protection
+        let player_id = uuid::Uuid::new_v4();
+        let player = crate::game::state::Player {
+            id: player_id,
+            name: "Test".to_string(),
+            position: Vec2::new(10000.0, 0.0), // Way outside safe zone
+            velocity: Vec2::ZERO,
+            rotation: 0.0,
+            mass: STARTING,
+            alive: true,
+            kills: 0,
+            deaths: 0,
+            spawn_protection: 3.0, // Has spawn protection
+            is_bot: false,
+            color_index: 0,
+            respawn_timer: 0.0,
+        };
+        state.add_player(player);
+
+        let initial_mass = state.get_player(player_id).unwrap().mass;
+
+        // Run arena update
+        let events = update(&mut state, DT);
+
+        // Mass should NOT have drained due to spawn protection
+        let final_mass = state.get_player(player_id).unwrap().mass;
+        assert_eq!(
+            final_mass, initial_mass,
+            "Mass should not drain during spawn protection: {} -> {}",
+            initial_mass, final_mass
+        );
+
+        // Should not generate OutsideArena event for spawn-protected player
+        let outside_events: Vec<_> = events
+            .iter()
+            .filter(|e| matches!(e, ArenaEvent::PlayerOutsideArena { .. }))
+            .collect();
+        assert!(
+            outside_events.is_empty(),
+            "Should not generate OutsideArena event for spawn-protected player"
+        );
+    }
+
+    #[test]
+    fn test_arena_mass_drain_without_spawn_protection() {
+        use crate::game::constants::mass::STARTING;
+        use crate::game::constants::physics::DT;
+
+        let (mut state, _) = create_test_state();
+
+        // Create a player outside the safe zone WITHOUT spawn protection
+        let player_id = uuid::Uuid::new_v4();
+        let player = crate::game::state::Player {
+            id: player_id,
+            name: "Test".to_string(),
+            position: Vec2::new(10000.0, 0.0), // Way outside safe zone
+            velocity: Vec2::ZERO,
+            rotation: 0.0,
+            mass: STARTING,
+            alive: true,
+            kills: 0,
+            deaths: 0,
+            spawn_protection: 0.0, // NO spawn protection
+            is_bot: false,
+            color_index: 0,
+            respawn_timer: 0.0,
+        };
+        state.add_player(player);
+
+        let initial_mass = state.get_player(player_id).unwrap().mass;
+
+        // Run arena update
+        let events = update(&mut state, DT);
+
+        // Mass SHOULD have drained
+        let final_mass = state.get_player(player_id).unwrap().mass;
+        assert!(
+            final_mass < initial_mass,
+            "Mass should drain when outside safe zone: {} -> {}",
+            initial_mass, final_mass
+        );
+
+        // Should generate OutsideArena event
+        let outside_events: Vec<_> = events
+            .iter()
+            .filter(|e| matches!(e, ArenaEvent::PlayerOutsideArena { .. }))
+            .collect();
+        assert!(
+            !outside_events.is_empty(),
+            "Should generate OutsideArena event for unprotected player outside safe zone"
+        );
+    }
+
+    #[test]
     fn test_current_safe_radius() {
         let arena = Arena::default();
         let safe_radius = arena.current_safe_radius();
@@ -650,6 +755,37 @@ mod tests {
                 "Spawn at {:?} is inside orbital death zone",
                 pos
             );
+        }
+    }
+
+    #[test]
+    fn test_spawn_positions_within_safe_radius() {
+        use crate::game::state::Arena;
+
+        // Simulate game with different player counts
+        for player_count in [10, 50, 100, 200, 500] {
+            let mut arena = Arena::default();
+            arena.update_for_player_count(player_count);
+
+            let safe_radius = arena.current_safe_radius();
+            let wells = &arena.gravity_wells;
+
+            // Test many spawn positions
+            for _ in 0..50 {
+                let pos = spawn_near_well(wells);
+                let dist_from_center = pos.length();
+
+                assert!(
+                    dist_from_center <= safe_radius,
+                    "Player count {}: Spawn at {:?} (dist {:.1}) is OUTSIDE safe radius {:.1}. \
+                     Wells: {:?}",
+                    player_count,
+                    pos,
+                    dist_from_center,
+                    safe_radius,
+                    wells.iter().map(|w| (w.position, w.core_radius)).collect::<Vec<_>>()
+                );
+            }
         }
     }
 }

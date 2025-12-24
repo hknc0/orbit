@@ -83,9 +83,12 @@ pub fn apply_thrust(
         // Apply thrust to velocity
         player.velocity += thrust_dir * thrust_force * dt;
 
-        // Calculate mass cost
-        let mass_cost = boost::BASE_COST + player.mass * boost::MASS_COST_RATIO;
-        player.mass = (player.mass - mass_cost * dt).max(mass::MINIMUM);
+        // Calculate mass cost - ONLY drain mass if NOT spawn protected
+        // This prevents bots/players from losing mass while invulnerable
+        if player.spawn_protection <= 0.0 {
+            let mass_cost = boost::BASE_COST + player.mass * boost::MASS_COST_RATIO;
+            player.mass = (player.mass - mass_cost * dt).max(mass::MINIMUM);
+        }
 
         // Update rotation to face thrust direction
         player.rotation = thrust_dir.angle();
@@ -218,6 +221,80 @@ mod tests {
 
         assert!(state.get_player(player_id).unwrap().spawn_protection < 3.0);
         assert!(state.get_player(player_id).unwrap().spawn_protection > 0.0);
+    }
+
+    #[test]
+    fn test_spawn_protection_prevents_boost_mass_drain() {
+        use crate::game::constants::mass::STARTING;
+        use crate::net::protocol::PlayerInput;
+
+        let (mut state, player_id) = create_test_state();
+        let player = state.get_player_mut(player_id).unwrap();
+        player.spawn_protection = 3.0;
+        player.mass = STARTING;
+        let initial_mass = player.mass;
+
+        // Create boost input
+        let input = PlayerInput {
+            sequence: 0,
+            tick: 0,
+            client_time: 0,
+            thrust: Vec2::new(1.0, 0.0),
+            aim: Vec2::new(1.0, 0.0),
+            boost: true,
+            fire: false,
+            fire_released: false,
+        };
+
+        // Apply thrust with boost while spawn protected
+        apply_thrust(&mut state, player_id, &input, DT);
+
+        // Mass should NOT have decreased (spawn protection prevents drain)
+        let final_mass = state.get_player(player_id).unwrap().mass;
+        assert_eq!(
+            final_mass, initial_mass,
+            "Mass should not drain during spawn protection: {} -> {}",
+            initial_mass, final_mass
+        );
+
+        // Velocity should still increase (thrust still works, just no cost)
+        let velocity = state.get_player(player_id).unwrap().velocity.length();
+        assert!(velocity > 0.1, "Velocity should increase from thrust");
+    }
+
+    #[test]
+    fn test_boost_drains_mass_without_spawn_protection() {
+        use crate::game::constants::mass::STARTING;
+        use crate::net::protocol::PlayerInput;
+
+        let (mut state, player_id) = create_test_state();
+        let player = state.get_player_mut(player_id).unwrap();
+        player.spawn_protection = 0.0; // No spawn protection
+        player.mass = STARTING;
+        let initial_mass = player.mass;
+
+        // Create boost input
+        let input = PlayerInput {
+            sequence: 0,
+            tick: 0,
+            client_time: 0,
+            thrust: Vec2::new(1.0, 0.0),
+            aim: Vec2::new(1.0, 0.0),
+            boost: true,
+            fire: false,
+            fire_released: false,
+        };
+
+        // Apply thrust with boost without spawn protection
+        apply_thrust(&mut state, player_id, &input, DT);
+
+        // Mass SHOULD have decreased
+        let final_mass = state.get_player(player_id).unwrap().mass;
+        assert!(
+            final_mass < initial_mass,
+            "Mass should drain when boosting without spawn protection: {} -> {}",
+            initial_mass, final_mass
+        );
     }
 
     #[test]
