@@ -1,0 +1,38 @@
+# Rust build artifacts
+**/target/
+**/*.rs.bk
+
+# Git
+.git/
+.gitignore
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# Claude
+.claude/
+
+# Node modules (client)
+**/node_modules/
+**/dist/
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Logs
+*.log
+
+# Local env files
+**/.env.local
+**/.env.*.local
+
+# Documentation (not needed in image)
+docs/
+
+# Test artifacts
+**/coverage/
+**/*.profraw

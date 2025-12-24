@@ -284,60 +284,15 @@ impl Arena {
 
         self.gravity_wells.clear();
 
-        use rand::Rng;
-        let mut rng = rand::thread_rng();
-
         // === SUPERMASSIVE BLACK HOLE AT CENTER ===
         // Much larger and more massive than other wells
         let supermassive_mass = CENTRAL_MASS * 3.0;
         let supermassive_core = arena::CORE_RADIUS * 2.5; // 125 radius death zone
         self.gravity_wells.push(GravityWell::new(Vec2::ZERO, supermassive_mass, supermassive_core));
 
-        // === ORBITAL GRAVITY WELLS (varied sizes) ===
-        // Well sizes: small (0.6x), medium (1.0x), large (1.4x)
-        let size_multipliers = [0.6, 0.8, 1.0, 1.2, 1.4];
-
-        // Minimum distance between wells
-        let min_well_distance = well_spacing * 0.8;
-        const MAX_PLACEMENT_ATTEMPTS: usize = 50;
-
-        for _ in 0..well_count {
-            // Random size for this well
-            let size_mult = size_multipliers[rng.gen_range(0..size_multipliers.len())];
-            let well_mass = CENTRAL_MASS * size_mult;
-            let well_core = arena::CORE_RADIUS * size_mult;
-
-            // Find position far from existing wells
-            let mut best_pos = Vec2::ZERO;
-            let mut best_min_dist = 0.0f32;
-
-            for attempt in 0..MAX_PLACEMENT_ATTEMPTS {
-                let angle = rng.gen_range(0.0..TAU);
-                let radius = rng.gen_range(orbit_radius * 0.4..orbit_radius * 1.1);
-                let candidate = Vec2::from_angle(angle) * radius;
-
-                // Find minimum distance to any existing well (including center)
-                let min_dist = self.gravity_wells
-                    .iter()
-                    .map(|w| (w.position - candidate).length())
-                    .min_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal))
-                    .unwrap_or(f32::MAX);
-
-                // If far enough, use it immediately
-                if min_dist >= min_well_distance {
-                    best_pos = candidate;
-                    break;
-                }
-
-                // Track best attempt in case we can't find ideal position
-                if min_dist > best_min_dist || attempt == 0 {
-                    best_min_dist = min_dist;
-                    best_pos = candidate;
-                }
-            }
-
-            self.gravity_wells.push(GravityWell::new(best_pos, well_mass, well_core));
-        }
+        // === ORBITAL GRAVITY WELLS (distributed across rings) ===
+        // Use the same multi-ring distribution as scale_for_simulation
+        self.add_orbital_wells(well_count, self.escape_radius);
     }
 
     /// Smoothly scale arena based on player count
@@ -390,36 +345,59 @@ impl Arena {
         }
 
         // Add new wells if needed (never remove existing ones during gameplay)
-        // Wells are placed at the current escape radius to spread them out
+        // Wells are distributed across inner/middle/outer rings
         if target_wells > current_orbital_wells {
             let wells_to_add = target_wells - current_orbital_wells;
-            self.add_orbital_wells(wells_to_add, self.escape_radius * 0.6);
+            self.add_orbital_wells(wells_to_add, self.escape_radius);
         }
     }
 
-    /// Add orbital wells at the specified radius without touching existing wells
-    fn add_orbital_wells(&mut self, count: usize, orbit_radius: f32) {
+    /// Add orbital wells distributed across multiple rings for better player spread
+    /// Rings: inner (25-40%), middle (45-65%), outer (70-90%) of escape radius
+    fn add_orbital_wells(&mut self, count: usize, escape_radius: f32) {
         use crate::game::constants::physics::CENTRAL_MASS;
         use rand::Rng;
         use std::f32::consts::TAU;
 
         let mut rng = rand::thread_rng();
         let size_multipliers = [0.6, 0.8, 1.0, 1.2, 1.4];
-        let well_spacing = arena::OUTER_RADIUS * 2.0;
-        let min_well_distance = well_spacing * 0.6; // Slightly less strict for incremental adds
+        let min_well_distance = arena::OUTER_RADIUS * 1.2; // Minimum spacing between wells
         const MAX_PLACEMENT_ATTEMPTS: usize = 50;
+
+        // Define orbital rings as percentage of escape radius
+        // Each ring has (min%, max%, weight) - weight determines spawn probability
+        let rings: [(f32, f32, f32); 3] = [
+            (0.25, 0.40, 1.0), // Inner ring: dangerous, near supermassive
+            (0.45, 0.65, 2.0), // Middle ring: main gameplay zone (higher weight)
+            (0.70, 0.90, 2.0), // Outer ring: safer, more spread out (higher weight)
+        ];
+        let total_weight: f32 = rings.iter().map(|(_, _, w)| w).sum();
 
         for _ in 0..count {
             let size_mult = size_multipliers[rng.gen_range(0..size_multipliers.len())];
             let well_mass = CENTRAL_MASS * size_mult;
             let well_core = arena::CORE_RADIUS * size_mult;
 
+            // Pick a ring based on weights (favor middle and outer)
+            let roll: f32 = rng.gen_range(0.0..total_weight);
+            let mut cumulative = 0.0;
+            let mut selected_ring = (0.45, 0.65); // Default to middle
+            for (min, max, weight) in &rings {
+                cumulative += weight;
+                if roll < cumulative {
+                    selected_ring = (*min, *max);
+                    break;
+                }
+            }
+
             let mut best_pos = Vec2::ZERO;
             let mut best_min_dist = 0.0f32;
 
             for attempt in 0..MAX_PLACEMENT_ATTEMPTS {
                 let angle = rng.gen_range(0.0..TAU);
-                let radius = rng.gen_range(orbit_radius * 0.5..orbit_radius * 1.2);
+                let radius = rng.gen_range(
+                    escape_radius * selected_ring.0..escape_radius * selected_ring.1
+                );
                 let candidate = Vec2::from_angle(angle) * radius;
 
                 let min_dist = self.gravity_wells
