@@ -387,40 +387,69 @@ fn update_projectile_collisions(state: &mut GameState) -> Vec<CollisionEvent> {
     events
 }
 
-/// Handle player-debris collisions
+/// Handle player-debris collisions using spatial grid for O(n) performance
+/// Previously O(D × P), now O(D + P) with spatial hashing
 fn update_debris_collisions(state: &mut GameState) -> Vec<CollisionEvent> {
+    use hashbrown::HashSet;
+
     let mut events = Vec::new();
-    let mut debris_to_remove = Vec::new();
+    let mut debris_to_remove = HashSet::new();
     let mut mass_gains: Vec<(PlayerId, f32)> = Vec::new();
 
-    for (debris_idx, debris) in state.debris.iter().enumerate() {
-        let debris_radius = debris.radius();
-        let debris_pos = debris.position;
-        let debris_id = debris.id;
-        let debris_mass = debris.mass();
+    // Build spatial grid with debris (O(D))
+    // Cell size of 32 units - debris is small (radius 4-11)
+    let mut grid = SpatialGrid::new(32.0);
 
-        for player in state.players.values() {
-            if !player.alive {
-                continue;
-            }
+    // Store debris info indexed by ID for quick lookup after spatial query
+    let debris_info: hashbrown::HashMap<u64, (usize, f32, f32)> = state
+        .debris
+        .iter()
+        .enumerate()
+        .map(|(idx, d)| {
+            let radius = d.radius();
+            grid.insert(SpatialEntity {
+                id: SpatialEntityId::Debris(d.id),
+                position: d.position,
+                radius,
+            });
+            (d.id, (idx, d.mass(), radius))
+        })
+        .collect();
 
-            let player_radius = mass_to_radius(player.mass);
-            // Use squared distance to avoid sqrt()
-            let dist_sq = player.position.distance_sq_to(debris_pos);
-            let combined_radius = player_radius + debris_radius;
+    // For each player, query nearby debris from spatial grid (O(P × avg_nearby))
+    for player in state.players.values() {
+        if !player.alive {
+            continue;
+        }
 
-            if dist_sq < combined_radius * combined_radius {
-                // Player collects debris
-                mass_gains.push((player.id, debris_mass));
+        let player_radius = mass_to_radius(player.mass);
+        // Query radius = player radius + max debris radius (11 for large)
+        let query_radius = player_radius + 15.0;
 
-                events.push(CollisionEvent::DebrisCollected {
-                    player_id: player.id,
-                    debris_id,
-                    mass_gained: debris_mass,
-                });
+        for nearby in grid.query_radius(player.position, query_radius) {
+            if let SpatialEntityId::Debris(debris_id) = nearby.id {
+                // Skip already collected debris
+                if debris_to_remove.contains(&debris_id) {
+                    continue;
+                }
 
-                debris_to_remove.push(debris_idx);
-                break;
+                if let Some(&(idx, debris_mass, debris_radius)) = debris_info.get(&debris_id) {
+                    let combined_radius = player_radius + debris_radius;
+                    let dist_sq = player.position.distance_sq_to(nearby.position);
+
+                    if dist_sq < combined_radius * combined_radius {
+                        // Player collects debris
+                        mass_gains.push((player.id, debris_mass));
+
+                        events.push(CollisionEvent::DebrisCollected {
+                            player_id: player.id,
+                            debris_id,
+                            mass_gained: debris_mass,
+                        });
+
+                        debris_to_remove.insert(debris_id);
+                    }
+                }
             }
         }
     }
@@ -432,9 +461,18 @@ fn update_debris_collisions(state: &mut GameState) -> Vec<CollisionEvent> {
         }
     }
 
-    // Remove collected debris using swap_remove for O(1)
-    for idx in debris_to_remove.into_iter().rev() {
-        state.debris.swap_remove(idx);
+    // Collect indices to remove and sort in descending order for swap_remove
+    let mut indices: Vec<usize> = debris_to_remove
+        .iter()
+        .filter_map(|id| debris_info.get(id).map(|(idx, _, _)| *idx))
+        .collect();
+    indices.sort_unstable_by(|a, b| b.cmp(a));
+
+    // Remove collected debris using swap_remove for O(1) per removal
+    for idx in indices {
+        if idx < state.debris.len() {
+            state.debris.swap_remove(idx);
+        }
     }
 
     events

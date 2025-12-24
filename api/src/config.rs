@@ -282,6 +282,10 @@ pub struct DebrisSpawnConfig {
     pub orbital_velocity_max: f32,
     /// Debris lifetime in seconds before decay
     pub lifetime: f32,
+    /// Initial debris count per gravity well (feeding zones)
+    pub well_debris_count: usize,
+    /// Spawn rate per second for debris around gravity wells
+    pub well_spawn_rate: f32,
 }
 
 impl Default for DebrisSpawnConfig {
@@ -304,6 +308,8 @@ impl Default for DebrisSpawnConfig {
             orbital_velocity_min: debris_spawning::ORBITAL_VELOCITY_MIN,
             orbital_velocity_max: debris_spawning::ORBITAL_VELOCITY_MAX,
             lifetime: debris_spawning::LIFETIME,
+            well_debris_count: 8,   // 8 debris per well initially
+            well_spawn_rate: 2.0,   // 2 debris per second around wells
         }
     }
 }
@@ -520,11 +526,13 @@ mod tests {
     fn test_debris_spawn_config_defaults() {
         let config = DebrisSpawnConfig::default();
         assert!(config.enabled);
-        assert_eq!(config.max_count, 200);
+        assert_eq!(config.max_count, 500); // Increased with spatial hash optimization
         assert_eq!(config.initial_inner, 50);
         assert_eq!(config.initial_middle, 40);
         assert_eq!(config.initial_outer, 30);
         assert_eq!(config.spawn_rate_inner_small, 2.0);
+        assert_eq!(config.well_debris_count, 8);
+        assert_eq!(config.well_spawn_rate, 2.0);
     }
 
     #[test]

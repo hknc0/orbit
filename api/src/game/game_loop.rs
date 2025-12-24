@@ -218,6 +218,14 @@ impl GameLoop {
             DT,
         );
 
+        // Spawn debris around gravity wells (feeding zones)
+        debris::update_well_spawning(
+            &mut self.state,
+            &self.config.debris_spawn_config,
+            &mut self.debris_spawn_state.well_accumulator,
+            DT,
+        );
+
         // Update match time
         self.state.match_state.match_time += DT;
 
@@ -305,6 +313,8 @@ impl GameLoop {
 
                     // Spawn initial debris when match starts
                     debris::spawn_initial(&mut self.state, &self.config.debris_spawn_config);
+                    // Spawn debris around gravity wells (feeding zones)
+                    debris::spawn_around_wells(&mut self.state, &self.config.debris_spawn_config);
 
                     return Some(GameLoopEvent::PhaseChange {
                         phase: MatchPhase::Playing,

@@ -173,8 +173,10 @@ impl GameSession {
         if debris_spawn_config.enabled {
             use crate::game::systems::debris;
             debris::spawn_initial(game_loop.state_mut(), &debris_spawn_config);
+            // Spawn debris around gravity wells (feeding zones)
+            debris::spawn_around_wells(game_loop.state_mut(), &debris_spawn_config);
             info!(
-                "Spawned {} initial debris particles",
+                "Spawned {} initial debris particles (including well zones)",
                 game_loop.state().debris.len()
             );
         }

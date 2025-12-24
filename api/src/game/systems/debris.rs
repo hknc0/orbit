@@ -1,11 +1,12 @@
 //! Debris spawning system
 //! Spawns collectible debris particles across the arena zones for players to collect
+//! Also spawns debris in orbital rings around gravity wells for concentrated "feeding zones"
 
 use rand::Rng;
 
 use crate::config::DebrisSpawnConfig;
 use crate::game::constants::arena::{CORE_RADIUS, INNER_RADIUS, MIDDLE_RADIUS, OUTER_RADIUS};
-use crate::game::state::{DebrisSize, GameState};
+use crate::game::state::{DebrisSize, GameState, GravityWell};
 use crate::util::vec2::Vec2;
 
 /// Zone for debris spawning (subset of arena zones)
@@ -41,6 +42,8 @@ pub struct DebrisSpawnState {
     outer_small: f32,
     outer_medium: f32,
     outer_large: f32,
+    // Accumulator for gravity well spawning
+    pub well_accumulator: f32,
 }
 
 impl DebrisSpawnState {
@@ -216,6 +219,100 @@ fn spawn_debris(
     let velocity = Vec2::from_angle(orbital_angle) * speed;
 
     state.add_debris_with_lifetime(position, velocity, size, config.lifetime);
+}
+
+// === GRAVITY WELL SPAWNING ===
+
+/// Spawn debris in orbital rings around gravity wells
+/// Creates "feeding zones" near each non-central well
+pub fn spawn_around_wells(state: &mut GameState, config: &DebrisSpawnConfig) {
+    if !config.enabled {
+        return;
+    }
+
+    let wells: Vec<GravityWell> = state.arena.gravity_wells.iter().skip(1).cloned().collect();
+
+    for well in wells {
+        // Spawn debris per well (capped by max_count)
+        let debris_per_well = config.well_debris_count;
+        for _ in 0..debris_per_well {
+            if state.debris.len() >= config.max_count {
+                return;
+            }
+            spawn_near_well(state, config, &well);
+        }
+    }
+}
+
+/// Spawn a single debris particle in an orbital ring around a gravity well
+fn spawn_near_well(state: &mut GameState, config: &DebrisSpawnConfig, well: &GravityWell) {
+    let mut rng = rand::thread_rng();
+
+    // Orbital ring: between 2x and 4x the well's core radius (death zone)
+    // This creates a "safe" feeding zone just outside the danger zone
+    let min_radius = well.core_radius * 2.5;
+    let max_radius = well.core_radius * 5.0;
+
+    let angle = rng.gen_range(0.0..std::f32::consts::TAU);
+    let orbit_radius = rng.gen_range(min_radius..max_radius);
+
+    // Position relative to well center
+    let offset = Vec2::from_angle(angle) * orbit_radius;
+    let position = well.position + offset;
+
+    // Orbital velocity around the well (perpendicular to radius from well)
+    // Slightly faster than zone debris to orbit the well
+    let orbital_angle = angle + std::f32::consts::FRAC_PI_2;
+    let base_speed = rng.gen_range(config.orbital_velocity_min..config.orbital_velocity_max);
+    // Boost speed near wells (more gravity = faster orbit needed)
+    let speed = base_speed * 1.5;
+    let velocity = Vec2::from_angle(orbital_angle) * speed;
+
+    // Well debris is more likely to be medium/large (richer feeding zone)
+    let size = {
+        let roll = rng.gen::<f32>();
+        if roll < 0.15 {
+            DebrisSize::Large
+        } else if roll < 0.5 {
+            DebrisSize::Medium
+        } else {
+            DebrisSize::Small
+        }
+    };
+
+    state.add_debris_with_lifetime(position, velocity, size, config.lifetime);
+}
+
+/// Update: spawn debris around wells over time (called each tick)
+pub fn update_well_spawning(
+    state: &mut GameState,
+    config: &DebrisSpawnConfig,
+    accumulator: &mut f32,
+    dt: f32,
+) {
+    if !config.enabled || config.well_spawn_rate <= 0.0 {
+        return;
+    }
+
+    // Skip central well (index 0)
+    let well_count = state.arena.gravity_wells.len().saturating_sub(1);
+    if well_count == 0 {
+        return;
+    }
+
+    // Accumulate spawn time
+    *accumulator += config.well_spawn_rate * dt;
+
+    // Spawn when accumulator exceeds 1
+    while *accumulator >= 1.0 && state.debris.len() < config.max_count {
+        // Pick a random non-central well
+        let mut rng = rand::thread_rng();
+        let well_idx = rng.gen_range(1..state.arena.gravity_wells.len());
+        let well = state.arena.gravity_wells[well_idx].clone();
+
+        spawn_near_well(state, config, &well);
+        *accumulator -= 1.0;
+    }
 }
 
 #[cfg(test)]

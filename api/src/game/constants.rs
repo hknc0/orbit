@@ -151,9 +151,10 @@ pub mod debris_spawning {
     pub const ENABLED: bool = true;
 
     /// Maximum number of debris particles in the game at once
-    /// Higher values = more crowded, but impacts performance
+    /// Now optimized with spatial hashing for O(n) collision detection
+    /// Higher values = more crowded but still performant
     /// ENV: DEBRIS_MAX_COUNT
-    pub const MAX_COUNT: usize = 200;
+    pub const MAX_COUNT: usize = 500;
 
     /// Initial debris count spawned at game start per zone
     /// ENV: DEBRIS_INITIAL_INNER, DEBRIS_INITIAL_MIDDLE, DEBRIS_INITIAL_OUTER
