@@ -60,7 +60,7 @@ pub fn calculate_gravity_from_well(position: Vec2, well: &GravityWell) -> Vec2 {
 
     // Prevent division by zero and extreme forces near well center
     let min_distance_sq = (well.core_radius * 2.0).powi(2); // 2x core radius minimum
-    if distance_sq < min_distance_sq {
+    if distance_sq <= min_distance_sq {
         return Vec2::ZERO;
     }
 

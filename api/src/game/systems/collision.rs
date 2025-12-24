@@ -131,7 +131,8 @@ fn resolve_player_collision(
     let delta = pos_b - pos_a;
     let dist = delta.length();
 
-    if dist == 0.0 {
+    // Use epsilon check for numerical stability (exact zero is rare but near-zero can cause issues)
+    if dist < 0.001 {
         return None;
     }
 
