@@ -331,15 +331,16 @@ export class RenderSystem {
 
     // Render gravity wells (suns) - each is its own "solar system"
     if (wells.length > 0) {
-      for (const well of wells) {
-        this.renderGravityWell(well.position.x, well.position.y, well.coreRadius, well.mass);
+      for (let i = 0; i < wells.length; i++) {
+        const well = wells[i];
+        this.renderGravityWell(well.position.x, well.position.y, well.coreRadius, well.mass, i);
 
         // Draw orbit zones around each well (subtle rings)
         this.renderWellZones(well.position.x, well.position.y, well.coreRadius);
       }
     } else {
       // Fallback: single well at center
-      this.renderGravityWell(0, 0, world.arena.coreRadius, 1000000);
+      this.renderGravityWell(0, 0, world.arena.coreRadius, 1000000, 0);
       this.renderWellZones(0, 0, world.arena.coreRadius);
     }
 
@@ -376,9 +377,9 @@ export class RenderSystem {
     this.ctx.stroke();
   }
 
-  private renderGravityWell(x: number, y: number, coreRadius: number, mass: number): void {
-    // Check if this is the central supermassive black hole (at origin, larger core)
-    const isCentral = Math.abs(x) < 10 && Math.abs(y) < 10 && coreRadius > 80;
+  private renderGravityWell(x: number, y: number, coreRadius: number, mass: number, wellIndex: number): void {
+    // Central supermassive black hole is always index 0 and near origin
+    const isCentral = wellIndex === 0 && Math.abs(x) < 50 && Math.abs(y) < 50;
 
     if (isCentral) {
       // === SUPERMASSIVE BLACK HOLE ===
@@ -438,8 +439,9 @@ export class RenderSystem {
       // === NORMAL GRAVITY WELL (star/sun) ===
       // Different star types based on position hash for variety
 
-      // Generate deterministic "random" values from position
-      const seed = Math.abs(Math.floor(x * 7919 + y * 104729)) % 10000;
+      // Generate deterministic "random" values from well index (stable identifier)
+      // Using index instead of position prevents flickering as wells orbit
+      const seed = Math.abs(wellIndex * 7919 + 104729) % 10000;
       const starType = seed % 6; // 6 different star types
       const variation = (seed % 100) / 100; // 0-1 for subtle variations
 
@@ -1553,12 +1555,13 @@ export class RenderSystem {
     }
 
     // 1b. Gravity wells - central black hole (purple) and stars (orange)
-    for (const well of world.arena.gravityWells) {
+    for (let i = 0; i < world.arena.gravityWells.length; i++) {
+      const well = world.arena.gravityWells[i];
       const wellX = centerX + well.position.x * scale;
       const wellY = centerY + well.position.y * scale;
 
-      // Check if central supermassive black hole
-      const isCentral = Math.abs(well.position.x) < 10 && Math.abs(well.position.y) < 10 && well.coreRadius > 80;
+      // Central supermassive black hole is always index 0 and near origin
+      const isCentral = i === 0 && Math.abs(well.position.x) < 50 && Math.abs(well.position.y) < 50;
 
       // Only draw if within minimap bounds
       const dist = Math.sqrt(Math.pow(wellX - centerX, 2) + Math.pow(wellY - centerY, 2));
