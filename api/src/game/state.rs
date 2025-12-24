@@ -375,13 +375,15 @@ impl Arena {
         self.gravity_wells.len().saturating_sub(1)
     }
 
-    /// Update arena scale and gravity wells based on player count
-    /// If `performance_limit` is provided, it caps the number of wells
+    /// DEPRECATED: Use `scale_for_simulation()` instead for area-based well scaling.
+    /// This legacy method uses player-count-based well calculation.
+    #[deprecated(since = "0.3.0", note = "Use scale_for_simulation() for area-based well scaling")]
     pub fn update_for_player_count(&mut self, player_count: usize) {
         self.update_for_player_count_with_limit(player_count, None);
     }
 
-    /// Update arena scale and gravity wells with optional performance-based limit
+    /// DEPRECATED: Use `scale_for_simulation()` instead for area-based well scaling.
+    #[deprecated(since = "0.3.0", note = "Use scale_for_simulation() for area-based well scaling")]
     pub fn update_for_player_count_with_limit(&mut self, player_count: usize, max_wells: Option<usize>) {
         use crate::game::constants::physics::CENTRAL_MASS;
         use std::f32::consts::TAU;

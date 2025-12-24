@@ -843,12 +843,18 @@ mod tests {
 
     #[test]
     fn test_spawn_positions_within_safe_radius() {
+        use crate::config::ArenaScalingConfig;
         use crate::game::state::Arena;
+
+        let config = ArenaScalingConfig::default();
 
         // Simulate game with different player counts
         for player_count in [10, 50, 100, 200, 500] {
             let mut arena = Arena::default();
-            arena.update_for_player_count(player_count);
+            // Use area-based scaling instead of legacy player-based
+            for _ in 0..50 {
+                arena.scale_for_simulation(player_count, &config);
+            }
 
             let safe_radius = arena.current_safe_radius();
             let wells: Vec<_> = arena.gravity_wells.values().cloned().collect();

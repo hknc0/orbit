@@ -252,11 +252,15 @@ impl GameSession {
         game_loop.state_mut().match_state.phase = MatchPhase::Playing;
         game_loop.state_mut().match_state.countdown_time = 0.0;
 
-        // CRITICAL: Update arena scale BEFORE spawning bots
-        // This creates appropriate gravity wells for the initial player count
-        // As players join/leave, scale_for_simulation() handles dynamic scaling
-        // and repositions wells that end up too close to center
-        game_loop.state_mut().arena.update_for_player_count(bot_count);
+        // CRITICAL: Initialize arena with area-based well scaling BEFORE spawning bots
+        // Uses scale_for_simulation for consistent area-based well calculation
+        // Run multiple iterations to converge to target size
+        {
+            let config = arena_config.read();
+            for _ in 0..50 {
+                game_loop.state_mut().arena.scale_for_simulation(bot_count, &config);
+            }
+        }
         info!(
             "Arena configured: {} gravity wells, escape_radius={}",
             game_loop.state().arena.gravity_wells.len(),
