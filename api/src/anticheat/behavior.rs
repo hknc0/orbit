@@ -1,3 +1,9 @@
+//! Behavioral analysis for anti-cheat
+//!
+//! Detects suspicious patterns like aimbot, speedhacks, and automation.
+
+#![allow(dead_code)] // Behavioral analyzer ready for future integration
+
 use std::collections::VecDeque;
 use std::time::Instant;
 
@@ -219,7 +225,6 @@ impl PlayerBehavior {
 
         // Look for repeating sequences
         let history: Vec<_> = self.movement_history.iter().collect();
-        let mut pattern_score = 0.0;
 
         // Check for perfect oscillation (common bot pattern)
         let mut oscillations = 0;
@@ -232,7 +237,7 @@ impl PlayerBehavior {
             }
         }
 
-        pattern_score = oscillations as f32 / (self.movement_history.len() - 2) as f32;
+        let pattern_score = oscillations as f32 / (self.movement_history.len() - 2) as f32;
 
         Some(pattern_score)
     }
