@@ -851,7 +851,7 @@ impl GameSession {
                     .filter(|p| p.alive && p.id != player_id)
                     .map(|p| p.position)
                     .collect();
-                let wells = self.game_loop.state().arena.gravity_wells.clone();
+                let wells: Vec<_> = self.game_loop.state().arena.gravity_wells.values().cloned().collect();
 
                 if let Some(player) = self.game_loop.state_mut().get_player_mut(player_id) {
                     // Find safe spawn position near a gravity well, away from other players
@@ -1284,17 +1284,23 @@ pub fn start_game_loop(session: Arc<RwLock<GameSession>>) {
                             intensity: *intensity,
                         })
                     }
-                    GameLoopEvent::GravityWellCharging { well_index, position } => {
+                    GameLoopEvent::GravityWellCharging { well_id, position } => {
                         Some(GameEvent::GravityWellCharging {
-                            well_index: *well_index,
+                            well_id: *well_id,
                             position: *position,
                         })
                     }
-                    GameLoopEvent::GravityWaveExplosion { well_index, position, strength } => {
+                    GameLoopEvent::GravityWaveExplosion { well_id, position, strength } => {
                         Some(GameEvent::GravityWaveExplosion {
-                            well_index: *well_index,
+                            well_id: *well_id,
                             position: *position,
                             strength: *strength,
+                        })
+                    }
+                    GameLoopEvent::GravityWellDestroyed { well_id, position } => {
+                        Some(GameEvent::GravityWellDestroyed {
+                            well_id: *well_id,
+                            position: *position,
                         })
                     }
                     // Other events are already reflected in state snapshots

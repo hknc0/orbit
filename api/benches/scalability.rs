@@ -276,6 +276,7 @@ fn bench_aoi_filtering(c: &mut Criterion) {
             density_grid: vec![],
             notable_players: vec![],
             echo_client_time: 0,
+            ai_status: None,
         };
 
         group.throughput(Throughput::Elements(count as u64));
@@ -341,6 +342,7 @@ fn bench_encoding(c: &mut Criterion) {
             density_grid: vec![],
             notable_players: vec![],
             echo_client_time: 0,
+            ai_status: None,
         };
 
         let message = ServerMessage::Snapshot(snapshot);

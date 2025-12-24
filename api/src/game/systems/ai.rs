@@ -274,7 +274,7 @@ fn execute_behavior(ai: &mut AiState, bot_id: PlayerId, state: &GameState, dt: f
 /// Returns true if in danger (and sets emergency escape thrust)
 fn check_core_danger(ai: &mut AiState, bot: &Player, state: &GameState) -> bool {
     // Check each gravity well for danger
-    for well in &state.arena.gravity_wells {
+    for well in state.arena.gravity_wells.values() {
         let to_well = well.position - bot.position;
         let distance = to_well.length();
 
@@ -293,7 +293,7 @@ fn check_core_danger(ai: &mut AiState, bot: &Player, state: &GameState) -> bool 
 
 fn execute_orbit(ai: &mut AiState, bot: &Player, state: &GameState) {
     // Find nearest gravity well to orbit around
-    let nearest_well = state.arena.gravity_wells.iter()
+    let nearest_well = state.arena.gravity_wells.values()
         .min_by(|a, b| {
             let dist_a = (a.position - bot.position).length_sq();
             let dist_b = (b.position - bot.position).length_sq();

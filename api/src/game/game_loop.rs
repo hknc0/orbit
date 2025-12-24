@@ -11,7 +11,7 @@ use uuid::Uuid;
 use crate::config::{DebrisSpawnConfig, GravityWaveConfig};
 use crate::game::constants::physics::{DT, TICK_RATE};
 use crate::game::match_result::{check_match_end, determine_result, MatchEndReason, MatchResult};
-use crate::game::state::{GameState, MatchPhase, PlayerId};
+use crate::game::state::{GameState, MatchPhase, PlayerId, WellId};
 use crate::game::systems::{ai, arena, collision, debris, gravity, physics, projectile};
 use crate::net::protocol::PlayerInput;
 use crate::util::vec2::Vec2;
@@ -41,14 +41,19 @@ pub enum GameLoopEvent {
     },
     /// A gravity well started charging (warning before explosion)
     GravityWellCharging {
-        well_index: u8,
+        well_id: WellId,
         position: Vec2,
     },
     /// A gravity well exploded, creating an expanding wave
     GravityWaveExplosion {
-        well_index: u8,
+        well_id: WellId,
         position: Vec2,
         strength: f32,
+    },
+    /// A gravity well was destroyed (removed from arena after explosion)
+    GravityWellDestroyed {
+        well_id: WellId,
+        position: Vec2,
     },
 }
 
@@ -185,15 +190,15 @@ impl GameLoop {
             );
             for event in wave_events {
                 match event {
-                    gravity::GravityWaveEvent::WellCharging { well_index, position } => {
-                        events.push(GameLoopEvent::GravityWellCharging { well_index, position });
+                    gravity::GravityWaveEvent::WellCharging { well_id, position } => {
+                        events.push(GameLoopEvent::GravityWellCharging { well_id, position });
                     }
-                    gravity::GravityWaveEvent::WellExploded { well_index, position, strength } => {
-                        events.push(GameLoopEvent::GravityWaveExplosion { well_index, position, strength });
+                    gravity::GravityWaveEvent::WellExploded { well_id, position, strength } => {
+                        events.push(GameLoopEvent::GravityWaveExplosion { well_id, position, strength });
                     }
-                    gravity::GravityWaveEvent::WellDestroyed { well_index, position } => {
-                        // Well was removed - could add event if clients need to know
-                        tracing::debug!("Well {} destroyed at {:?}", well_index, position);
+                    gravity::GravityWaveEvent::WellDestroyed { well_id, position } => {
+                        events.push(GameLoopEvent::GravityWellDestroyed { well_id, position });
+                        tracing::debug!("Well {} destroyed at {:?}", well_id, position);
                     }
                 }
             }
@@ -370,11 +375,11 @@ impl GameLoop {
             .collect();
 
         // Assign safe spawn position near a gravity well, away from other players
-        let wells = &self.state.arena.gravity_wells;
-        player.position = arena::safe_spawn_near_well(wells, &existing_positions);
+        let wells: Vec<_> = self.state.arena.gravity_wells.values().cloned().collect();
+        player.position = arena::safe_spawn_near_well(&wells, &existing_positions);
 
         // Use orbital velocity relative to nearest well
-        player.velocity = arena::spawn_velocity_for_well(player.position, wells);
+        player.velocity = arena::spawn_velocity_for_well(player.position, &wells);
 
         self.state.add_player(player.clone());
 

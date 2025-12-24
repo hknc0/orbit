@@ -230,7 +230,12 @@ pub fn spawn_around_wells(state: &mut GameState, config: &DebrisSpawnConfig) {
         return;
     }
 
-    let wells: Vec<GravityWell> = state.arena.gravity_wells.iter().skip(1).cloned().collect();
+    // Collect non-central wells (filter by ID, not index - HashMap has no guaranteed order)
+    let wells: Vec<GravityWell> = state.arena.gravity_wells
+        .values()
+        .filter(|w| w.id != crate::game::state::CENTRAL_WELL_ID)
+        .cloned()
+        .collect();
 
     for well in wells {
         // Spawn debris per well (capped by max_count)
@@ -307,8 +312,16 @@ pub fn update_well_spawning(
     while *accumulator >= 1.0 && state.debris.len() < config.max_count {
         // Pick a random non-central well
         let mut rng = rand::thread_rng();
-        let well_idx = rng.gen_range(1..state.arena.gravity_wells.len());
-        let well = state.arena.gravity_wells[well_idx].clone();
+        let orbital_wells: Vec<_> = state.arena.gravity_wells
+            .values()
+            .filter(|w| w.id != crate::game::state::CENTRAL_WELL_ID)
+            .collect();
+
+        if orbital_wells.is_empty() {
+            break;
+        }
+
+        let well = orbital_wells[rng.gen_range(0..orbital_wells.len())].clone();
 
         spawn_near_well(state, config, &well);
         *accumulator -= 1.0;

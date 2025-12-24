@@ -480,11 +480,13 @@ mod tests {
         snapshot.players[0].id = player_id;
         snapshot.gravity_wells = vec![
             GravityWellSnapshot {
+                id: 0,
                 position: Vec2::new(500.0, 500.0),
                 mass: 10000.0,
                 core_radius: 50.0,
             },
             GravityWellSnapshot {
+                id: 1,
                 position: Vec2::new(-500.0, -500.0),
                 mass: 10000.0,
                 core_radius: 50.0,

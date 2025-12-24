@@ -1,6 +1,6 @@
 use serde::{Deserialize, Serialize};
 
-use crate::game::state::{GameState, MatchPhase, PlayerId};
+use crate::game::state::{GameState, MatchPhase, PlayerId, WellId};
 use crate::util::vec2::Vec2;
 
 /// Messages from client to server
@@ -80,6 +80,8 @@ impl PlayerInput {
 /// Gravity well snapshot for network transmission
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct GravityWellSnapshot {
+    /// Unique stable well ID
+    pub id: WellId,
     pub position: Vec2,
     pub mass: f32,
     pub core_radius: f32,
@@ -88,6 +90,7 @@ pub struct GravityWellSnapshot {
 impl GravityWellSnapshot {
     pub fn from_gravity_well(well: &crate::game::state::GravityWell) -> Self {
         Self {
+            id: well.id,
             position: well.position,
             mass: well.mass,
             core_radius: well.core_radius,
@@ -208,7 +211,7 @@ impl GameSnapshot {
             gravity_wells: state
                 .arena
                 .gravity_wells
-                .iter()
+                .values()
                 .map(GravityWellSnapshot::from_gravity_well)
                 .collect(),
             total_players,
@@ -411,19 +414,26 @@ pub enum GameEvent {
     },
     /// A gravity well is charging up (warning before explosion)
     GravityWellCharging {
-        /// Well index in the gravity_wells array
-        well_index: u8,
+        /// Unique well ID (stable across removals)
+        well_id: WellId,
         /// Well position
         position: Vec2,
     },
     /// A gravity well exploded, creating an expanding wave
     GravityWaveExplosion {
-        /// Well index that exploded
-        well_index: u8,
+        /// Unique well ID that exploded
+        well_id: WellId,
         /// Center position of the explosion
         position: Vec2,
         /// Wave strength (0-1, based on well mass)
         strength: f32,
+    },
+    /// A gravity well was destroyed (removed from arena)
+    GravityWellDestroyed {
+        /// Unique well ID that was destroyed
+        well_id: WellId,
+        /// Well position before removal
+        position: Vec2,
     },
 }
 
@@ -551,6 +561,7 @@ mod tests {
             arena_safe_radius: 600.0,
             arena_scale: 1.0,
             gravity_wells: vec![GravityWellSnapshot {
+                id: 0,
                 position: Vec2::ZERO,
                 mass: 10000.0,
                 core_radius: 50.0,

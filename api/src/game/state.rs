@@ -170,9 +170,17 @@ impl Debris {
     }
 }
 
+/// Unique identifier for gravity wells (stable across removals)
+pub type WellId = u32;
+
+/// Central well ID (supermassive black hole at origin)
+pub const CENTRAL_WELL_ID: WellId = 0;
+
 /// A gravity well (attractor point)
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct GravityWell {
+    /// Unique stable ID (doesn't change when other wells are removed)
+    pub id: WellId,
     pub position: Vec2,
     pub mass: f32,
     pub core_radius: f32, // Death zone radius
@@ -185,8 +193,9 @@ pub struct GravityWell {
 }
 
 impl GravityWell {
-    pub fn new(position: Vec2, mass: f32, core_radius: f32) -> Self {
+    pub fn new(id: WellId, position: Vec2, mass: f32, core_radius: f32) -> Self {
         Self {
+            id,
             position,
             mass,
             core_radius,
@@ -245,20 +254,28 @@ pub struct Arena {
     /// Dynamic scale factor based on player count (1.0 = default)
     #[serde(default = "default_scale")]
     pub scale: f32,
-    /// Multiple gravity wells
+    /// Gravity wells stored by ID for O(1) lookup/removal (scales to 1000s of wells)
     #[serde(default)]
-    pub gravity_wells: Vec<GravityWell>,
+    pub gravity_wells: HashMap<WellId, GravityWell>,
     /// Shrink delay counter - arena only shrinks after this reaches 0
     /// Prevents sudden shrinking when players leave temporarily
     #[serde(default)]
     pub shrink_delay_ticks: u32,
+    /// Next well ID to assign (monotonically increasing)
+    #[serde(default = "default_next_well_id")]
+    pub next_well_id: WellId,
 }
+
+fn default_next_well_id() -> WellId { 1 }
 
 fn default_scale() -> f32 { 1.0 }
 
 impl Default for Arena {
     fn default() -> Self {
         use crate::game::constants::physics::CENTRAL_MASS;
+        let central_well = GravityWell::new(CENTRAL_WELL_ID, Vec2::ZERO, CENTRAL_MASS, arena::CORE_RADIUS);
+        let mut wells = HashMap::with_capacity(32);
+        wells.insert(CENTRAL_WELL_ID, central_well);
         Self {
             core_radius: arena::CORE_RADIUS,
             inner_radius: arena::INNER_RADIUS,
@@ -270,8 +287,9 @@ impl Default for Arena {
             collapse_progress: 0.0,
             time_until_collapse: arena::COLLAPSE_INTERVAL,
             scale: 1.0,
-            gravity_wells: vec![GravityWell::new(Vec2::ZERO, CENTRAL_MASS, arena::CORE_RADIUS)],
+            gravity_wells: wells,
             shrink_delay_ticks: 0,
+            next_well_id: 1, // Central well uses ID 0
         }
     }
 }
@@ -287,6 +305,48 @@ impl Arena {
     /// Get scaled escape radius
     pub fn scaled_escape_radius(&self) -> f32 {
         self.escape_radius * self.scale
+    }
+
+    /// Allocate a new unique well ID
+    pub fn alloc_well_id(&mut self) -> WellId {
+        let id = self.next_well_id;
+        self.next_well_id += 1;
+        id
+    }
+
+    /// Find a well by ID - O(1) with HashMap
+    pub fn get_well(&self, id: WellId) -> Option<&GravityWell> {
+        self.gravity_wells.get(&id)
+    }
+
+    /// Find a well by ID (mutable) - O(1) with HashMap
+    pub fn get_well_mut(&mut self, id: WellId) -> Option<&mut GravityWell> {
+        self.gravity_wells.get_mut(&id)
+    }
+
+    /// Remove a well by ID - O(1) with HashMap. Returns the removed well if found.
+    pub fn remove_well(&mut self, id: WellId) -> Option<GravityWell> {
+        self.gravity_wells.remove(&id)
+    }
+
+    /// Insert a well into the arena
+    pub fn insert_well(&mut self, well: GravityWell) {
+        self.gravity_wells.insert(well.id, well);
+    }
+
+    /// Get all wells as a slice-like iterator (for gravity calculations)
+    pub fn wells_iter(&self) -> impl Iterator<Item = &GravityWell> {
+        self.gravity_wells.values()
+    }
+
+    /// Get number of wells
+    pub fn well_count(&self) -> usize {
+        self.gravity_wells.len()
+    }
+
+    /// Get number of orbital wells (excluding central)
+    pub fn orbital_well_count(&self) -> usize {
+        self.gravity_wells.len().saturating_sub(1)
     }
 
     /// Update arena scale and gravity wells based on player count
@@ -340,12 +400,14 @@ impl Arena {
         self.middle_radius = arena::MIDDLE_RADIUS;
 
         self.gravity_wells.clear();
+        self.next_well_id = 1; // Reset ID counter (0 is reserved for central well)
 
         // === SUPERMASSIVE BLACK HOLE AT CENTER ===
         // Much larger and more massive than other wells
         let supermassive_mass = CENTRAL_MASS * 3.0;
         let supermassive_core = arena::CORE_RADIUS * 2.5; // 125 radius death zone
-        self.gravity_wells.push(GravityWell::new(Vec2::ZERO, supermassive_mass, supermassive_core));
+        let central_well = GravityWell::new(CENTRAL_WELL_ID, Vec2::ZERO, supermassive_mass, supermassive_core);
+        self.gravity_wells.insert(CENTRAL_WELL_ID, central_well);
 
         // === ORBITAL GRAVITY WELLS (distributed across rings) ===
         // Use the same multi-ring distribution as scale_for_simulation
@@ -410,7 +472,11 @@ impl Arena {
         if arena_changed && previous_escape > 1.0 {
             let scale_factor = self.escape_radius / previous_escape;
 
-            for well in self.gravity_wells.iter_mut().skip(1) {
+            for well in self.gravity_wells.values_mut() {
+                // Skip central well (ID 0)
+                if well.id == CENTRAL_WELL_ID {
+                    continue;
+                }
                 let dist = well.position.length();
                 if dist < 1.0 {
                     continue;
@@ -443,7 +509,7 @@ impl Arena {
     /// Wells explode in sequence (0.5s apart) to avoid performance spikes
     /// The explosion system will remove them when they explode
     pub fn trigger_well_collapse(&mut self, target_wells: usize) -> usize {
-        let current_orbital = self.gravity_wells.len().saturating_sub(1);
+        let current_orbital = self.orbital_well_count();
         if current_orbital <= target_wells {
             return 0;
         }
@@ -451,9 +517,11 @@ impl Arena {
         let excess = current_orbital - target_wells;
         let mut collapsed = 0;
 
-        // Set staggered timers on excess wells (skip index 0 - supermassive)
-        // Start from the end to collapse outer wells first
-        for (i, well) in self.gravity_wells.iter_mut().enumerate().skip(1).rev() {
+        // Set staggered timers on excess wells (skip central well)
+        for well in self.gravity_wells.values_mut() {
+            if well.id == CENTRAL_WELL_ID {
+                continue;
+            }
             if collapsed >= excess {
                 break;
             }
@@ -466,7 +534,7 @@ impl Arena {
                 collapsed += 1;
                 tracing::info!(
                     "Well {} queued for collapse in {:.1}s (excess well {})",
-                    i,
+                    well.id,
                     well.explosion_timer,
                     collapsed
                 );
@@ -530,7 +598,7 @@ impl Arena {
                 let candidate = Vec2::from_angle(angle) * radius;
 
                 let min_dist = self.gravity_wells
-                    .iter()
+                    .values()
                     .map(|w| (w.position - candidate).length())
                     .min_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal))
                     .unwrap_or(f32::MAX);
@@ -546,7 +614,9 @@ impl Arena {
                 }
             }
 
-            self.gravity_wells.push(GravityWell::new(best_pos, well_mass, well_core));
+            let well_id = self.alloc_well_id();
+            let well = GravityWell::new(well_id, best_pos, well_mass, well_core);
+            self.gravity_wells.insert(well_id, well);
         }
     }
 
@@ -910,8 +980,8 @@ mod tests {
 
         // Record well ratios after initial setup
         let setup_escape = arena.escape_radius;
-        let setup_ratios: Vec<f32> = arena.gravity_wells.iter()
-            .skip(1)
+        let setup_ratios: Vec<f32> = arena.gravity_wells.values()
+            .filter(|w| w.id != CENTRAL_WELL_ID)
             .map(|w| w.position.length() / setup_escape)
             .collect();
         let setup_well_count = arena.gravity_wells.len();
@@ -928,16 +998,15 @@ mod tests {
         assert!(final_escape > setup_escape,
             "Arena should have grown: {} > {}", final_escape, setup_escape);
 
-        // Wells should have scaled proportionally
-        for (i, &setup_ratio) in setup_ratios.iter().enumerate() {
-            if i + 1 < arena.gravity_wells.len() {
-                let current_dist = arena.gravity_wells[i + 1].position.length();
-                let current_ratio = current_dist / arena.escape_radius;
+        // Wells should have scaled proportionally - check that all orbital wells are in valid range
+        for well in arena.gravity_wells.values() {
+            if well.id != CENTRAL_WELL_ID {
+                let current_ratio = well.position.length() / arena.escape_radius;
 
                 // Ratio should be within clamped range
                 assert!(current_ratio >= config.well_min_ratio - 0.01 &&
                         current_ratio <= config.well_max_ratio + 0.01,
-                    "Well {} ratio {} outside valid range", i, current_ratio);
+                    "Well {} ratio {} outside valid range", well.id, current_ratio);
             }
         }
 
@@ -999,9 +1068,10 @@ mod tests {
         let initial_count = arena.gravity_wells.len();
 
         // All wells should be reasonably spaced
-        for i in 0..arena.gravity_wells.len() {
-            for j in (i + 1)..arena.gravity_wells.len() {
-                let dist = (arena.gravity_wells[i].position - arena.gravity_wells[j].position).length();
+        let wells: Vec<_> = arena.gravity_wells.values().collect();
+        for i in 0..wells.len() {
+            for j in (i + 1)..wells.len() {
+                let dist = (wells[i].position - wells[j].position).length();
                 assert!(dist > 500.0, "Wells {} and {} too close: {}", i, j, dist);
             }
         }
@@ -1047,11 +1117,14 @@ mod tests {
         use crate::game::constants::arena::CORE_RADIUS;
         use crate::game::constants::physics::CENTRAL_MASS;
         for i in 1..=5 {
-            arena.gravity_wells.push(GravityWell::new(
+            let well_id = arena.alloc_well_id();
+            let well = GravityWell::new(
+                well_id,
                 Vec2::new(500.0 * i as f32, 0.0),
                 CENTRAL_MASS,
                 CORE_RADIUS,
-            ));
+            );
+            arena.gravity_wells.insert(well_id, well);
         }
 
         // Now we have 6 wells total (1 central + 5 orbital)
@@ -1070,13 +1143,15 @@ mod tests {
 
         // Add 5 orbital wells with long timers
         for i in 1..=5 {
+            let well_id = arena.alloc_well_id();
             let mut well = GravityWell::new(
+                well_id,
                 Vec2::new(500.0 * i as f32, 0.0),
                 CENTRAL_MASS,
                 CORE_RADIUS,
             );
             well.explosion_timer = 30.0;  // Long timer
-            arena.gravity_wells.push(well);
+            arena.gravity_wells.insert(well_id, well);
         }
 
         // Trigger collapse to reduce to 2 target wells
@@ -1086,15 +1161,15 @@ mod tests {
         assert_eq!(collapsed, 3);
 
         // Check that 3 wells have short timers and are charging
-        let charging_count = arena.gravity_wells.iter()
-            .skip(1)  // Skip central
+        let charging_count = arena.gravity_wells.values()
+            .filter(|w| w.id != CENTRAL_WELL_ID)
             .filter(|w| w.is_charging && w.explosion_timer < 2.0)
             .count();
         assert_eq!(charging_count, 3);
 
         // Check staggered timers (0.5, 1.0, 1.5)
-        let timers: Vec<f32> = arena.gravity_wells.iter()
-            .skip(1)
+        let timers: Vec<f32> = arena.gravity_wells.values()
+            .filter(|w| w.id != CENTRAL_WELL_ID)
             .filter(|w| w.is_charging)
             .map(|w| w.explosion_timer)
             .collect();
@@ -1119,7 +1194,9 @@ mod tests {
 
         // Add wells - some already about to explode
         for i in 1..=4 {
+            let well_id = arena.alloc_well_id();
             let mut well = GravityWell::new(
+                well_id,
                 Vec2::new(500.0 * i as f32, 0.0),
                 CENTRAL_MASS,
                 CORE_RADIUS,
@@ -1129,7 +1206,7 @@ mod tests {
             } else {
                 well.explosion_timer = 30.0;  // Normal timer
             }
-            arena.gravity_wells.push(well);
+            arena.gravity_wells.insert(well_id, well);
         }
 
         // Try to collapse 3 (target = 1, so 3 excess)

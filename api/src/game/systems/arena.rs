@@ -56,7 +56,7 @@ fn update_arena_radii(state: &mut GameState) {
 fn check_player_boundaries(state: &mut GameState, dt: f32) -> Vec<ArenaEvent> {
     let mut events = Vec::new();
     let safe_radius = state.arena.current_safe_radius();
-    let wells = state.arena.gravity_wells.clone();
+    let wells: Vec<_> = state.arena.gravity_wells.values().cloned().collect();
 
     for player in state.players.values_mut() {
         if !player.alive {
@@ -725,12 +725,12 @@ mod tests {
         let supermassive_core = CORE_RADIUS * 2.5; // 125 units
         let wells = vec![
             // Supermassive at center
-            GravityWell::new(Vec2::ZERO, CENTRAL_MASS * 3.0, supermassive_core),
+            GravityWell::new(0, Vec2::ZERO, CENTRAL_MASS * 3.0, supermassive_core),
             // Orbital well at 300 units from center - close enough that
             // spawning 250-350 units toward center could enter death zone
-            GravityWell::new(Vec2::new(300.0, 0.0), CENTRAL_MASS, CORE_RADIUS),
+            GravityWell::new(1, Vec2::new(300.0, 0.0), CENTRAL_MASS, CORE_RADIUS),
             // Another orbital well
-            GravityWell::new(Vec2::new(-400.0, 200.0), CENTRAL_MASS, CORE_RADIUS),
+            GravityWell::new(2, Vec2::new(-400.0, 200.0), CENTRAL_MASS, CORE_RADIUS),
         ];
 
         // Run many spawn attempts to verify none land in death zones
@@ -762,9 +762,9 @@ mod tests {
         // This simulates the worst case scenario
         let supermassive_core = CORE_RADIUS * 2.5; // 125 units
         let wells = vec![
-            GravityWell::new(Vec2::ZERO, CENTRAL_MASS * 3.0, supermassive_core),
+            GravityWell::new(0, Vec2::ZERO, CENTRAL_MASS * 3.0, supermassive_core),
             // Orbital at 200 units - spawn at 250 toward center would be at -50 from origin!
-            GravityWell::new(Vec2::new(200.0, 0.0), CENTRAL_MASS, CORE_RADIUS),
+            GravityWell::new(1, Vec2::new(200.0, 0.0), CENTRAL_MASS, CORE_RADIUS),
         ];
 
         for _ in 0..100 {
@@ -800,11 +800,11 @@ mod tests {
             arena.update_for_player_count(player_count);
 
             let safe_radius = arena.current_safe_radius();
-            let wells = &arena.gravity_wells;
+            let wells: Vec<_> = arena.gravity_wells.values().cloned().collect();
 
             // Test many spawn positions using bounded spawn
             for _ in 0..50 {
-                let pos = spawn_near_well_bounded(wells, Some(safe_radius));
+                let pos = spawn_near_well_bounded(&wells, Some(safe_radius));
                 let dist_from_center = pos.length();
 
                 assert!(
