@@ -165,11 +165,57 @@ pub struct GravityWell {
     pub position: Vec2,
     pub mass: f32,
     pub core_radius: f32, // Death zone radius
+    /// Timer until next explosion (counts down)
+    #[serde(default)]
+    pub explosion_timer: f32,
+    /// Whether the well is currently charging (pre-explosion warning)
+    #[serde(default)]
+    pub is_charging: bool,
 }
 
 impl GravityWell {
     pub fn new(position: Vec2, mass: f32, core_radius: f32) -> Self {
-        Self { position, mass, core_radius }
+        Self {
+            position,
+            mass,
+            core_radius,
+            explosion_timer: Self::random_explosion_delay(),
+            is_charging: false,
+        }
+    }
+
+    /// Generate a random explosion delay (30-90 seconds)
+    pub fn random_explosion_delay() -> f32 {
+        use rand::Rng;
+        let mut rng = rand::thread_rng();
+        rng.gen_range(30.0..90.0)
+    }
+}
+
+/// An expanding gravity wave from a well explosion
+#[derive(Debug, Clone)]
+pub struct GravityWave {
+    /// Center position of the wave
+    pub position: Vec2,
+    /// Current radius of the expanding wave front
+    pub radius: f32,
+    /// Wave strength (force multiplier)
+    pub strength: f32,
+    /// Age of the wave in seconds
+    pub age: f32,
+    /// Players already hit by this wave (to apply impulse only once)
+    pub hit_players: Vec<PlayerId>,
+}
+
+impl GravityWave {
+    pub fn new(position: Vec2, strength: f32) -> Self {
+        Self {
+            position,
+            radius: 0.0,
+            strength,
+            age: 0.0,
+            hit_players: Vec::new(),
+        }
     }
 }
 
@@ -498,6 +544,9 @@ pub struct GameState {
     pub players: HashMap<PlayerId, Player>,
     pub projectiles: Vec<Projectile>,
     pub debris: Vec<Debris>,
+    /// Active gravity waves from well explosions (not serialized - visual only)
+    #[serde(skip)]
+    pub gravity_waves: Vec<GravityWave>,
     next_entity_id: EntityId,
 }
 

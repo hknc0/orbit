@@ -9,6 +9,7 @@ use tokio::sync::RwLock;
 use tokio::time::{interval, Instant};
 use tracing::{debug, info, warn};
 
+use crate::config::GravityWaveConfig;
 use crate::game::constants::{ai, physics};
 use crate::game::game_loop::{GameLoop, GameLoopConfig, GameLoopEvent};
 use crate::game::performance::{PerformanceMonitor, PerformanceStatus};
@@ -140,7 +141,13 @@ impl GameSession {
             count
         };
 
-        let mut game_loop = GameLoop::new(GameLoopConfig::default());
+        // Load gravity wave config from environment
+        let gravity_wave_config = GravityWaveConfig::from_env();
+
+        let mut game_loop = GameLoop::new(GameLoopConfig {
+            gravity_wave_config,
+            ..GameLoopConfig::default()
+        });
 
         // Start in Playing phase immediately (no waiting/countdown)
         game_loop.state_mut().match_state.phase = MatchPhase::Playing;
@@ -952,6 +959,19 @@ pub fn start_game_loop(session: Arc<RwLock<GameSession>>) {
                             player_b: *player_b,
                             position: *position,
                             intensity: *intensity,
+                        })
+                    }
+                    GameLoopEvent::GravityWellCharging { well_index, position } => {
+                        Some(GameEvent::GravityWellCharging {
+                            well_index: *well_index,
+                            position: *position,
+                        })
+                    }
+                    GameLoopEvent::GravityWaveExplosion { well_index, position, strength } => {
+                        Some(GameEvent::GravityWaveExplosion {
+                            well_index: *well_index,
+                            position: *position,
+                            strength: *strength,
                         })
                     }
                     // Other events are already reflected in state snapshots

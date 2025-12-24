@@ -357,6 +357,22 @@ pub enum GameEvent {
         /// Intensity 0-1 for visual effect scaling
         intensity: f32,
     },
+    /// A gravity well is charging up (warning before explosion)
+    GravityWellCharging {
+        /// Well index in the gravity_wells array
+        well_index: u8,
+        /// Well position
+        position: Vec2,
+    },
+    /// A gravity well exploded, creating an expanding wave
+    GravityWaveExplosion {
+        /// Well index that exploded
+        well_index: u8,
+        /// Center position of the explosion
+        position: Vec2,
+        /// Wave strength (0-1, based on well mass)
+        strength: f32,
+    },
 }
 
 /// Encode a message using bincode

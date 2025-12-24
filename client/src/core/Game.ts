@@ -295,6 +295,32 @@ export class Game {
         }
         break;
       }
+
+      case 'GravityWellCharging': {
+        // Add charging effect for warning
+        this.world.addChargingWell(event.position, event.wellIndex);
+        break;
+      }
+
+      case 'GravityWaveExplosion': {
+        // Add expanding wave effect
+        this.world.addGravityWaveEffect(event.position, event.strength, event.wellIndex);
+
+        // Trigger screen shake based on distance to local player
+        const localPlayer = this.world.getLocalPlayer();
+        if (localPlayer && localPlayer.alive) {
+          const dx = localPlayer.position.x - event.position.x;
+          const dy = localPlayer.position.y - event.position.y;
+          const dist = Math.sqrt(dx * dx + dy * dy);
+          // Shake intensity based on distance (stronger when closer)
+          const maxDist = 1500;
+          if (dist < maxDist) {
+            const intensity = event.strength * (1 - dist / maxDist) * 0.8;
+            this.renderSystem.triggerShake(intensity);
+          }
+        }
+        break;
+      }
     }
   }
 

@@ -2,6 +2,7 @@ use std::collections::HashMap;
 use std::time::{Duration, Instant};
 use uuid::Uuid;
 
+use crate::config::GravityWaveConfig;
 use crate::game::constants::physics::{DT, TICK_RATE};
 use crate::game::match_result::{check_match_end, determine_result, MatchEndReason, MatchResult};
 use crate::game::state::{GameState, MatchPhase, PlayerId};
@@ -32,6 +33,17 @@ pub enum GameLoopEvent {
         position: Vec2,
         intensity: f32,
     },
+    /// A gravity well started charging (warning before explosion)
+    GravityWellCharging {
+        well_index: u8,
+        position: Vec2,
+    },
+    /// A gravity well exploded, creating an expanding wave
+    GravityWaveExplosion {
+        well_index: u8,
+        position: Vec2,
+        strength: f32,
+    },
 }
 
 /// Configuration for the game loop
@@ -39,6 +51,7 @@ pub enum GameLoopEvent {
 pub struct GameLoopConfig {
     pub tick_rate: u32,
     pub enable_inter_entity_gravity: bool,
+    pub gravity_wave_config: GravityWaveConfig,
 }
 
 impl Default for GameLoopConfig {
@@ -46,6 +59,7 @@ impl Default for GameLoopConfig {
         Self {
             tick_rate: TICK_RATE,
             enable_inter_entity_gravity: false,
+            gravity_wave_config: GravityWaveConfig::default(),
         }
     }
 }
@@ -72,6 +86,11 @@ impl GameLoop {
             last_tick_time: Instant::now(),
             accumulator: Duration::ZERO,
         }
+    }
+
+    /// Get gravity wave config
+    pub fn gravity_wave_config(&self) -> &GravityWaveConfig {
+        &self.config.gravity_wave_config
     }
 
     /// Get current game state
@@ -138,6 +157,24 @@ impl GameLoop {
             gravity::update_inter_entity(&mut self.state, DT);
         }
         physics::update(&mut self.state, DT);
+
+        // Update gravity wave explosions (occasional random events)
+        // Only if feature is enabled via config
+        if self.config.gravity_wave_config.enabled {
+            let wave_events = gravity::update_explosions(&mut self.state, &self.config.gravity_wave_config, DT);
+            for event in wave_events {
+                match event {
+                    gravity::GravityWaveEvent::WellCharging { well_index, position } => {
+                        events.push(GameLoopEvent::GravityWellCharging { well_index, position });
+                    }
+                    gravity::GravityWaveEvent::WellExploded { well_index, position, strength } => {
+                        events.push(GameLoopEvent::GravityWaveExplosion { well_index, position, strength });
+                    }
+                }
+            }
+            // Update active gravity waves (expanding and pushing players)
+            gravity::update_waves(&mut self.state, &self.config.gravity_wave_config, DT);
+        }
 
         // Run collision system
         let collision_events = collision::update(&mut self.state);

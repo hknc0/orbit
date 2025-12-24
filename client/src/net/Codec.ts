@@ -495,6 +495,19 @@ function readGameEvent(reader: BinaryReader): GameEvent {
         position: { x: reader.readF32(), y: reader.readF32() },
         intensity: reader.readF32(),
       };
+    case 7: // GravityWellCharging
+      return {
+        type: 'GravityWellCharging',
+        wellIndex: reader.readU8(),
+        position: { x: reader.readF32(), y: reader.readF32() },
+      };
+    case 8: // GravityWaveExplosion
+      return {
+        type: 'GravityWaveExplosion',
+        wellIndex: reader.readU8(),
+        position: { x: reader.readF32(), y: reader.readF32() },
+        strength: reader.readF32(),
+      };
     default:
       throw new Error(`Unknown game event variant: ${variant}`);
   }

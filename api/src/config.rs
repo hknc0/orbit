@@ -1,5 +1,7 @@
 use std::net::{IpAddr, Ipv4Addr};
 
+use crate::game::constants::gravity_waves;
+
 /// Server configuration
 #[derive(Debug, Clone)]
 pub struct ServerConfig {
@@ -103,6 +105,155 @@ impl ServerConfig {
     }
 }
 
+/// Gravity wave explosion configuration
+/// Controls the random well explosions that create expanding shockwaves
+/// All values can be overridden via GRAVITY_WAVE_* environment variables
+#[derive(Debug, Clone)]
+pub struct GravityWaveConfig {
+    /// Master switch - when false, wells never explode
+    pub enabled: bool,
+    /// Wave expansion speed (units/second)
+    pub wave_speed: f32,
+    /// Thickness of the wave front where players get pushed (units)
+    pub wave_front_thickness: f32,
+    /// Base impulse force applied to players
+    pub wave_base_impulse: f32,
+    /// Maximum wave radius before despawning
+    pub wave_max_radius: f32,
+    /// Warning/charging duration before explosion (seconds)
+    pub charge_duration: f32,
+    /// Minimum time between explosions per well (seconds)
+    pub min_explosion_delay: f32,
+    /// Maximum time between explosions per well (seconds)
+    pub max_explosion_delay: f32,
+}
+
+impl Default for GravityWaveConfig {
+    fn default() -> Self {
+        Self {
+            enabled: gravity_waves::ENABLED,
+            wave_speed: gravity_waves::WAVE_SPEED,
+            wave_front_thickness: gravity_waves::WAVE_FRONT_THICKNESS,
+            wave_base_impulse: gravity_waves::WAVE_BASE_IMPULSE,
+            wave_max_radius: gravity_waves::WAVE_MAX_RADIUS,
+            charge_duration: gravity_waves::CHARGE_DURATION,
+            min_explosion_delay: gravity_waves::MIN_EXPLOSION_DELAY,
+            max_explosion_delay: gravity_waves::MAX_EXPLOSION_DELAY,
+        }
+    }
+}
+
+impl GravityWaveConfig {
+    /// Load config from environment variables, falling back to defaults
+    pub fn from_env() -> Self {
+        let mut config = Self::default();
+
+        // Feature flag
+        if let Ok(val) = std::env::var("GRAVITY_WAVE_ENABLED") {
+            config.enabled = val.to_lowercase() == "true" || val == "1";
+        }
+
+        // Wave expansion speed
+        if let Ok(val) = std::env::var("GRAVITY_WAVE_SPEED") {
+            if let Ok(parsed) = val.parse::<f32>() {
+                if parsed > 0.0 && parsed <= 2000.0 {
+                    config.wave_speed = parsed;
+                } else {
+                    tracing::warn!("GRAVITY_WAVE_SPEED must be 0-2000, using default");
+                }
+            }
+        }
+
+        // Wave front thickness
+        if let Ok(val) = std::env::var("GRAVITY_WAVE_FRONT_THICKNESS") {
+            if let Ok(parsed) = val.parse::<f32>() {
+                if parsed > 0.0 && parsed <= 500.0 {
+                    config.wave_front_thickness = parsed;
+                } else {
+                    tracing::warn!("GRAVITY_WAVE_FRONT_THICKNESS must be 0-500, using default");
+                }
+            }
+        }
+
+        // Base impulse force
+        if let Ok(val) = std::env::var("GRAVITY_WAVE_BASE_IMPULSE") {
+            if let Ok(parsed) = val.parse::<f32>() {
+                if parsed >= 0.0 && parsed <= 1000.0 {
+                    config.wave_base_impulse = parsed;
+                } else {
+                    tracing::warn!("GRAVITY_WAVE_BASE_IMPULSE must be 0-1000, using default");
+                }
+            }
+        }
+
+        // Maximum wave radius
+        if let Ok(val) = std::env::var("GRAVITY_WAVE_MAX_RADIUS") {
+            if let Ok(parsed) = val.parse::<f32>() {
+                if parsed > 100.0 && parsed <= 10000.0 {
+                    config.wave_max_radius = parsed;
+                } else {
+                    tracing::warn!("GRAVITY_WAVE_MAX_RADIUS must be 100-10000, using default");
+                }
+            }
+        }
+
+        // Charge duration
+        if let Ok(val) = std::env::var("GRAVITY_WAVE_CHARGE_DURATION") {
+            if let Ok(parsed) = val.parse::<f32>() {
+                if parsed >= 0.0 && parsed <= 10.0 {
+                    config.charge_duration = parsed;
+                } else {
+                    tracing::warn!("GRAVITY_WAVE_CHARGE_DURATION must be 0-10, using default");
+                }
+            }
+        }
+
+        // Minimum explosion delay
+        if let Ok(val) = std::env::var("GRAVITY_WAVE_MIN_DELAY") {
+            if let Ok(parsed) = val.parse::<f32>() {
+                if parsed >= 5.0 && parsed <= 600.0 {
+                    config.min_explosion_delay = parsed;
+                } else {
+                    tracing::warn!("GRAVITY_WAVE_MIN_DELAY must be 5-600, using default");
+                }
+            }
+        }
+
+        // Maximum explosion delay
+        if let Ok(val) = std::env::var("GRAVITY_WAVE_MAX_DELAY") {
+            if let Ok(parsed) = val.parse::<f32>() {
+                if parsed >= config.min_explosion_delay && parsed <= 600.0 {
+                    config.max_explosion_delay = parsed;
+                } else {
+                    tracing::warn!("GRAVITY_WAVE_MAX_DELAY must be >= min_delay and <= 600, using default");
+                }
+            }
+        }
+
+        // Log config if enabled
+        if config.enabled {
+            tracing::info!(
+                "Gravity waves enabled: speed={}, impulse={}, delay={}-{}s",
+                config.wave_speed,
+                config.wave_base_impulse,
+                config.min_explosion_delay,
+                config.max_explosion_delay
+            );
+        } else {
+            tracing::info!("Gravity waves disabled");
+        }
+
+        config
+    }
+
+    /// Generate a random explosion delay using this config
+    pub fn random_explosion_delay(&self) -> f32 {
+        use rand::Rng;
+        let mut rng = rand::thread_rng();
+        rng.gen_range(self.min_explosion_delay..self.max_explosion_delay)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -120,5 +271,23 @@ mod tests {
     fn test_load_or_default() {
         let config = ServerConfig::load_or_default();
         assert!(config.port > 0);
+    }
+
+    #[test]
+    fn test_gravity_wave_config_defaults() {
+        let config = GravityWaveConfig::default();
+        assert!(config.enabled);
+        assert_eq!(config.wave_speed, 300.0);
+        assert_eq!(config.wave_base_impulse, 180.0);
+        assert_eq!(config.min_explosion_delay, 30.0);
+        assert_eq!(config.max_explosion_delay, 90.0);
+    }
+
+    #[test]
+    fn test_gravity_wave_random_delay() {
+        let config = GravityWaveConfig::default();
+        let delay = config.random_explosion_delay();
+        assert!(delay >= config.min_explosion_delay);
+        assert!(delay <= config.max_explosion_delay);
     }
 }

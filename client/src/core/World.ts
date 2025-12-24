@@ -33,6 +33,12 @@ const DEATH_EFFECT_DURATION = 800;
 const COLLISION_EFFECT_DURATION = 300;
 // Max collision effects at once
 const MAX_COLLISION_EFFECTS = 10;
+// Gravity wave effect duration in ms
+const WAVE_EFFECT_DURATION = 6000; // Waves expand for 6 seconds
+// Max wave effects at once
+const MAX_WAVE_EFFECTS = 10;
+// Wave charging duration in ms
+const WAVE_CHARGE_DURATION = 2000;
 
 // Death effect data
 interface DeathEffect {
@@ -47,6 +53,21 @@ interface CollisionEffect {
   timestamp: number;
   intensity: number;
   color: string;
+}
+
+// Gravity wave effect data (expanding ring from well explosion)
+interface GravityWaveEffect {
+  position: { x: number; y: number };
+  timestamp: number;
+  strength: number;
+  wellIndex: number;
+}
+
+// Charging well data (warning before explosion)
+interface ChargingWell {
+  position: { x: number; y: number };
+  timestamp: number;
+  wellIndex: number;
 }
 
 export class World {
@@ -82,6 +103,12 @@ export class World {
 
   // Collision effects (flash + ring at collision point)
   private collisionEffects: CollisionEffect[] = [];
+
+  // Gravity wave effects (expanding rings from well explosions)
+  private gravityWaveEffects: GravityWaveEffect[] = [];
+
+  // Wells currently charging (warning state before explosion)
+  private chargingWells: ChargingWell[] = [];
 
   // Previous alive states to detect deaths
   private lastAliveStates: Map<PlayerId, { alive: boolean; position: { x: number; y: number }; color: string }> = new Map();
@@ -396,6 +423,70 @@ export class World {
     }));
   }
 
+  // Add a charging well effect (called when GravityWellCharging event received)
+  addChargingWell(position: { x: number; y: number }, wellIndex: number): void {
+    // Remove any existing charging for this well
+    this.chargingWells = this.chargingWells.filter((w) => w.wellIndex !== wellIndex);
+    this.chargingWells.push({
+      position: { x: position.x, y: position.y },
+      timestamp: Date.now(),
+      wellIndex,
+    });
+  }
+
+  // Add a gravity wave effect (called when GravityWaveExplosion event received)
+  addGravityWaveEffect(
+    position: { x: number; y: number },
+    strength: number,
+    wellIndex: number
+  ): void {
+    // Remove charging state for this well
+    this.chargingWells = this.chargingWells.filter((w) => w.wellIndex !== wellIndex);
+
+    // Enforce max effects limit
+    if (this.gravityWaveEffects.length >= MAX_WAVE_EFFECTS) {
+      this.gravityWaveEffects.shift(); // Remove oldest
+    }
+    this.gravityWaveEffects.push({
+      position: { x: position.x, y: position.y },
+      timestamp: Date.now(),
+      strength,
+      wellIndex,
+    });
+  }
+
+  // Get active gravity wave effects for rendering
+  getGravityWaveEffects(): Array<{
+    position: { x: number; y: number };
+    progress: number; // 0 = just started, 1 = fully expanded
+    strength: number;
+  }> {
+    const now = Date.now();
+    return this.gravityWaveEffects
+      .filter((effect) => now - effect.timestamp < WAVE_EFFECT_DURATION)
+      .map((effect) => ({
+        position: effect.position,
+        progress: (now - effect.timestamp) / WAVE_EFFECT_DURATION,
+        strength: effect.strength,
+      }));
+  }
+
+  // Get charging wells for rendering warning effect
+  getChargingWells(): Array<{
+    position: { x: number; y: number };
+    progress: number; // 0 = just started charging, 1 = about to explode
+    wellIndex: number;
+  }> {
+    const now = Date.now();
+    return this.chargingWells
+      .filter((well) => now - well.timestamp < WAVE_CHARGE_DURATION)
+      .map((well) => ({
+        position: well.position,
+        progress: (now - well.timestamp) / WAVE_CHARGE_DURATION,
+        wellIndex: well.wellIndex,
+      }));
+  }
+
   // Get session stats for HUD
   getSessionStats() {
     return {
@@ -413,6 +504,8 @@ export class World {
     this.lastKillCounts.clear();
     this.deathEffects = [];
     this.collisionEffects = [];
+    this.gravityWaveEffects = [];
+    this.chargingWells = [];
     this.lastAliveStates.clear();
     this.sessionStats = {
       bestMass: 0,

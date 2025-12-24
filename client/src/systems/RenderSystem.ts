@@ -214,6 +214,8 @@ export class RenderSystem {
 
     // Render in order (back to front)
     this.renderArena(world);
+    this.renderChargingWells(world);
+    this.renderGravityWaves(world);
     this.renderDeathEffects(world);
     this.renderCollisionEffects(world);
     this.renderPlayerTrails(world);
@@ -800,6 +802,115 @@ export class RenderSystem {
         ctx.fillStyle = this.colorWithAlpha(color, baseAlpha * 0.6);
         ctx.beginPath();
         ctx.arc(px, py, size, 0, Math.PI * 2);
+        ctx.fill();
+      }
+    }
+  }
+
+  // Render charging wells (pulsing warning before explosion)
+  private renderChargingWells(world: World): void {
+    const chargingWells = world.getChargingWells();
+    const ctx = this.ctx;
+
+    for (const well of chargingWells) {
+      const { position, progress } = well;
+
+      // Find the corresponding well to get its core radius
+      const wellData = world.arena.gravityWells[well.wellIndex];
+      const coreRadius = wellData?.coreRadius ?? 50;
+
+      // Pulsing intensity increases as explosion approaches
+      const pulseSpeed = 5 + progress * 15; // Faster as it gets closer
+      const pulse = 0.5 + 0.5 * Math.sin(Date.now() / (1000 / pulseSpeed));
+      const intensity = progress * pulse;
+
+      // Inner warning glow
+      const glowRadius = coreRadius * (1.5 + progress * 0.5);
+      const gradient = ctx.createRadialGradient(
+        position.x, position.y, coreRadius * 0.5,
+        position.x, position.y, glowRadius
+      );
+      gradient.addColorStop(0, `rgba(255, 100, 50, ${intensity * 0.6})`);
+      gradient.addColorStop(0.5, `rgba(255, 50, 20, ${intensity * 0.3})`);
+      gradient.addColorStop(1, 'rgba(255, 0, 0, 0)');
+
+      ctx.fillStyle = gradient;
+      ctx.beginPath();
+      ctx.arc(position.x, position.y, glowRadius, 0, Math.PI * 2);
+      ctx.fill();
+
+      // Pulsing ring
+      ctx.strokeStyle = `rgba(255, 150, 50, ${intensity * 0.8})`;
+      ctx.lineWidth = 2 + progress * 3;
+      ctx.beginPath();
+      ctx.arc(position.x, position.y, coreRadius * (1.2 + pulse * 0.3), 0, Math.PI * 2);
+      ctx.stroke();
+    }
+  }
+
+  // Render expanding gravity wave effects
+  private renderGravityWaves(world: World): void {
+    const waves = world.getGravityWaveEffects();
+    const ctx = this.ctx;
+
+    // Wave constants (should match server)
+    const WAVE_MAX_RADIUS = 2000;
+    const WAVE_FRONT_THICKNESS = 80;
+
+    for (const wave of waves) {
+      const { position, progress, strength } = wave;
+
+      // Current wave radius
+      const radius = progress * WAVE_MAX_RADIUS;
+
+      // Alpha decreases as wave expands
+      const alpha = (1 - progress) * strength;
+      if (alpha < 0.02) continue;
+
+      // Main wave ring
+      const ringInner = Math.max(0, radius - WAVE_FRONT_THICKNESS * 0.5);
+      const ringOuter = radius + WAVE_FRONT_THICKNESS * 0.5;
+
+      // Gradient for wave front
+      const gradient = ctx.createRadialGradient(
+        position.x, position.y, ringInner,
+        position.x, position.y, ringOuter
+      );
+
+      // Orange/red wave color
+      gradient.addColorStop(0, 'rgba(255, 100, 50, 0)');
+      gradient.addColorStop(0.3, `rgba(255, 150, 80, ${alpha * 0.4})`);
+      gradient.addColorStop(0.5, `rgba(255, 200, 100, ${alpha * 0.6})`);
+      gradient.addColorStop(0.7, `rgba(255, 150, 80, ${alpha * 0.4})`);
+      gradient.addColorStop(1, 'rgba(255, 100, 50, 0)');
+
+      ctx.fillStyle = gradient;
+      ctx.beginPath();
+      ctx.arc(position.x, position.y, ringOuter, 0, Math.PI * 2);
+      ctx.arc(position.x, position.y, ringInner, 0, Math.PI * 2, true);
+      ctx.fill();
+
+      // Brighter leading edge
+      ctx.strokeStyle = `rgba(255, 220, 150, ${alpha * 0.8})`;
+      ctx.lineWidth = 2;
+      ctx.beginPath();
+      ctx.arc(position.x, position.y, radius, 0, Math.PI * 2);
+      ctx.stroke();
+
+      // Inner glow (fades quickly)
+      if (progress < 0.3) {
+        const innerAlpha = (0.3 - progress) / 0.3 * strength;
+        const innerGradient = ctx.createRadialGradient(
+          position.x, position.y, 0,
+          position.x, position.y, radius * 0.5
+        );
+        innerGradient.addColorStop(0, `rgba(255, 255, 200, ${innerAlpha * 0.5})`);
+        innerGradient.addColorStop(0.5, `rgba(255, 200, 100, ${innerAlpha * 0.3})`);
+        innerGradient.addColorStop(1, 'rgba(255, 150, 50, 0)');
+
+        ctx.fillStyle = innerGradient;
+        ctx.beginPath();
+        ctx.arc(position.x, position.y, radius * 0.5, 0, Math.PI * 2);
         ctx.fill();
       }
     }
@@ -1428,6 +1539,53 @@ export class RenderSystem {
           this.ctx.fill();
         }
       }
+    }
+
+    // 1c. Charging wells - pulsing warning indicator
+    const chargingWells = world.getChargingWells();
+    for (const charging of chargingWells) {
+      const wellX = centerX + charging.position.x * scale;
+      const wellY = centerY + charging.position.y * scale;
+      const dist = Math.sqrt(Math.pow(wellX - centerX, 2) + Math.pow(wellY - centerY, 2));
+
+      if (dist < minimapSize / 2 - 2) {
+        const pulse = 0.5 + 0.5 * Math.sin(Date.now() / 100);
+        const alpha = charging.progress * pulse;
+
+        // Pulsing red/orange glow
+        this.ctx.fillStyle = `rgba(255, 100, 50, ${alpha * 0.6})`;
+        this.ctx.beginPath();
+        this.ctx.arc(wellX, wellY, 5 + charging.progress * 3, 0, Math.PI * 2);
+        this.ctx.fill();
+
+        // Warning ring
+        this.ctx.strokeStyle = `rgba(255, 150, 50, ${alpha})`;
+        this.ctx.lineWidth = 1.5;
+        this.ctx.beginPath();
+        this.ctx.arc(wellX, wellY, 4 + pulse * 2, 0, Math.PI * 2);
+        this.ctx.stroke();
+      }
+    }
+
+    // 1d. Gravity waves - expanding rings
+    const waves = world.getGravityWaveEffects();
+    const WAVE_MAX_RADIUS = 2000;
+
+    for (const wave of waves) {
+      const waveX = centerX + wave.position.x * scale;
+      const waveY = centerY + wave.position.y * scale;
+      const waveRadius = wave.progress * WAVE_MAX_RADIUS * scale;
+
+      // Only draw if within minimap and visible
+      const alpha = (1 - wave.progress) * wave.strength;
+      if (alpha < 0.1 || waveRadius < 1) continue;
+
+      // Expanding ring on minimap
+      this.ctx.strokeStyle = `rgba(255, 180, 80, ${alpha * 0.8})`;
+      this.ctx.lineWidth = 1.5;
+      this.ctx.beginPath();
+      this.ctx.arc(waveX, waveY, waveRadius, 0, Math.PI * 2);
+      this.ctx.stroke();
     }
 
     // Helper to clamp position to minimap bounds

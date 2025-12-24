@@ -141,6 +141,56 @@ pub mod net {
     pub const INPUT_BUFFER_SIZE: usize = 10;
 }
 
+/// Gravity wave explosion constants
+/// Wells randomly explode creating expanding shockwaves that push players outward
+/// All values can be overridden via GRAVITY_WAVE_* environment variables
+pub mod gravity_waves {
+    /// Master switch to enable/disable gravity wave explosions
+    /// When false, wells never explode (useful for testing or gameplay variety)
+    /// ENV: GRAVITY_WAVE_ENABLED (true/false)
+    pub const ENABLED: bool = true;
+
+    /// Wave expansion speed in units per second
+    /// Higher = faster expanding rings, less time to react
+    /// Lower = slower, more time to reposition
+    /// ENV: GRAVITY_WAVE_SPEED
+    pub const WAVE_SPEED: f32 = 300.0;
+
+    /// Thickness of the wave front in units
+    /// This is the "band" where players get pushed
+    /// Thicker = easier to get caught, longer push duration
+    /// ENV: GRAVITY_WAVE_FRONT_THICKNESS
+    pub const WAVE_FRONT_THICKNESS: f32 = 80.0;
+
+    /// Base impulse force applied to players when wave passes
+    /// This is added to player velocity (instant push)
+    /// Higher = more dramatic knockback
+    /// ENV: GRAVITY_WAVE_BASE_IMPULSE
+    pub const WAVE_BASE_IMPULSE: f32 = 180.0;
+
+    /// Maximum radius before wave despawns
+    /// Waves expand until they reach this radius then disappear
+    /// Should be large enough to affect nearby players
+    /// ENV: GRAVITY_WAVE_MAX_RADIUS
+    pub const WAVE_MAX_RADIUS: f32 = 2000.0;
+
+    /// Duration of the charging/warning phase in seconds
+    /// Players see pulsing glow for this long before explosion
+    /// Longer = more time to escape, shorter = more surprise
+    /// ENV: GRAVITY_WAVE_CHARGE_DURATION
+    pub const CHARGE_DURATION: f32 = 2.0;
+
+    /// Minimum time between explosions per well (seconds)
+    /// Random delay is chosen between MIN and MAX
+    /// ENV: GRAVITY_WAVE_MIN_DELAY
+    pub const MIN_EXPLOSION_DELAY: f32 = 30.0;
+
+    /// Maximum time between explosions per well (seconds)
+    /// Longer range = more unpredictable timing
+    /// ENV: GRAVITY_WAVE_MAX_DELAY
+    pub const MAX_EXPLOSION_DELAY: f32 = 90.0;
+}
+
 /// Calculate radius from mass
 #[inline]
 pub fn mass_to_radius(mass: f32) -> f32 {

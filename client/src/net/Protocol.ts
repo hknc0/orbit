@@ -149,6 +149,17 @@ export type GameEvent =
       playerB: PlayerId;
       position: { x: number; y: number };
       intensity: number;
+    }
+  | {
+      type: 'GravityWellCharging';
+      wellIndex: number;
+      position: { x: number; y: number };
+    }
+  | {
+      type: 'GravityWaveExplosion';
+      wellIndex: number;
+      position: { x: number; y: number };
+      strength: number;
     };
 
 // Create a default player input
