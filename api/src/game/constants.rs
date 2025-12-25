@@ -39,6 +39,19 @@ pub mod boost {
     pub const BASE_COST: f32 = 2.0;
     /// Mass-proportional cost multiplier
     pub const MASS_COST_RATIO: f32 = 0.01;
+
+    // Speed scaling constants - agar.io style where larger players are slower
+    /// Reference mass for speed scaling (at this mass, thrust multiplier = 1.0)
+    pub const SPEED_REFERENCE_MASS: f32 = 100.0;
+    /// Exponent for speed scaling curve (0.5 = sqrt, agar.io style)
+    /// Higher = steeper penalty for large mass, 0.0 = no scaling
+    /// Note: Currently hardcoded to use sqrt() for performance, this constant is for documentation
+    #[allow(dead_code)]
+    pub const SPEED_SCALING_EXPONENT: f32 = 0.5;
+    /// Minimum thrust multiplier (prevents huge players from being immobile)
+    pub const SPEED_MIN_MULTIPLIER: f32 = 0.25;
+    /// Maximum thrust multiplier (prevents tiny players from being too fast)
+    pub const SPEED_MAX_MULTIPLIER: f32 = 3.5;
 }
 
 /// Mass ejection (projectile) constants
@@ -279,6 +292,27 @@ pub fn radius_to_mass(radius: f32) -> f32 {
     (radius / mass::RADIUS_SCALE).powi(2)
 }
 
+/// Calculate thrust multiplier based on player mass
+/// Returns 1.0 at reference mass (100), higher for smaller mass (faster), lower for larger mass (slower)
+/// Uses sqrt curve for agar.io style feel: multiplier = sqrt(100/mass)
+///
+/// Performance: Uses fast sqrt instead of powf, inlined for hot path
+#[inline]
+pub fn mass_to_thrust_multiplier(mass: f32) -> f32 {
+    // Use sqrt directly instead of powf(0.5) for better performance
+    // sqrt(reference/mass) = sqrt(100/mass)
+    let ratio = boost::SPEED_REFERENCE_MASS / mass.max(mass::MINIMUM);
+    let multiplier = ratio.sqrt();
+    // Clamp to prevent extreme values
+    if multiplier < boost::SPEED_MIN_MULTIPLIER {
+        boost::SPEED_MIN_MULTIPLIER
+    } else if multiplier > boost::SPEED_MAX_MULTIPLIER {
+        boost::SPEED_MAX_MULTIPLIER
+    } else {
+        multiplier
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -340,5 +374,147 @@ mod tests {
         // Spawn zone should be between inner and middle radius
         assert!(spawn::ZONE_MIN > arena::INNER_RADIUS);
         assert!(spawn::ZONE_MAX < arena::MIDDLE_RADIUS);
+    }
+
+    // === SPEED SCALING TESTS ===
+
+    #[test]
+    fn test_thrust_multiplier_at_reference_mass() {
+        // At reference mass (100), multiplier should be exactly 1.0
+        let multiplier = mass_to_thrust_multiplier(boost::SPEED_REFERENCE_MASS);
+        assert!(
+            (multiplier - 1.0).abs() < 0.001,
+            "At reference mass 100, multiplier should be 1.0, got {}",
+            multiplier
+        );
+    }
+
+    #[test]
+    fn test_thrust_multiplier_small_mass_is_faster() {
+        // Smaller mass should have higher multiplier (faster acceleration)
+        let small = mass_to_thrust_multiplier(25.0);
+        let reference = mass_to_thrust_multiplier(100.0);
+        assert!(
+            small > reference,
+            "Small mass (25) should be faster than reference: {} vs {}",
+            small,
+            reference
+        );
+        // sqrt(100/25) = sqrt(4) = 2.0
+        assert!(
+            (small - 2.0).abs() < 0.001,
+            "Mass 25 should have multiplier 2.0, got {}",
+            small
+        );
+    }
+
+    #[test]
+    fn test_thrust_multiplier_large_mass_is_slower() {
+        // Larger mass should have lower multiplier (slower acceleration)
+        let large = mass_to_thrust_multiplier(400.0);
+        let reference = mass_to_thrust_multiplier(100.0);
+        assert!(
+            large < reference,
+            "Large mass (400) should be slower than reference: {} vs {}",
+            large,
+            reference
+        );
+        // sqrt(100/400) = sqrt(0.25) = 0.5
+        assert!(
+            (large - 0.5).abs() < 0.001,
+            "Mass 400 should have multiplier 0.5, got {}",
+            large
+        );
+    }
+
+    #[test]
+    fn test_thrust_multiplier_monotonically_decreasing() {
+        // As mass increases, multiplier should decrease
+        let masses = [10.0, 25.0, 50.0, 100.0, 200.0, 400.0, 800.0];
+        for i in 0..masses.len() - 1 {
+            let m1 = mass_to_thrust_multiplier(masses[i]);
+            let m2 = mass_to_thrust_multiplier(masses[i + 1]);
+            assert!(
+                m1 > m2,
+                "Multiplier should decrease: mass {} ({}) > mass {} ({})",
+                masses[i],
+                m1,
+                masses[i + 1],
+                m2
+            );
+        }
+    }
+
+    #[test]
+    fn test_thrust_multiplier_clamped_min() {
+        // Very large mass should be clamped to minimum multiplier
+        let huge = mass_to_thrust_multiplier(100000.0);
+        assert!(
+            (huge - boost::SPEED_MIN_MULTIPLIER).abs() < 0.001,
+            "Huge mass should be clamped to min {}, got {}",
+            boost::SPEED_MIN_MULTIPLIER,
+            huge
+        );
+    }
+
+    #[test]
+    fn test_thrust_multiplier_clamped_max() {
+        // Mass at or below minimum should be clamped to max multiplier
+        let at_min = mass_to_thrust_multiplier(mass::MINIMUM);
+        // sqrt(100/10) = sqrt(10) ≈ 3.16, which is within max (3.5)
+        assert!(
+            at_min <= boost::SPEED_MAX_MULTIPLIER,
+            "At minimum mass, multiplier {} should be <= max {}",
+            at_min,
+            boost::SPEED_MAX_MULTIPLIER
+        );
+
+        // Test below minimum (should use minimum mass in calculation)
+        let below_min = mass_to_thrust_multiplier(1.0);
+        assert_eq!(
+            at_min, below_min,
+            "Below minimum should use minimum mass: {} vs {}",
+            at_min, below_min
+        );
+    }
+
+    #[test]
+    fn test_thrust_multiplier_known_values() {
+        // Test specific known values for sqrt curve
+        let test_cases: [(f32, f32); 5] = [
+            (100.0, 1.0),      // sqrt(100/100) = 1.0
+            (25.0, 2.0),       // sqrt(100/25) = 2.0
+            (400.0, 0.5),      // sqrt(100/400) = 0.5
+            (10.0, 3.162),     // sqrt(100/10) ≈ 3.162
+            (1000.0, 0.316),   // sqrt(100/1000) ≈ 0.316
+        ];
+
+        for (mass, expected) in test_cases {
+            let actual = mass_to_thrust_multiplier(mass);
+            // Allow for clamping
+            let clamped_expected = expected
+                .max(boost::SPEED_MIN_MULTIPLIER)
+                .min(boost::SPEED_MAX_MULTIPLIER);
+            assert!(
+                (actual - clamped_expected).abs() < 0.01,
+                "Mass {} expected multiplier ~{}, got {}",
+                mass,
+                clamped_expected,
+                actual
+            );
+        }
+    }
+
+    #[test]
+    fn test_thrust_multiplier_no_nan_or_inf() {
+        // Ensure no NaN or Inf for edge cases
+        let edge_cases = [0.0, -1.0, f32::MIN, f32::MAX, f32::EPSILON];
+        for mass in edge_cases {
+            let m = mass_to_thrust_multiplier(mass);
+            assert!(!m.is_nan(), "NaN for mass {}", mass);
+            assert!(!m.is_infinite(), "Infinite for mass {}", mass);
+            assert!(m >= boost::SPEED_MIN_MULTIPLIER);
+            assert!(m <= boost::SPEED_MAX_MULTIPLIER);
+        }
     }
 }

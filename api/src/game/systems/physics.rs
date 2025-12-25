@@ -80,13 +80,14 @@ pub fn update(state: &mut GameState, dt: f32) {
 }
 
 /// Apply thrust from player input
+/// Thrust is scaled by mass: smaller players accelerate faster, larger players slower
 pub fn apply_thrust(
     state: &mut GameState,
     player_id: uuid::Uuid,
     input: &PlayerInput,
     dt: f32,
 ) -> bool {
-    use crate::game::constants::{boost, mass};
+    use crate::game::constants::{boost, mass, mass_to_thrust_multiplier};
 
     let player = match state.get_player_mut(player_id) {
         Some(p) if p.alive => p,
@@ -97,8 +98,10 @@ pub fn apply_thrust(
     if input.boost && input.thrust.length_sq() > THRUST_INPUT_THRESHOLD_SQ {
         let thrust_dir = input.thrust.normalize();
 
-        // Calculate thrust force (base thrust, could scale with mass)
-        let thrust_force = boost::BASE_THRUST;
+        // Scale thrust by mass - smaller players are more agile (agar.io style)
+        // Uses sqrt curve: multiplier = sqrt(100/mass)
+        let thrust_multiplier = mass_to_thrust_multiplier(player.mass);
+        let thrust_force = boost::BASE_THRUST * thrust_multiplier;
 
         // Apply thrust to velocity
         player.velocity += thrust_dir * thrust_force * dt;

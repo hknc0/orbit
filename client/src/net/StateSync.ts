@@ -1,7 +1,7 @@
 // State synchronization with interpolation and client prediction
 
 import { Vec2, vec2Lerp } from '@/utils/Vec2';
-import { NETWORK, PHYSICS } from '@/utils/Constants';
+import { NETWORK, PHYSICS, BOOST, massToThrustMultiplier } from '@/utils/Constants';
 import type {
   GameSnapshot,
   DeltaUpdate,
@@ -79,6 +79,8 @@ interface SnapshotEntry {
   tick: number;
   timestamp: number;
   snapshot: GameSnapshot;
+  // Pre-computed Map for O(1) well lookups during interpolation
+  wellMap: Map<number, import('./Protocol').GravityWellSnapshot>;
 }
 
 export class StateSync {
@@ -98,19 +100,31 @@ export class StateSync {
   // Interpolation delay (ms behind server time)
   private readonly interpolationDelay = NETWORK.INTERPOLATION_DELAY_MS;
 
+  // Destroyed gravity wells (filter from interpolated state until server confirms removal)
+  private destroyedWellIds: Set<number> = new Set();
+
   setLocalPlayerId(id: PlayerId): void {
     this.localPlayerId = id;
+  }
+
+  // Mark a gravity well as destroyed (called when GravityWellDestroyed event received)
+  markWellDestroyed(wellId: number): void {
+    this.destroyedWellIds.add(wellId);
   }
 
   // Apply a full snapshot from server
   applySnapshot(snapshot: GameSnapshot): void {
     const now = performance.now();
 
+    // Pre-compute well Map for O(1) lookups during interpolation
+    const wellMap = new Map(snapshot.gravityWells.map(w => [w.id, w]));
+
     // Add to buffer
     this.snapshots.push({
       tick: snapshot.tick,
       timestamp: now,
       snapshot,
+      wellMap,
     });
 
     // Keep buffer size limited
@@ -121,6 +135,16 @@ export class StateSync {
     // Update current tick
     if (snapshot.tick > this.currentTick) {
       this.currentTick = snapshot.tick;
+    }
+
+    // Clean up destroyed wells tracking when server confirms removal
+    if (this.destroyedWellIds.size > 0) {
+      const serverWellIds = new Set(snapshot.gravityWells.map(w => w.id));
+      for (const wellId of this.destroyedWellIds) {
+        if (!serverWellIds.has(wellId)) {
+          this.destroyedWellIds.delete(wellId);
+        }
+      }
     }
 
     // Reconcile client prediction
@@ -211,7 +235,7 @@ export class StateSync {
     if (this.snapshots.length < 2) {
       // Not enough data for interpolation, return latest
       if (this.snapshots.length === 1) {
-        return this.snapshotToInterpolatedState(this.snapshots[0].snapshot);
+        return this.snapshotToInterpolatedState(this.snapshots[0]);
       }
       return null;
     }
@@ -237,10 +261,10 @@ export class StateSync {
     // If no surrounding snapshots found, use edges
     if (!before || !after) {
       if (renderTime < this.snapshots[0].timestamp) {
-        return this.snapshotToInterpolatedState(this.snapshots[0].snapshot);
+        return this.snapshotToInterpolatedState(this.snapshots[0]);
       } else {
         return this.snapshotToInterpolatedState(
-          this.snapshots[this.snapshots.length - 1].snapshot
+          this.snapshots[this.snapshots.length - 1]
         );
       }
     }
@@ -249,7 +273,7 @@ export class StateSync {
     const duration = after.timestamp - before.timestamp;
     const t = duration > 0 ? (renderTime - before.timestamp) / duration : 0;
 
-    return this.interpolateSnapshots(before.snapshot, after.snapshot, t);
+    return this.interpolateSnapshots(before, after, t);
   }
 
   // Get predicted position for local player (for rendering)
@@ -280,10 +304,12 @@ export class StateSync {
     }
   }
 
-  private simulateInput(input: PlayerInput, _mass: number): void {
-    // Apply thrust
+  private simulateInput(input: PlayerInput, mass: number): void {
+    // Apply thrust with mass-based scaling (smaller = faster, larger = slower)
     if (input.boost && input.thrust.lengthSq() > 0) {
-      const thrust = input.thrust.clone().normalize().scale(200 * PHYSICS.DT);
+      const thrustMultiplier = massToThrustMultiplier(mass);
+      const thrustMagnitude = BOOST.BASE_THRUST * thrustMultiplier;
+      const thrust = input.thrust.clone().normalize().scale(thrustMagnitude * PHYSICS.DT);
       this.predictedVelocity.add(thrust);
     }
 
@@ -299,7 +325,8 @@ export class StateSync {
     this.predictedPosition.y += this.predictedVelocity.y * PHYSICS.DT;
   }
 
-  private snapshotToInterpolatedState(snapshot: GameSnapshot): InterpolatedState {
+  private snapshotToInterpolatedState(entry: SnapshotEntry): InterpolatedState {
+    const { snapshot, wellMap } = entry;
     const players = new Map<PlayerId, InterpolatedPlayer>();
     for (const player of snapshot.players) {
       players.set(player.id, {
@@ -327,6 +354,19 @@ export class StateSync {
       });
     }
 
+    // Build gravity wells array, filtering destroyed wells using pre-computed Map
+    const gravityWells: InterpolatedGravityWell[] = [];
+    for (const [id, w] of wellMap) {
+      if (this.destroyedWellIds.size === 0 || !this.destroyedWellIds.has(id)) {
+        gravityWells.push({
+          id: w.id,
+          position: w.position.clone(),
+          mass: w.mass,
+          coreRadius: w.coreRadius,
+        });
+      }
+    }
+
     return {
       tick: snapshot.tick,
       matchPhase: snapshot.matchPhase,
@@ -338,12 +378,7 @@ export class StateSync {
       arenaCollapsePhase: snapshot.arenaCollapsePhase,
       arenaSafeRadius: snapshot.arenaSafeRadius,
       arenaScale: snapshot.arenaScale,
-      gravityWells: snapshot.gravityWells.map((w) => ({
-        id: w.id,
-        position: w.position.clone(),
-        mass: w.mass,
-        coreRadius: w.coreRadius,
-      })),
+      gravityWells,
       totalPlayers: snapshot.totalPlayers,
       totalAlive: snapshot.totalAlive,
       densityGrid: snapshot.densityGrid,
@@ -357,10 +392,12 @@ export class StateSync {
   }
 
   private interpolateSnapshots(
-    before: GameSnapshot,
-    after: GameSnapshot,
+    beforeEntry: SnapshotEntry,
+    afterEntry: SnapshotEntry,
     t: number
   ): InterpolatedState {
+    const before = beforeEntry.snapshot;
+    const after = afterEntry.snapshot;
     const players = new Map<PlayerId, InterpolatedPlayer>();
 
     // Interpolate players
@@ -449,25 +486,30 @@ export class StateSync {
       }
     }
 
-    // Interpolate gravity wells - build lookup map for O(1) access
-    const beforeWellMap = new Map(before.gravityWells.map(w => [w.id, w]));
-    const gravityWells: InterpolatedGravityWell[] = after.gravityWells.map((afterWell) => {
-      const beforeWell = beforeWellMap.get(afterWell.id);
+    // Interpolate gravity wells using pre-computed Maps (O(1) lookups)
+    const gravityWells: InterpolatedGravityWell[] = [];
+    for (const [id, afterWell] of afterEntry.wellMap) {
+      // Skip destroyed wells
+      if (this.destroyedWellIds.size > 0 && this.destroyedWellIds.has(id)) {
+        continue;
+      }
+      const beforeWell = beforeEntry.wellMap.get(id);
       if (beforeWell) {
-        return {
+        gravityWells.push({
           id: afterWell.id,
           position: vec2Lerp(beforeWell.position, afterWell.position, t),
           mass: beforeWell.mass + (afterWell.mass - beforeWell.mass) * t,
           coreRadius: beforeWell.coreRadius + (afterWell.coreRadius - beforeWell.coreRadius) * t,
-        };
+        });
+      } else {
+        gravityWells.push({
+          id: afterWell.id,
+          position: afterWell.position.clone(),
+          mass: afterWell.mass,
+          coreRadius: afterWell.coreRadius,
+        });
       }
-      return {
-        id: afterWell.id,
-        position: afterWell.position.clone(),
-        mass: afterWell.mass,
-        coreRadius: afterWell.coreRadius,
-      };
-    });
+    }
 
     return {
       tick: after.tick,
@@ -519,5 +561,6 @@ export class StateSync {
     this.pendingInputs = [];
     this.predictedPosition = new Vec2();
     this.predictedVelocity = new Vec2();
+    this.destroyedWellIds.clear();
   }
 }

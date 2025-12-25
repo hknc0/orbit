@@ -21,7 +21,33 @@ export const BOOST = {
   BASE_THRUST: 200,
   BASE_COST: 2,
   MASS_COST_RATIO: 0.01,
+  // Speed scaling constants - agar.io style where larger players are slower
+  SPEED_REFERENCE_MASS: 100,
+  SPEED_SCALING_EXPONENT: 0.5, // sqrt curve
+  SPEED_MIN_MULTIPLIER: 0.25,
+  SPEED_MAX_MULTIPLIER: 3.5,
 } as const;
+
+/**
+ * Calculate thrust multiplier based on player mass
+ * Returns 1.0 at reference mass (100), higher for smaller (faster), lower for larger (slower)
+ * Uses sqrt curve for agar.io style feel
+ * @param mass - Player's current mass
+ * @returns Thrust multiplier (clamped between 0.25 and 3.5)
+ */
+export function massToThrustMultiplier(mass: number): number {
+  // Use sqrt directly for performance (equivalent to pow(ratio, 0.5))
+  const ratio = BOOST.SPEED_REFERENCE_MASS / Math.max(mass, MASS.MINIMUM);
+  const multiplier = Math.sqrt(ratio);
+  // Clamp to prevent extreme values
+  if (multiplier < BOOST.SPEED_MIN_MULTIPLIER) {
+    return BOOST.SPEED_MIN_MULTIPLIER;
+  }
+  if (multiplier > BOOST.SPEED_MAX_MULTIPLIER) {
+    return BOOST.SPEED_MAX_MULTIPLIER;
+  }
+  return multiplier;
+}
 
 export const EJECT = {
   MIN_CHARGE_TIME: 0.2,
