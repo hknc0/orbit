@@ -202,12 +202,20 @@ export class RenderSystem {
 
       const color = world.getPlayerColor(player.colorIndex);
       const currentRadius = world.massToRadius(player.mass);
+      const isLocal = player.id === world.localPlayerId;
 
       // Speed-based trail visibility - fade out when moving slowly to avoid flickering circles
       const speed = player.velocity.length();
       if (speed < MOTION_FX.TRAIL_MIN_SPEED) continue; // Skip trail entirely when very slow
       const speedFade = speed >= MOTION_FX.TRAIL_FULL_SPEED ? 1.0 :
         (speed - MOTION_FX.TRAIL_MIN_SPEED) / (MOTION_FX.TRAIL_FULL_SPEED - MOTION_FX.TRAIL_MIN_SPEED);
+
+      // For local player (hollow), calculate min distance to avoid trail showing through center
+      // Trail points closer than this will be skipped
+      const minDistFromPlayer = isLocal ? currentRadius * 1.5 : 0;
+      const minDistSq = minDistFromPlayer * minDistFromPlayer;
+      const playerX = player.position.x;
+      const playerY = player.position.y;
 
       // Performance: Set fillStyle once per player, use globalAlpha for transparency
       ctx.fillStyle = color;
@@ -219,6 +227,14 @@ export class RenderSystem {
       // Render trail points from oldest to newest for proper layering
       for (let i = 0; i < trail.length; i++) {
         const point = trail[i];
+
+        // Skip trail points too close to local player (avoids flickering through hollow center)
+        if (isLocal) {
+          const dx = point.x - playerX;
+          const dy = point.y - playerY;
+          if (dx * dx + dy * dy < minDistSq) continue;
+        }
+
         const age = now - point.timestamp;
         const lifeRatio = 1 - age / trailLifetime;
         if (lifeRatio <= 0) continue; // Early exit for expired points
