@@ -17,6 +17,7 @@ export interface InterpolatedGravityWell {
   position: Vec2;
   mass: number;
   coreRadius: number;
+  bornTime: number; // Timestamp when well first appeared (for birth animation)
 }
 
 // Interpolated state for rendering
@@ -97,6 +98,9 @@ export class StateSync {
 
   // Interpolation delay (ms behind server time)
   private readonly interpolationDelay = NETWORK.INTERPOLATION_DELAY_MS;
+
+  // Track when gravity wells were first seen (for birth animation)
+  private wellBornTimes: Map<number, number> = new Map();
 
   setLocalPlayerId(id: PlayerId): void {
     this.localPlayerId = id;
@@ -327,6 +331,14 @@ export class StateSync {
       });
     }
 
+    // Track new wells and assign born times
+    const now = performance.now();
+    for (const w of snapshot.gravityWells) {
+      if (!this.wellBornTimes.has(w.id)) {
+        this.wellBornTimes.set(w.id, now);
+      }
+    }
+
     return {
       tick: snapshot.tick,
       matchPhase: snapshot.matchPhase,
@@ -343,6 +355,7 @@ export class StateSync {
         position: w.position.clone(),
         mass: w.mass,
         coreRadius: w.coreRadius,
+        bornTime: this.wellBornTimes.get(w.id) ?? now,
       })),
       totalPlayers: snapshot.totalPlayers,
       totalAlive: snapshot.totalAlive,
@@ -450,8 +463,16 @@ export class StateSync {
     }
 
     // Interpolate gravity wells - build lookup map for O(1) access
+    const now = performance.now();
+    // Track new wells and assign born times
+    for (const w of after.gravityWells) {
+      if (!this.wellBornTimes.has(w.id)) {
+        this.wellBornTimes.set(w.id, now);
+      }
+    }
     const beforeWellMap = new Map(before.gravityWells.map(w => [w.id, w]));
     const gravityWells: InterpolatedGravityWell[] = after.gravityWells.map((afterWell) => {
+      const bornTime = this.wellBornTimes.get(afterWell.id) ?? now;
       const beforeWell = beforeWellMap.get(afterWell.id);
       if (beforeWell) {
         return {
@@ -459,6 +480,7 @@ export class StateSync {
           position: vec2Lerp(beforeWell.position, afterWell.position, t),
           mass: beforeWell.mass + (afterWell.mass - beforeWell.mass) * t,
           coreRadius: beforeWell.coreRadius + (afterWell.coreRadius - beforeWell.coreRadius) * t,
+          bornTime,
         };
       }
       return {
@@ -466,6 +488,7 @@ export class StateSync {
         position: afterWell.position.clone(),
         mass: afterWell.mass,
         coreRadius: afterWell.coreRadius,
+        bornTime,
       };
     });
 
@@ -513,11 +536,17 @@ export class StateSync {
     return a + diff * t;
   }
 
+  // Mark a well as destroyed (clears its born time tracking)
+  markWellDestroyed(wellId: number): void {
+    this.wellBornTimes.delete(wellId);
+  }
+
   reset(): void {
     this.snapshots = [];
     this.currentTick = 0;
     this.pendingInputs = [];
     this.predictedPosition = new Vec2();
     this.predictedVelocity = new Vec2();
+    this.wellBornTimes.clear();
   }
 }

@@ -332,14 +332,14 @@ export class RenderSystem {
     // Render gravity wells (suns) - each is its own "solar system"
     if (wells.length > 0) {
       for (const well of wells) {
-        this.renderGravityWell(well.position.x, well.position.y, well.coreRadius, well.mass, well.id);
+        this.renderGravityWell(well.position.x, well.position.y, well.coreRadius, well.mass, well.id, well.bornTime);
 
         // Draw orbit zones around each well (subtle rings)
         this.renderWellZones(well.position.x, well.position.y, well.coreRadius);
       }
     } else {
       // Fallback: single well at center
-      this.renderGravityWell(0, 0, world.arena.coreRadius, 1000000, 0);
+      this.renderGravityWell(0, 0, world.arena.coreRadius, 1000000, 0, 0);
       this.renderWellZones(0, 0, world.arena.coreRadius);
     }
 
@@ -376,9 +376,47 @@ export class RenderSystem {
     this.ctx.stroke();
   }
 
-  private renderGravityWell(x: number, y: number, coreRadius: number, mass: number, wellId: number): void {
+  // Duration of birth animation in ms
+  private readonly WELL_BIRTH_DURATION = 1500;
+
+  private renderGravityWell(x: number, y: number, coreRadius: number, mass: number, wellId: number, bornTime: number): void {
     // Central supermassive black hole is always id 0 and near origin
     const isCentral = wellId === 0 && Math.abs(x) < 50 && Math.abs(y) < 50;
+
+    // Calculate birth animation progress (0 = just born, 1 = fully materialized)
+    const now = performance.now();
+    const birthAge = bornTime > 0 ? now - bornTime : this.WELL_BIRTH_DURATION;
+    const birthProgress = Math.min(1, birthAge / this.WELL_BIRTH_DURATION);
+
+    // Skip rendering if not yet visible (shouldn't happen, but safety check)
+    if (birthProgress <= 0) return;
+
+    // Apply birth animation effects
+    this.ctx.save();
+    if (birthProgress < 1) {
+      // Easing function for smooth animation (ease-out cubic)
+      const eased = 1 - Math.pow(1 - birthProgress, 3);
+
+      // Scale up from 0 to full size
+      const scale = eased;
+      this.ctx.translate(x, y);
+      this.ctx.scale(scale, scale);
+      this.ctx.translate(-x, -y);
+
+      // Fade in with slight overshoot glow
+      this.ctx.globalAlpha = eased;
+
+      // Birth glow effect (expanding ring that fades)
+      const birthGlowRadius = coreRadius * (1.5 + (1 - birthProgress) * 3);
+      const birthGlow = this.ctx.createRadialGradient(x, y, coreRadius, x, y, birthGlowRadius);
+      birthGlow.addColorStop(0, `rgba(255, 255, 255, ${0.6 * (1 - birthProgress)})`);
+      birthGlow.addColorStop(0.5, `rgba(200, 220, 255, ${0.3 * (1 - birthProgress)})`);
+      birthGlow.addColorStop(1, 'rgba(100, 150, 255, 0)');
+      this.ctx.fillStyle = birthGlow;
+      this.ctx.beginPath();
+      this.ctx.arc(x, y, birthGlowRadius, 0, Math.PI * 2);
+      this.ctx.fill();
+    }
 
     if (isCentral) {
       // === SUPERMASSIVE BLACK HOLE ===
@@ -521,6 +559,9 @@ export class RenderSystem {
       this.ctx.arc(x, y, coreRadius * 0.4, 0, Math.PI * 2);
       this.ctx.fill();
     }
+
+    // Restore context after birth animation transforms
+    this.ctx.restore();
   }
 
   // Debris sizes: Small=3, Medium=5, Large=8
