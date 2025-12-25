@@ -17,6 +17,7 @@
     },
     {
       "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "description": "Overall server health status based on performance metrics. Values: Excellent (0) = All systems optimal, Good (1) = Minor issues, Warning (2) = Performance degradation detected, Critical (3) = Immediate attention needed, Catastrophic (4) = Server severely impacted. This is computed from tick time budget usage and other key performance indicators.",
       "fieldConfig": {
         "defaults": {
           "color": { "mode": "thresholds" },
@@ -39,6 +40,7 @@
     },
     {
       "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "description": "Percentage of the tick time budget being used. The server runs at 30 TPS (ticks per second), giving 33.3ms per tick. This shows how much of that budget is consumed. Green (<80%) = Healthy headroom, Yellow (80-100%) = Near capacity, Red (>100%) = Budget exceeded, causing lag. Keep this below 80% for smooth gameplay.",
       "fieldConfig": {
         "defaults": {
           "color": { "mode": "thresholds" },
@@ -55,6 +57,7 @@
     },
     {
       "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "description": "Total number of players currently in the game (humans + bots). This is the primary scale indicator for the server. Higher player counts increase tick processing time due to more physics calculations, collision checks, and state synchronization.",
       "fieldConfig": {
         "defaults": {
           "color": { "mode": "thresholds" },
@@ -70,6 +73,7 @@
     },
     {
       "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "description": "Number of human (real) players connected via WebSocket. These are actual users playing the game. Human players generate network traffic and require state updates to be sent over the network, unlike bots which are simulated server-side.",
       "fieldConfig": {
         "defaults": {
           "color": { "mode": "thresholds" },
@@ -85,6 +89,7 @@
     },
     {
       "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "description": "Number of AI-controlled bot players. Bots are managed by the AI Simulation Manager and fill the arena when there aren't enough human players. Bot AI uses adaptive dormancy to minimize CPU usage when bots are far from action. Bots are cheaper than humans as they don't require network I/O.",
       "fieldConfig": {
         "defaults": {
           "color": { "mode": "thresholds" },
@@ -100,6 +105,7 @@
     },
     {
       "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "description": "Number of players still alive in the current match. As players are eliminated, this count decreases. When only one player remains (or the match time expires), the round ends. This is useful for tracking match progression and engagement.",
       "fieldConfig": {
         "defaults": {
           "color": { "mode": "thresholds" },
@@ -115,6 +121,7 @@
     },
     {
       "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "description": "Whether the bot population simulation is enabled. When ON, the AI Simulation Manager actively spawns and removes bots to maintain target population. When OFF, no new bots are added (existing bots may remain). Toggle this to control bot behavior during testing or maintenance.",
       "fieldConfig": {
         "defaults": {
           "color": { "mode": "thresholds" },
@@ -133,6 +140,7 @@
     },
     {
       "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "description": "Whether the AI decision-making system is enabled. When ON, the AI Simulation Manager uses intelligent algorithms to decide bot spawning/removal timing and counts. When OFF (red), bots may still exist but no AI-driven decisions are being made. This is critical for adaptive bot population management.",
       "fieldConfig": {
         "defaults": {
           "color": { "mode": "thresholds" },
@@ -151,6 +159,7 @@
     },
     {
       "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "description": "Success rate of AI decisions. This measures what percentage of AI-suggested bot additions/removals actually resulted in improved performance metrics. Green (>70%) = AI is effectively optimizing, Yellow (50-70%) = Mixed results, Red (<50%) = AI decisions are not helping. Low rates may indicate the AI model needs tuning.",
       "fieldConfig": {
         "defaults": {
           "color": { "mode": "thresholds" },
@@ -167,6 +176,7 @@
     },
     {
       "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "description": "Progress through the current simulation evaluation cycle. The AI Manager operates in cycles: it makes a decision, waits to observe results, then evaluates. This gauge shows where we are in that cycle (0-100%). Useful for understanding when the next AI decision will be made.",
       "fieldConfig": {
         "defaults": {
           "color": { "mode": "thresholds" },
@@ -194,6 +204,7 @@
     },
     {
       "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "description": "Time taken to process each game tick. The server runs at 30 TPS, giving a budget of 33.3ms per tick. Lines show: Current (instantaneous), P95 (95th percentile - 95% of ticks are faster), P99 (99th percentile), Max (worst case). The red threshold line at 33.3ms marks the budget limit. Consistently exceeding this causes dropped ticks and lag.",
       "fieldConfig": {
         "defaults": {
           "color": { "mode": "palette-classic" },
@@ -230,6 +241,7 @@
     },
     {
       "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "description": "Number of game ticks processed per second. Target is 30 TPS (ticks per second). If this drops significantly below 30, the game is lagging and players will experience stuttering. Drops indicate the server is struggling to keep up with the processing load. Stable 30 TPS = smooth gameplay.",
       "fieldConfig": {
         "defaults": {
           "color": { "mode": "palette-classic" },
@@ -259,6 +271,7 @@
     },
     {
       "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "description": "Stacked view of player composition over time. Shows how the player population is split between human players and bots. Useful for understanding player engagement patterns and how the bot system responds to human player count changes. The total height represents total players.",
       "fieldConfig": {
         "defaults": {
           "color": { "mode": "palette-classic" },
@@ -299,6 +312,7 @@
     },
     {
       "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "description": "Total number of AI decisions made since server start. Each decision is an evaluation of whether to add bots, remove bots, or maintain current count. This counter grows continuously and shows how active the AI manager has been.",
       "fieldConfig": {
         "defaults": {
           "color": { "mode": "thresholds" },
@@ -314,6 +328,7 @@
     },
     {
       "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "description": "Number of AI decisions that were evaluated as successful. A decision is successful when the action taken (add/remove bots) resulted in improved or stable performance metrics. Compare with total decisions to understand AI effectiveness.",
       "fieldConfig": {
         "defaults": {
           "color": { "mode": "thresholds" },
@@ -329,6 +344,7 @@
     },
     {
       "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "description": "Number of AI decisions that did not achieve the desired outcome. This is calculated as Total - Successful. High failure counts may indicate the AI model needs tuning, or that external factors (like sudden player influx) are affecting results.",
       "fieldConfig": {
         "defaults": {
           "color": { "mode": "thresholds" },
@@ -344,6 +360,7 @@
     },
     {
       "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "description": "Confidence level of the most recent AI decision (0-100%). Higher confidence means the AI is more certain about its action. Green (>70%) = High confidence, Yellow (50-70%) = Moderate confidence, Red (<50%) = Low confidence, AI is uncertain. Low confidence decisions may be more exploratory.",
       "fieldConfig": {
         "defaults": {
           "color": { "mode": "thresholds" },
@@ -360,6 +377,7 @@
     },
     {
       "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "description": "Number of AI evaluations waiting to be processed. The AI works asynchronously - it makes a decision, queues it, and processes outcomes later. Green (0-3) = Normal operation, Yellow (3-5) = Building up, Red (>5) = Queue backing up, AI may be falling behind.",
       "fieldConfig": {
         "defaults": {
           "color": { "mode": "thresholds" },
@@ -375,6 +393,7 @@
     },
     {
       "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "description": "The target number of bots the AI is trying to achieve. This is the AI's current goal based on performance metrics and human player count. The AI will add or remove bots to move toward this target. Compare with actual bot count to see if the system is converging.",
       "fieldConfig": {
         "defaults": {
           "color": { "mode": "thresholds" },
@@ -390,6 +409,7 @@
     },
     {
       "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "description": "Historical view of AI decision counts over time. Shows Total decisions (all attempts) vs Successful decisions. A widening gap indicates increasing failure rate. Ideally, the lines should track closely together, showing high success rate.",
       "fieldConfig": {
         "defaults": {
           "color": { "mode": "palette-classic" },
@@ -415,6 +435,7 @@
     },
     {
       "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "description": "AI system quality metrics over time. Success Rate shows % of decisions that worked out. Confidence shows how certain the AI was about its decisions. Both should ideally be high (>70%). Dropping success rate with high confidence suggests the AI model may need retraining.",
       "fieldConfig": {
         "defaults": {
           "color": { "mode": "palette-classic" },
@@ -440,6 +461,7 @@
     },
     {
       "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "description": "Comparison of the AI's target bot count vs actual bots in game. Target is what the AI wants, Actual is what exists. The lines should converge over time. Persistent gaps indicate the system is struggling to reach its goal (possibly due to rate limiting on spawns/removes).",
       "fieldConfig": {
         "defaults": {
           "color": { "mode": "palette-classic" },
@@ -466,6 +488,225 @@
     {
       "collapsed": false,
       "gridPos": { "h": 1, "w": 24, "x": 0, "y": 20 },
+      "id": 80,
+      "panels": [],
+      "title": "Bot AI Dormancy (SoA)",
+      "type": "row"
+    },
+    {
+      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "description": "Overall health status of the Bot AI system (0-4 scale). Excellent (0) = AI running efficiently within budget, Good (1) = Minor pressure, Warning (2) = Approaching limits, Critical (3) = Over budget, Catastrophic (4) = Severely impacted. Based on tick time vs target (30ms) and critical threshold (50ms).",
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "thresholds" },
+          "mappings": [
+            { "options": { "0": { "color": "green", "index": 0, "text": "Excellent" } }, "type": "value" },
+            { "options": { "1": { "color": "super-light-green", "index": 1, "text": "Good" } }, "type": "value" },
+            { "options": { "2": { "color": "yellow", "index": 2, "text": "Warning" } }, "type": "value" },
+            { "options": { "3": { "color": "orange", "index": 3, "text": "Critical" } }, "type": "value" },
+            { "options": { "4": { "color": "red", "index": 4, "text": "Catastrophic" } }, "type": "value" }
+          ],
+          "thresholds": { "mode": "absolute", "steps": [{ "color": "green", "value": null }, { "color": "yellow", "value": 2 }, { "color": "red", "value": 3 }] }
+        }
+      },
+      "gridPos": { "h": 4, "w": 3, "x": 0, "y": 21 },
+      "id": 81,
+      "options": { "colorMode": "background", "graphMode": "none", "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false } },
+      "targets": [{ "expr": "orbit_royale_bot_ai_health_status{job=\"orbit-royale-api\"}", "legendFormat": "Health", "refId": "A" }],
+      "title": "AI Health",
+      "type": "stat"
+    },
+    {
+      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "description": "Adaptive LOD (Level of Detail) scale factor. 1.0 = normal dormancy thresholds. Values <1.0 indicate aggressive dormancy is active to reduce CPU load (thresholds are multiplied by this factor, putting more bots to sleep). Automatically adjusts based on tick time performance.",
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "thresholds" },
+          "decimals": 2,
+          "thresholds": { "mode": "absolute", "steps": [{ "color": "red", "value": null }, { "color": "yellow", "value": 0.5 }, { "color": "green", "value": 0.9 }] },
+          "max": 1,
+          "min": 0
+        }
+      },
+      "gridPos": { "h": 4, "w": 3, "x": 3, "y": 21 },
+      "id": 82,
+      "options": { "colorMode": "value", "graphMode": "area", "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false } },
+      "targets": [{ "expr": "orbit_royale_bot_ai_lod_scale{job=\"orbit-royale-api\"}", "legendFormat": "Scale", "refId": "A" }],
+      "title": "LOD Scale",
+      "type": "stat"
+    },
+    {
+      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "description": "Total number of bots registered in the SoA (Structure of Arrays) AI system. This should match the bot count from the game state. The SoA architecture provides cache-friendly memory access for efficient processing of large bot populations.",
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "thresholds" },
+          "thresholds": { "mode": "absolute", "steps": [{ "color": "blue", "value": null }] }
+        }
+      },
+      "gridPos": { "h": 4, "w": 2, "x": 6, "y": 21 },
+      "id": 83,
+      "options": { "colorMode": "value", "graphMode": "area", "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false } },
+      "targets": [{ "expr": "orbit_royale_bot_ai_total{job=\"orbit-royale-api\"}", "legendFormat": "Total", "refId": "A" }],
+      "title": "Total",
+      "type": "stat"
+    },
+    {
+      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "description": "Number of bots that actually ran AI updates this tick. Lower than total means dormancy is working - idle bots skip expensive AI calculations. The ratio of Active/Total indicates dormancy efficiency.",
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "thresholds" },
+          "thresholds": { "mode": "absolute", "steps": [{ "color": "green", "value": null }] }
+        }
+      },
+      "gridPos": { "h": 4, "w": 2, "x": 8, "y": 21 },
+      "id": 84,
+      "options": { "colorMode": "value", "graphMode": "area", "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false } },
+      "targets": [{ "expr": "orbit_royale_bot_ai_active{job=\"orbit-royale-api\"}", "legendFormat": "Active", "refId": "A" }],
+      "title": "Active",
+      "type": "stat"
+    },
+    {
+      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "description": "Bots in FULL update mode - these are near human players and run complete AI every tick (threat detection, targeting, movement, shooting). Most CPU-intensive but provides best gameplay experience near humans.",
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "thresholds" },
+          "thresholds": { "mode": "absolute", "steps": [{ "color": "orange", "value": null }] }
+        }
+      },
+      "gridPos": { "h": 4, "w": 2, "x": 10, "y": 21 },
+      "id": 85,
+      "options": { "colorMode": "value", "graphMode": "area", "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false } },
+      "targets": [{ "expr": "orbit_royale_bot_ai_full_mode{job=\"orbit-royale-api\"}", "legendFormat": "Full", "refId": "A" }],
+      "title": "Full",
+      "type": "stat"
+    },
+    {
+      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "description": "Bots in REDUCED update mode - medium distance from humans, update every few ticks with simplified logic. Balances CPU savings with reasonable responsiveness.",
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "thresholds" },
+          "thresholds": { "mode": "absolute", "steps": [{ "color": "yellow", "value": null }] }
+        }
+      },
+      "gridPos": { "h": 4, "w": 2, "x": 12, "y": 21 },
+      "id": 86,
+      "options": { "colorMode": "value", "graphMode": "area", "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false } },
+      "targets": [{ "expr": "orbit_royale_bot_ai_reduced_mode{job=\"orbit-royale-api\"}", "legendFormat": "Reduced", "refId": "A" }],
+      "title": "Reduced",
+      "type": "stat"
+    },
+    {
+      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "description": "Bots in DORMANT mode - far from all human players, minimal updates (just drift physics). These bots cost almost zero CPU. High dormant count = efficient system. They wake up when humans approach.",
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "thresholds" },
+          "thresholds": { "mode": "absolute", "steps": [{ "color": "semi-dark-green", "value": null }] }
+        }
+      },
+      "gridPos": { "h": 4, "w": 2, "x": 14, "y": 21 },
+      "id": 87,
+      "options": { "colorMode": "value", "graphMode": "area", "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false } },
+      "targets": [{ "expr": "orbit_royale_bot_ai_dormant_mode{job=\"orbit-royale-api\"}", "legendFormat": "Dormant", "refId": "A" }],
+      "title": "Dormant",
+      "type": "stat"
+    },
+    {
+      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "description": "Distribution of bots across update modes over time. Shows how the dormancy system adapts to player positions. Ideally, most bots should be Dormant (green) with only bots near humans in Full mode (orange). Stacked view shows total bot count.",
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "palette-classic" },
+          "custom": {
+            "axisBorderShow": false,
+            "drawStyle": "line",
+            "fillOpacity": 30,
+            "gradientMode": "opacity",
+            "lineInterpolation": "smooth",
+            "lineWidth": 2,
+            "showPoints": "never",
+            "stacking": { "group": "A", "mode": "normal" }
+          }
+        },
+        "overrides": [
+          { "matcher": { "id": "byName", "options": "Full" }, "properties": [{ "id": "color", "value": { "fixedColor": "orange", "mode": "fixed" } }] },
+          { "matcher": { "id": "byName", "options": "Reduced" }, "properties": [{ "id": "color", "value": { "fixedColor": "yellow", "mode": "fixed" } }] },
+          { "matcher": { "id": "byName", "options": "Dormant" }, "properties": [{ "id": "color", "value": { "fixedColor": "green", "mode": "fixed" } }] }
+        ]
+      },
+      "gridPos": { "h": 7, "w": 8, "x": 16, "y": 21 },
+      "id": 88,
+      "options": { "legend": { "calcs": ["lastNotNull"], "displayMode": "table", "placement": "bottom", "showLegend": true }, "tooltip": { "mode": "multi", "sort": "desc" } },
+      "targets": [
+        { "expr": "orbit_royale_bot_ai_full_mode{job=\"orbit-royale-api\"}", "legendFormat": "Full", "refId": "A" },
+        { "expr": "orbit_royale_bot_ai_reduced_mode{job=\"orbit-royale-api\"}", "legendFormat": "Reduced", "refId": "B" },
+        { "expr": "orbit_royale_bot_ai_dormant_mode{job=\"orbit-royale-api\"}", "legendFormat": "Dormant", "refId": "C" }
+      ],
+      "title": "Dormancy Distribution",
+      "type": "timeseries"
+    },
+    {
+      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "description": "LOD scale factor over time. Shows how aggressively the system is adjusting dormancy thresholds. Drops below 1.0 indicate the system is under pressure and putting more bots to sleep. Stable at 1.0 = healthy system with headroom.",
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "palette-classic" },
+          "custom": {
+            "axisBorderShow": false,
+            "drawStyle": "line",
+            "fillOpacity": 20,
+            "lineInterpolation": "smooth",
+            "lineWidth": 2,
+            "showPoints": "never",
+            "thresholdsStyle": { "mode": "line" }
+          },
+          "max": 1.1,
+          "min": 0,
+          "thresholds": { "mode": "absolute", "steps": [{ "color": "green", "value": null }, { "color": "yellow", "value": 0.7 }, { "color": "red", "value": 0.5 }] },
+          "unit": "percentunit"
+        }
+      },
+      "gridPos": { "h": 3, "w": 8, "x": 0, "y": 25 },
+      "id": 89,
+      "options": { "legend": { "calcs": ["mean", "min"], "displayMode": "table", "placement": "right", "showLegend": true }, "tooltip": { "mode": "multi", "sort": "desc" } },
+      "targets": [{ "expr": "orbit_royale_bot_ai_lod_scale{job=\"orbit-royale-api\"}", "legendFormat": "LOD Scale", "refId": "A" }],
+      "title": "Adaptive LOD Scale",
+      "type": "timeseries"
+    },
+    {
+      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "description": "Comparison of total bots vs actively updating bots. The gap represents CPU savings from dormancy. Larger gap = more efficient. Active should be much lower than Total when humans are spread out.",
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "palette-classic" },
+          "custom": {
+            "axisBorderShow": false,
+            "drawStyle": "line",
+            "fillOpacity": 20,
+            "lineInterpolation": "smooth",
+            "lineWidth": 2,
+            "showPoints": "never"
+          }
+        }
+      },
+      "gridPos": { "h": 3, "w": 8, "x": 8, "y": 25 },
+      "id": 90,
+      "options": { "legend": { "calcs": ["lastNotNull"], "displayMode": "table", "placement": "right", "showLegend": true }, "tooltip": { "mode": "multi", "sort": "desc" } },
+      "targets": [
+        { "expr": "orbit_royale_bot_ai_total{job=\"orbit-royale-api\"}", "legendFormat": "Total Bots", "refId": "A" },
+        { "expr": "orbit_royale_bot_ai_active{job=\"orbit-royale-api\"}", "legendFormat": "Active (updating)", "refId": "B" }
+      ],
+      "title": "Total vs Active Bots",
+      "type": "timeseries"
+    },
+
+    {
+      "collapsed": false,
+      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 28 },
       "id": 40,
       "panels": [],
       "title": "Network & Connections",
@@ -473,6 +714,7 @@
     },
     {
       "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "description": "Number of active WebSocket connections to the server. Each human player has one connection. This metric indicates current server load from a networking perspective. Sudden drops may indicate connectivity issues or server problems. Spikes may indicate a traffic surge.",
       "fieldConfig": {
         "defaults": {
           "color": { "mode": "palette-classic" },
@@ -488,7 +730,7 @@
           "thresholds": { "mode": "absolute", "steps": [{ "color": "green", "value": null }] }
         }
       },
-      "gridPos": { "h": 6, "w": 6, "x": 0, "y": 21 },
+      "gridPos": { "h": 6, "w": 6, "x": 0, "y": 29 },
       "id": 41,
       "options": {
         "legend": { "calcs": ["lastNotNull"], "displayMode": "list", "placement": "bottom", "showLegend": true },
@@ -500,6 +742,7 @@
     },
     {
       "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "description": "Rate of WebSocket messages per second. Sent = game state updates to clients. Received = player inputs from clients. High message rates increase CPU and network load. The ratio of sent:received is typically high since the server broadcasts state to many players but receives fewer inputs.",
       "fieldConfig": {
         "defaults": {
           "color": { "mode": "palette-classic" },
@@ -515,7 +758,7 @@
           "unit": "pps"
         }
       },
-      "gridPos": { "h": 6, "w": 6, "x": 6, "y": 21 },
+      "gridPos": { "h": 6, "w": 6, "x": 6, "y": 29 },
       "id": 42,
       "options": {
         "legend": { "calcs": ["mean", "max"], "displayMode": "table", "placement": "bottom", "showLegend": true },
@@ -530,6 +773,7 @@
     },
     {
       "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "description": "Network bandwidth usage in bytes per second. Sent = data going to players (game state). Received = data from players (inputs). This is critical for understanding network costs and identifying bandwidth bottlenecks. High bandwidth may require optimization like delta compression or AOI filtering.",
       "fieldConfig": {
         "defaults": {
           "color": { "mode": "palette-classic" },
@@ -545,7 +789,7 @@
           "unit": "Bps"
         }
       },
-      "gridPos": { "h": 6, "w": 6, "x": 12, "y": 21 },
+      "gridPos": { "h": 6, "w": 6, "x": 12, "y": 29 },
       "id": 43,
       "options": {
         "legend": { "calcs": ["mean", "max"], "displayMode": "table", "placement": "bottom", "showLegend": true },
@@ -560,6 +804,7 @@
     },
     {
       "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "description": "Area of Interest (AOI) reduction percentage. AOI filtering only sends data about nearby entities to each player, reducing bandwidth. Higher % = more efficient (more data filtered out). Green (>50%) = Good filtering, Yellow (30-50%) = Moderate, Red (<30%) = Most data being sent (players clustered together).",
       "fieldConfig": {
         "defaults": {
           "color": { "mode": "thresholds" },
@@ -567,7 +812,7 @@
           "unit": "percent"
         }
       },
-      "gridPos": { "h": 3, "w": 3, "x": 18, "y": 21 },
+      "gridPos": { "h": 3, "w": 3, "x": 18, "y": 29 },
       "id": 44,
       "options": { "colorMode": "value", "graphMode": "area", "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false } },
       "targets": [{ "expr": "orbit_royale_aoi_reduction_percent{job=\"orbit-royale-api\"}", "legendFormat": "Reduction", "refId": "A" }],
@@ -576,6 +821,7 @@
     },
     {
       "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "description": "Area of Interest player filtering comparison. Orig = total players that could be sent. Filt = players actually sent after AOI filtering. The gap between these lines shows how effective AOI is at reducing player data transmission. Larger gap = more bandwidth saved.",
       "fieldConfig": {
         "defaults": {
           "color": { "mode": "palette-classic" },
@@ -589,7 +835,7 @@
           "unit": "short"
         }
       },
-      "gridPos": { "h": 3, "w": 3, "x": 21, "y": 21 },
+      "gridPos": { "h": 3, "w": 3, "x": 21, "y": 29 },
       "id": 45,
       "options": { "legend": { "calcs": [], "displayMode": "list", "placement": "right", "showLegend": true }, "tooltip": { "mode": "multi", "sort": "none" } },
       "targets": [
@@ -601,6 +847,7 @@
     },
     {
       "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "description": "Area of Interest projectile filtering comparison. Orig Proj = total projectiles in game. Filt Proj = projectiles sent per player after AOI filtering. Projectiles are often the largest source of network data due to their quantity. Effective AOI filtering here dramatically reduces bandwidth.",
       "fieldConfig": {
         "defaults": {
           "color": { "mode": "palette-classic" },
@@ -614,7 +861,7 @@
           "unit": "short"
         }
       },
-      "gridPos": { "h": 3, "w": 6, "x": 18, "y": 24 },
+      "gridPos": { "h": 3, "w": 6, "x": 18, "y": 32 },
       "id": 46,
       "options": { "legend": { "calcs": [], "displayMode": "list", "placement": "right", "showLegend": true }, "tooltip": { "mode": "multi", "sort": "none" } },
       "targets": [
@@ -627,7 +874,7 @@
 
     {
       "collapsed": false,
-      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 27 },
+      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 35 },
       "id": 50,
       "panels": [],
       "title": "Security & Protection",
@@ -635,13 +882,14 @@
     },
     {
       "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "description": "Number of connections rejected by DoS (Denial of Service) protection. These are connections blocked before they could impact the server, typically due to too many connections from the same IP or exceeding connection rate limits. Non-zero values may indicate an attack or misconfigured clients.",
       "fieldConfig": {
         "defaults": {
           "color": { "mode": "thresholds" },
           "thresholds": { "mode": "absolute", "steps": [{ "color": "green", "value": null }, { "color": "yellow", "value": 10 }, { "color": "red", "value": 100 }] }
         }
       },
-      "gridPos": { "h": 3, "w": 2, "x": 0, "y": 28 },
+      "gridPos": { "h": 3, "w": 2, "x": 0, "y": 36 },
       "id": 51,
       "options": { "colorMode": "value", "graphMode": "area", "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false } },
       "targets": [{ "expr": "orbit_royale_dos_connections_rejected{job=\"orbit-royale-api\"}", "legendFormat": "Rejected", "refId": "A" }],
@@ -650,13 +898,14 @@
     },
     {
       "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "description": "Number of messages dropped due to rate limiting. Each connection has a maximum messages-per-second limit. Exceeding this causes messages to be dropped to prevent flooding attacks. High numbers may indicate cheating attempts, bugs in client code, or an attack.",
       "fieldConfig": {
         "defaults": {
           "color": { "mode": "thresholds" },
           "thresholds": { "mode": "absolute", "steps": [{ "color": "green", "value": null }, { "color": "yellow", "value": 100 }, { "color": "red", "value": 1000 }] }
         }
       },
-      "gridPos": { "h": 3, "w": 2, "x": 2, "y": 28 },
+      "gridPos": { "h": 3, "w": 2, "x": 2, "y": 36 },
       "id": 52,
       "options": { "colorMode": "value", "graphMode": "area", "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false } },
       "targets": [{ "expr": "orbit_royale_dos_messages_rate_limited{job=\"orbit-royale-api\"}", "legendFormat": "Limited", "refId": "A" }],
@@ -665,13 +914,14 @@
     },
     {
       "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "description": "Number of IP addresses currently banned from connecting. Bans are applied when an IP repeatedly violates rate limits or other security rules. Green (0) = No active bans, Red (1+) = Active bans in effect. Check server logs for ban details if this is non-zero.",
       "fieldConfig": {
         "defaults": {
           "color": { "mode": "thresholds" },
           "thresholds": { "mode": "absolute", "steps": [{ "color": "green", "value": null }, { "color": "red", "value": 1 }] }
         }
       },
-      "gridPos": { "h": 3, "w": 2, "x": 4, "y": 28 },
+      "gridPos": { "h": 3, "w": 2, "x": 4, "y": 36 },
       "id": 53,
       "options": { "colorMode": "value", "graphMode": "area", "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false } },
       "targets": [{ "expr": "orbit_royale_dos_active_bans{job=\"orbit-royale-api\"}", "legendFormat": "Bans", "refId": "A" }],
@@ -680,13 +930,14 @@
     },
     {
       "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "description": "Number of player inputs rejected by the anti-cheat system. Rejected inputs are those deemed invalid (impossible movements, out-of-bounds values, etc.) and completely discarded. High numbers may indicate active cheating attempts or client bugs.",
       "fieldConfig": {
         "defaults": {
           "color": { "mode": "thresholds" },
           "thresholds": { "mode": "absolute", "steps": [{ "color": "green", "value": null }, { "color": "yellow", "value": 10 }, { "color": "red", "value": 100 }] }
         }
       },
-      "gridPos": { "h": 3, "w": 2, "x": 6, "y": 28 },
+      "gridPos": { "h": 3, "w": 2, "x": 6, "y": 36 },
       "id": 54,
       "options": { "colorMode": "value", "graphMode": "area", "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false } },
       "targets": [{ "expr": "orbit_royale_anticheat_inputs_rejected{job=\"orbit-royale-api\"}", "legendFormat": "Rejected", "refId": "A" }],
@@ -695,13 +946,14 @@
     },
     {
       "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "description": "Number of player inputs that were modified (sanitized) before processing. Unlike rejected inputs, sanitized inputs are accepted but clamped to valid ranges. This handles edge cases like slight overspeeding due to lag. Some sanitization is normal; excessive amounts may indicate issues.",
       "fieldConfig": {
         "defaults": {
           "color": { "mode": "thresholds" },
           "thresholds": { "mode": "absolute", "steps": [{ "color": "orange", "value": null }] }
         }
       },
-      "gridPos": { "h": 3, "w": 2, "x": 8, "y": 28 },
+      "gridPos": { "h": 3, "w": 2, "x": 8, "y": 36 },
       "id": 55,
       "options": { "colorMode": "value", "graphMode": "area", "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false } },
       "targets": [{ "expr": "orbit_royale_anticheat_inputs_sanitized{job=\"orbit-royale-api\"}", "legendFormat": "Sanitized", "refId": "A" }],
@@ -710,13 +962,14 @@
     },
     {
       "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "description": "Number of sequence number violations detected. Each client message has a sequence number to prevent replay attacks and ensure ordering. Violations indicate duplicate, missing, or out-of-order messages. Green (0) = Normal, Red (1+) = Issues detected, may indicate network problems or manipulation.",
       "fieldConfig": {
         "defaults": {
           "color": { "mode": "thresholds" },
           "thresholds": { "mode": "absolute", "steps": [{ "color": "green", "value": null }, { "color": "red", "value": 1 }] }
         }
       },
-      "gridPos": { "h": 3, "w": 2, "x": 10, "y": 28 },
+      "gridPos": { "h": 3, "w": 2, "x": 10, "y": 36 },
       "id": 56,
       "options": { "colorMode": "value", "graphMode": "area", "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false } },
       "targets": [{ "expr": "orbit_royale_anticheat_sequence_violations{job=\"orbit-royale-api\"}", "legendFormat": "Violations", "refId": "A" }],
@@ -725,6 +978,7 @@
     },
     {
       "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "description": "Rate of input validation over time. Shows Validated (accepted as-is), Rejected (blocked), and Sanitized (modified) inputs per minute. A healthy system shows mostly validated inputs with occasional sanitization. Rising rejection rates may indicate an ongoing attack or widespread client issues.",
       "fieldConfig": {
         "defaults": {
           "color": { "mode": "palette-classic" },
@@ -738,7 +992,7 @@
           "unit": "short"
         }
       },
-      "gridPos": { "h": 6, "w": 6, "x": 12, "y": 28 },
+      "gridPos": { "h": 6, "w": 6, "x": 12, "y": 36 },
       "id": 57,
       "options": { "legend": { "calcs": [], "displayMode": "list", "placement": "bottom", "showLegend": true }, "tooltip": { "mode": "multi", "sort": "none" } },
       "targets": [
@@ -751,6 +1005,7 @@
     },
     {
       "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "description": "DoS protection activity over time. Shows connection rejections and message rate limiting per minute. Spikes in these metrics may indicate attack attempts. Compare with player counts - if players are stable but these are spiking, it's likely an attack rather than legitimate traffic.",
       "fieldConfig": {
         "defaults": {
           "color": { "mode": "palette-classic" },
@@ -764,7 +1019,7 @@
           "unit": "short"
         }
       },
-      "gridPos": { "h": 6, "w": 6, "x": 18, "y": 28 },
+      "gridPos": { "h": 6, "w": 6, "x": 18, "y": 36 },
       "id": 58,
       "options": { "legend": { "calcs": [], "displayMode": "list", "placement": "bottom", "showLegend": true }, "tooltip": { "mode": "multi", "sort": "none" } },
       "targets": [
@@ -776,206 +1031,213 @@
     },
 
     {
-      "collapsed": true,
-      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 34 },
+      "collapsed": false,
+      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 42 },
       "id": 60,
-      "panels": [
-        {
-          "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
-          "fieldConfig": {
-            "defaults": {
-              "color": { "mode": "thresholds" },
-              "thresholds": { "mode": "absolute", "steps": [{ "color": "purple", "value": null }] }
-            }
-          },
-          "gridPos": { "h": 3, "w": 3, "x": 0, "y": 35 },
-          "id": 61,
-          "options": { "colorMode": "value", "graphMode": "area", "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false } },
-          "targets": [{ "expr": "orbit_royale_arena_radius{job=\"orbit-royale-api\"}", "legendFormat": "Radius", "refId": "A" }],
-          "title": "Arena Radius",
-          "type": "stat"
-        },
-        {
-          "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
-          "fieldConfig": {
-            "defaults": {
-              "color": { "mode": "thresholds" },
-              "thresholds": { "mode": "absolute", "steps": [{ "color": "purple", "value": null }] },
-              "decimals": 2
-            }
-          },
-          "gridPos": { "h": 3, "w": 3, "x": 3, "y": 35 },
-          "id": 62,
-          "options": { "colorMode": "value", "graphMode": "area", "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false } },
-          "targets": [{ "expr": "orbit_royale_arena_scale{job=\"orbit-royale-api\"} / 100", "legendFormat": "Scale", "refId": "A" }],
-          "title": "Arena Scale",
-          "type": "stat"
-        },
-        {
-          "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
-          "fieldConfig": {
-            "defaults": {
-              "color": { "mode": "thresholds" },
-              "thresholds": { "mode": "absolute", "steps": [{ "color": "blue", "value": null }] }
-            }
-          },
-          "gridPos": { "h": 3, "w": 3, "x": 6, "y": 35 },
-          "id": 63,
-          "options": { "colorMode": "value", "graphMode": "area", "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false } },
-          "targets": [{ "expr": "orbit_royale_gravity_wells{job=\"orbit-royale-api\"}", "legendFormat": "Wells", "refId": "A" }],
-          "title": "Gravity Wells",
-          "type": "stat"
-        },
-        {
-          "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
-          "fieldConfig": {
-            "defaults": {
-              "color": { "mode": "thresholds" },
-              "thresholds": { "mode": "absolute", "steps": [{ "color": "orange", "value": null }] }
-            }
-          },
-          "gridPos": { "h": 3, "w": 3, "x": 9, "y": 35 },
-          "id": 64,
-          "options": { "colorMode": "value", "graphMode": "area", "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false } },
-          "targets": [{ "expr": "orbit_royale_projectiles{job=\"orbit-royale-api\"}", "legendFormat": "Proj", "refId": "A" }],
-          "title": "Projectiles",
-          "type": "stat"
-        },
-        {
-          "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
-          "fieldConfig": {
-            "defaults": {
-              "color": { "mode": "thresholds" },
-              "thresholds": { "mode": "absolute", "steps": [{ "color": "semi-dark-green", "value": null }] }
-            }
-          },
-          "gridPos": { "h": 3, "w": 3, "x": 12, "y": 35 },
-          "id": 65,
-          "options": { "colorMode": "value", "graphMode": "area", "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false } },
-          "targets": [{ "expr": "orbit_royale_debris{job=\"orbit-royale-api\"}", "legendFormat": "Debris", "refId": "A" }],
-          "title": "Debris",
-          "type": "stat"
-        },
-        {
-          "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
-          "fieldConfig": {
-            "defaults": {
-              "color": { "mode": "palette-classic" },
-              "custom": {
-                "axisBorderShow": false,
-                "drawStyle": "line",
-                "fillOpacity": 20,
-                "lineInterpolation": "smooth",
-                "lineWidth": 2,
-                "showPoints": "never"
-              }
-            }
-          },
-          "gridPos": { "h": 6, "w": 9, "x": 15, "y": 35 },
-          "id": 66,
-          "options": { "legend": { "calcs": ["mean", "max"], "displayMode": "table", "placement": "bottom", "showLegend": true }, "tooltip": { "mode": "multi", "sort": "desc" } },
-          "targets": [
-            { "expr": "orbit_royale_projectiles{job=\"orbit-royale-api\"}", "legendFormat": "Projectiles", "refId": "A" },
-            { "expr": "orbit_royale_debris{job=\"orbit-royale-api\"}", "legendFormat": "Debris", "refId": "B" },
-            { "expr": "orbit_royale_gravity_wells{job=\"orbit-royale-api\"}", "legendFormat": "Gravity Wells", "refId": "C" }
-          ],
-          "title": "Game Entities",
-          "type": "timeseries"
-        },
-        {
-          "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
-          "fieldConfig": {
-            "defaults": {
-              "color": { "mode": "palette-classic" },
-              "custom": {
-                "axisBorderShow": false,
-                "drawStyle": "line",
-                "fillOpacity": 20,
-                "lineInterpolation": "smooth",
-                "lineWidth": 2,
-                "showPoints": "never"
-              }
-            }
-          },
-          "gridPos": { "h": 3, "w": 15, "x": 0, "y": 38 },
-          "id": 67,
-          "options": { "legend": { "calcs": ["mean", "max"], "displayMode": "table", "placement": "right", "showLegend": true }, "tooltip": { "mode": "multi", "sort": "desc" } },
-          "targets": [{ "expr": "orbit_royale_arena_radius{job=\"orbit-royale-api\"}", "legendFormat": "Arena Radius", "refId": "A" }],
-          "title": "Arena Radius Over Time",
-          "type": "timeseries"
-        }
-      ],
-      "title": "Entities & Arena (click to expand)",
+      "panels": [],
+      "title": "Entities & Arena",
       "type": "row"
+    },
+    {
+      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "description": "Current radius of the game arena in world units. The arena shrinks over time in battle royale mode, forcing players closer together. Smaller radius = more intense gameplay and more collisions to process. Track this to correlate with performance changes.",
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "thresholds" },
+          "thresholds": { "mode": "absolute", "steps": [{ "color": "purple", "value": null }] }
+        }
+      },
+      "gridPos": { "h": 3, "w": 3, "x": 0, "y": 43 },
+      "id": 61,
+      "options": { "colorMode": "value", "graphMode": "area", "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false } },
+      "targets": [{ "expr": "orbit_royale_arena_radius{job=\"orbit-royale-api\"}", "legendFormat": "Radius", "refId": "A" }],
+      "title": "Arena Radius",
+      "type": "stat"
+    },
+    {
+      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "description": "Arena scale multiplier (displayed as 0.0-1.0). This is the current size relative to maximum size. 1.0 = full size, 0.5 = half size, etc. As the match progresses, this decreases, shrinking the playable area and intensifying combat.",
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "thresholds" },
+          "thresholds": { "mode": "absolute", "steps": [{ "color": "purple", "value": null }] },
+          "decimals": 2
+        }
+      },
+      "gridPos": { "h": 3, "w": 3, "x": 3, "y": 43 },
+      "id": 62,
+      "options": { "colorMode": "value", "graphMode": "area", "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false } },
+      "targets": [{ "expr": "orbit_royale_arena_scale{job=\"orbit-royale-api\"} / 100", "legendFormat": "Scale", "refId": "A" }],
+      "title": "Arena Scale",
+      "type": "stat"
+    },
+    {
+      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "description": "Number of gravity wells currently in the arena. Gravity wells affect player and projectile physics, adding gameplay complexity. More wells = more physics calculations per tick. This is typically fixed per map configuration but may change with dynamic events.",
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "thresholds" },
+          "thresholds": { "mode": "absolute", "steps": [{ "color": "blue", "value": null }] }
+        }
+      },
+      "gridPos": { "h": 3, "w": 3, "x": 6, "y": 43 },
+      "id": 63,
+      "options": { "colorMode": "value", "graphMode": "area", "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false } },
+      "targets": [{ "expr": "orbit_royale_gravity_wells{job=\"orbit-royale-api\"}", "legendFormat": "Wells", "refId": "A" }],
+      "title": "Gravity Wells",
+      "type": "stat"
+    },
+    {
+      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "description": "Number of active projectiles in the game world. Projectiles (bullets, missiles, etc.) require collision detection and physics updates each tick. High projectile counts significantly impact tick time. Spikes correlate with intense combat moments.",
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "thresholds" },
+          "thresholds": { "mode": "absolute", "steps": [{ "color": "orange", "value": null }] }
+        }
+      },
+      "gridPos": { "h": 3, "w": 3, "x": 9, "y": 43 },
+      "id": 64,
+      "options": { "colorMode": "value", "graphMode": "area", "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false } },
+      "targets": [{ "expr": "orbit_royale_projectiles{job=\"orbit-royale-api\"}", "legendFormat": "Proj", "refId": "A" }],
+      "title": "Projectiles",
+      "type": "stat"
+    },
+    {
+      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "description": "Number of debris entities in the game world. Debris are collectible items (mass, power-ups) that players can pick up. They require collision detection but have simpler physics than projectiles. Created when players die or spawn naturally.",
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "thresholds" },
+          "thresholds": { "mode": "absolute", "steps": [{ "color": "semi-dark-green", "value": null }] }
+        }
+      },
+      "gridPos": { "h": 3, "w": 3, "x": 12, "y": 43 },
+      "id": 65,
+      "options": { "colorMode": "value", "graphMode": "area", "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false } },
+      "targets": [{ "expr": "orbit_royale_debris{job=\"orbit-royale-api\"}", "legendFormat": "Debris", "refId": "A" }],
+      "title": "Debris",
+      "type": "stat"
+    },
+    {
+      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "description": "Historical view of all entity counts over time. Shows projectiles, debris, and gravity wells together. Useful for correlating entity counts with performance metrics. Spikes in projectiles often align with tick time increases.",
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "palette-classic" },
+          "custom": {
+            "axisBorderShow": false,
+            "drawStyle": "line",
+            "fillOpacity": 20,
+            "lineInterpolation": "smooth",
+            "lineWidth": 2,
+            "showPoints": "never"
+          }
+        }
+      },
+      "gridPos": { "h": 6, "w": 9, "x": 15, "y": 43 },
+      "id": 66,
+      "options": { "legend": { "calcs": ["mean", "max"], "displayMode": "table", "placement": "bottom", "showLegend": true }, "tooltip": { "mode": "multi", "sort": "desc" } },
+      "targets": [
+        { "expr": "orbit_royale_projectiles{job=\"orbit-royale-api\"}", "legendFormat": "Projectiles", "refId": "A" },
+        { "expr": "orbit_royale_debris{job=\"orbit-royale-api\"}", "legendFormat": "Debris", "refId": "B" },
+        { "expr": "orbit_royale_gravity_wells{job=\"orbit-royale-api\"}", "legendFormat": "Gravity Wells", "refId": "C" }
+      ],
+      "title": "Game Entities",
+      "type": "timeseries"
+    },
+    {
+      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "description": "Arena radius changing over time. Watch this during a match to see the battle royale shrinking effect. Correlate with tick time to understand how arena size affects performance (smaller arena = players clustered = more collisions).",
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "palette-classic" },
+          "custom": {
+            "axisBorderShow": false,
+            "drawStyle": "line",
+            "fillOpacity": 20,
+            "lineInterpolation": "smooth",
+            "lineWidth": 2,
+            "showPoints": "never"
+          }
+        }
+      },
+      "gridPos": { "h": 3, "w": 15, "x": 0, "y": 46 },
+      "id": 67,
+      "options": { "legend": { "calcs": ["mean", "max"], "displayMode": "table", "placement": "right", "showLegend": true }, "tooltip": { "mode": "multi", "sort": "desc" } },
+      "targets": [{ "expr": "orbit_royale_arena_radius{job=\"orbit-royale-api\"}", "legendFormat": "Arena Radius", "refId": "A" }],
+      "title": "Arena Radius Over Time",
+      "type": "timeseries"
     },
 
     {
-      "collapsed": true,
-      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 35 },
+      "collapsed": false,
+      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 49 },
       "id": 70,
-      "panels": [
-        {
-          "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
-          "fieldConfig": {
-            "defaults": {
-              "color": { "mode": "palette-classic" },
-              "custom": {
-                "axisBorderShow": false,
-                "drawStyle": "line",
-                "fillOpacity": 20,
-                "gradientMode": "opacity",
-                "lineInterpolation": "smooth",
-                "lineWidth": 2,
-                "showPoints": "never",
-                "thresholdsStyle": { "mode": "line" }
-              },
-              "max": 100,
-              "min": 0,
-              "thresholds": { "mode": "absolute", "steps": [{ "color": "green", "value": null }, { "color": "yellow", "value": 80 }, { "color": "red", "value": 95 }] },
-              "unit": "percent"
-            }
-          },
-          "gridPos": { "h": 7, "w": 12, "x": 0, "y": 36 },
-          "id": 71,
-          "options": {
-            "legend": { "calcs": ["mean", "max"], "displayMode": "table", "placement": "bottom", "showLegend": true },
-            "tooltip": { "mode": "multi", "sort": "desc" }
-          },
-          "targets": [{ "expr": "sum by (short_id) (rate(container_cpu_usage_seconds_total{job=\"cadvisor\", id=~\"/docker/[a-f0-9]+\"}[1m])) * 100", "legendFormat": "{{short_id}}", "refId": "A" }],
-          "title": "Container CPU % (docker ps for ID→name)",
-          "type": "timeseries"
-        },
-        {
-          "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
-          "fieldConfig": {
-            "defaults": {
-              "color": { "mode": "palette-classic" },
-              "custom": {
-                "axisBorderShow": false,
-                "drawStyle": "line",
-                "fillOpacity": 20,
-                "gradientMode": "opacity",
-                "lineInterpolation": "smooth",
-                "lineWidth": 2,
-                "showPoints": "never"
-              },
-              "thresholds": { "mode": "absolute", "steps": [{ "color": "green", "value": null }] },
-              "unit": "bytes"
-            }
-          },
-          "gridPos": { "h": 7, "w": 12, "x": 12, "y": 36 },
-          "id": 72,
-          "options": {
-            "legend": { "calcs": ["mean", "max"], "displayMode": "table", "placement": "bottom", "showLegend": true },
-            "tooltip": { "mode": "multi", "sort": "desc" }
-          },
-          "targets": [{ "expr": "container_memory_usage_bytes{job=\"cadvisor\", id=~\"/docker/[a-f0-9]+\"}", "legendFormat": "{{short_id}}", "refId": "A" }],
-          "title": "Container Memory (docker ps for ID→name)",
-          "type": "timeseries"
-        }
-      ],
-      "title": "Container Resources (click to expand)",
+      "panels": [],
+      "title": "Container Resources",
       "type": "row"
+    },
+    {
+      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "description": "CPU usage percentage for each Docker container. Shows how much CPU each container is consuming. The threshold lines indicate: Green (<80%) = Normal, Yellow (80-95%) = High load, Red (>95%) = CPU saturated. Use 'docker ps' to map container IDs to names. API container is the game server.",
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "palette-classic" },
+          "custom": {
+            "axisBorderShow": false,
+            "drawStyle": "line",
+            "fillOpacity": 20,
+            "gradientMode": "opacity",
+            "lineInterpolation": "smooth",
+            "lineWidth": 2,
+            "showPoints": "never",
+            "thresholdsStyle": { "mode": "line" }
+          },
+          "max": 100,
+          "min": 0,
+          "thresholds": { "mode": "absolute", "steps": [{ "color": "green", "value": null }, { "color": "yellow", "value": 80 }, { "color": "red", "value": 95 }] },
+          "unit": "percent"
+        }
+      },
+      "gridPos": { "h": 7, "w": 12, "x": 0, "y": 50 },
+      "id": 71,
+      "options": {
+        "legend": { "calcs": ["mean", "max"], "displayMode": "table", "placement": "bottom", "showLegend": true },
+        "tooltip": { "mode": "multi", "sort": "desc" }
+      },
+      "targets": [{ "expr": "sum by (short_id) (rate(container_cpu_usage_seconds_total{job=\"cadvisor\", id=~\"/docker/[a-f0-9]+\"}[1m])) * 100", "legendFormat": "{{short_id}}", "refId": "A" }],
+      "title": "Container CPU % (docker ps for ID→name)",
+      "type": "timeseries"
+    },
+    {
+      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "description": "Memory usage in bytes for each Docker container. Shows how much RAM each container is consuming. Use 'docker ps' to map container IDs to service names. Watch for memory leaks (continuously growing) or OOM risks (approaching container limits). API container typically uses the most memory.",
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "palette-classic" },
+          "custom": {
+            "axisBorderShow": false,
+            "drawStyle": "line",
+            "fillOpacity": 20,
+            "gradientMode": "opacity",
+            "lineInterpolation": "smooth",
+            "lineWidth": 2,
+            "showPoints": "never"
+          },
+          "thresholds": { "mode": "absolute", "steps": [{ "color": "green", "value": null }] },
+          "unit": "bytes"
+        }
+      },
+      "gridPos": { "h": 7, "w": 12, "x": 12, "y": 50 },
+      "id": 72,
+      "options": {
+        "legend": { "calcs": ["mean", "max"], "displayMode": "table", "placement": "bottom", "showLegend": true },
+        "tooltip": { "mode": "multi", "sort": "desc" }
+      },
+      "targets": [{ "expr": "container_memory_usage_bytes{job=\"cadvisor\", id=~\"/docker/[a-f0-9]+\"}", "legendFormat": "{{short_id}}", "refId": "A" }],
+      "title": "Container Memory (docker ps for ID→name)",
+      "type": "timeseries"
     }
   ],
   "refresh": "2s",
