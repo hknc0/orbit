@@ -17,6 +17,7 @@ export interface InterpolatedGravityWell {
   position: Vec2;
   mass: number;
   coreRadius: number;
+  bornTime: number; // Timestamp when well first appeared (for birth animation)
 }
 
 // Interpolated state for rendering
@@ -103,6 +104,9 @@ export class StateSync {
   // Destroyed gravity wells (filter from interpolated state until server confirms removal)
   private destroyedWellIds: Set<number> = new Set();
 
+  // Track when gravity wells were first seen (for birth animation)
+  private wellBornTimes: Map<number, number> = new Map();
+
   setLocalPlayerId(id: PlayerId): void {
     this.localPlayerId = id;
   }
@@ -110,6 +114,7 @@ export class StateSync {
   // Mark a gravity well as destroyed (called when GravityWellDestroyed event received)
   markWellDestroyed(wellId: number): void {
     this.destroyedWellIds.add(wellId);
+    this.wellBornTimes.delete(wellId);
   }
 
   // Apply a full snapshot from server
@@ -354,6 +359,14 @@ export class StateSync {
       });
     }
 
+    // Track new wells and assign born times
+    const now = performance.now();
+    for (const w of snapshot.gravityWells) {
+      if (!this.wellBornTimes.has(w.id)) {
+        this.wellBornTimes.set(w.id, now);
+      }
+    }
+
     // Build gravity wells array, filtering destroyed wells using pre-computed Map
     const gravityWells: InterpolatedGravityWell[] = [];
     for (const [id, w] of wellMap) {
@@ -363,6 +376,7 @@ export class StateSync {
           position: w.position.clone(),
           mass: w.mass,
           coreRadius: w.coreRadius,
+          bornTime: this.wellBornTimes.get(w.id) ?? now,
         });
       }
     }
@@ -486,6 +500,14 @@ export class StateSync {
       }
     }
 
+    // Track new wells and assign born times
+    const now = performance.now();
+    for (const [id] of afterEntry.wellMap) {
+      if (!this.wellBornTimes.has(id)) {
+        this.wellBornTimes.set(id, now);
+      }
+    }
+
     // Interpolate gravity wells using pre-computed Maps (O(1) lookups)
     const gravityWells: InterpolatedGravityWell[] = [];
     for (const [id, afterWell] of afterEntry.wellMap) {
@@ -493,6 +515,7 @@ export class StateSync {
       if (this.destroyedWellIds.size > 0 && this.destroyedWellIds.has(id)) {
         continue;
       }
+      const bornTime = this.wellBornTimes.get(id) ?? now;
       const beforeWell = beforeEntry.wellMap.get(id);
       if (beforeWell) {
         gravityWells.push({
@@ -500,6 +523,7 @@ export class StateSync {
           position: vec2Lerp(beforeWell.position, afterWell.position, t),
           mass: beforeWell.mass + (afterWell.mass - beforeWell.mass) * t,
           coreRadius: beforeWell.coreRadius + (afterWell.coreRadius - beforeWell.coreRadius) * t,
+          bornTime,
         });
       } else {
         gravityWells.push({
@@ -507,6 +531,7 @@ export class StateSync {
           position: afterWell.position.clone(),
           mass: afterWell.mass,
           coreRadius: afterWell.coreRadius,
+          bornTime,
         });
       }
     }
@@ -562,5 +587,6 @@ export class StateSync {
     this.predictedPosition = new Vec2();
     this.predictedVelocity = new Vec2();
     this.destroyedWellIds.clear();
+    this.wellBornTimes.clear();
   }
 }
