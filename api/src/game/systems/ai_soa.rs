@@ -6,6 +6,7 @@
 //! - Behavior batching for branch-free processing
 //! - Dormancy system for distant bot optimization
 //! - Zone-based approximate queries
+//! - **Adaptive dormancy** that adjusts based on game health metrics
 //!
 //! # Environment Variables
 //!
@@ -13,14 +14,22 @@
 //!
 //! ## Feature Toggles
 //! - `AI_SOA_DORMANCY_ENABLED` - Enable/disable dormancy system (default: true)
+//! - `AI_SOA_ADAPTIVE_DORMANCY` - Enable dynamic threshold adjustment (default: true)
 //! - `AI_SOA_ZONE_QUERIES_ENABLED` - Enable/disable zone-based queries (default: true)
 //! - `AI_SOA_BEHAVIOR_BATCHING_ENABLED` - Enable/disable behavior batching (default: true)
 //! - `AI_SOA_PARALLEL_ENABLED` - Enable/disable parallel processing (default: true)
 //!
-//! ## LOD Distance Thresholds
+//! ## LOD Distance Thresholds (base values, adjusted dynamically if adaptive)
 //! - `AI_SOA_LOD_FULL_RADIUS` - Distance for full AI updates (default: 500.0)
 //! - `AI_SOA_LOD_REDUCED_RADIUS` - Distance for reduced updates (default: 2000.0)
 //! - `AI_SOA_LOD_DORMANT_RADIUS` - Distance for dormant mode (default: 5000.0)
+//!
+//! ## Adaptive Dormancy Configuration
+//! - `AI_SOA_TARGET_TICK_MS` - Target tick duration in ms (default: 30.0 for 30Hz)
+//! - `AI_SOA_CRITICAL_TICK_MS` - Critical threshold triggering emergency mode (default: 50.0)
+//! - `AI_SOA_ADAPTATION_RATE` - How fast thresholds adjust, 0.0-1.0 (default: 0.1)
+//! - `AI_SOA_MIN_LOD_SCALE` - Minimum LOD scale factor (default: 0.25)
+//! - `AI_SOA_MAX_LOD_SCALE` - Maximum LOD scale factor (default: 2.0)
 //!
 //! ## Update Intervals
 //! - `AI_SOA_REDUCED_UPDATE_INTERVAL` - Ticks between reduced mode updates (default: 4)
@@ -68,6 +77,28 @@ pub const DEFAULT_WELL_CACHE_REFRESH_INTERVAL: f32 = 0.5;
 pub const DEFAULT_DECISION_INTERVAL_SOA: f32 = 0.5;
 
 // ============================================================================
+// Adaptive Dormancy Constants
+// ============================================================================
+
+/// Target tick duration in milliseconds (30Hz = 33.3ms, 60Hz = 16.6ms)
+pub const DEFAULT_TARGET_TICK_MS: f32 = 30.0;
+
+/// Critical tick duration that triggers emergency dormancy scaling
+pub const DEFAULT_CRITICAL_TICK_MS: f32 = 50.0;
+
+/// How fast thresholds adapt (0.0 = never, 1.0 = instant)
+pub const DEFAULT_ADAPTATION_RATE: f32 = 0.1;
+
+/// Minimum LOD scale factor (0.25 = radii shrink to 25% of base)
+pub const DEFAULT_MIN_LOD_SCALE: f32 = 0.25;
+
+/// Maximum LOD scale factor (2.0 = radii expand to 200% of base)
+pub const DEFAULT_MAX_LOD_SCALE: f32 = 2.0;
+
+/// Health metric history size for averaging
+pub const HEALTH_HISTORY_SIZE: usize = 30;
+
+// ============================================================================
 // Runtime Configuration (loaded from ENV vars)
 // ============================================================================
 
@@ -80,6 +111,8 @@ pub struct AiSoaConfig {
     // Feature toggles
     /// Enable dormancy system (bots far from humans update less frequently)
     pub dormancy_enabled: bool,
+    /// Enable adaptive dormancy (dynamic threshold adjustment based on health)
+    pub adaptive_dormancy: bool,
     /// Enable zone-based spatial queries for threat detection
     pub zone_queries_enabled: bool,
     /// Enable behavior batching for branch-free processing
@@ -87,13 +120,25 @@ pub struct AiSoaConfig {
     /// Enable parallel processing via Rayon
     pub parallel_enabled: bool,
 
-    // LOD distance thresholds
-    /// Distance from human for full AI updates (every tick)
+    // LOD distance thresholds (base values, scaled by adaptive system)
+    /// Base distance from human for full AI updates (every tick)
     pub lod_full_radius: f32,
-    /// Distance from human for reduced AI updates
+    /// Base distance from human for reduced AI updates
     pub lod_reduced_radius: f32,
-    /// Distance from human for dormant mode
+    /// Base distance from human for dormant mode
     pub lod_dormant_radius: f32,
+
+    // Adaptive dormancy settings
+    /// Target tick duration in milliseconds
+    pub target_tick_ms: f32,
+    /// Critical tick duration triggering emergency mode
+    pub critical_tick_ms: f32,
+    /// Rate of threshold adaptation (0.0-1.0)
+    pub adaptation_rate: f32,
+    /// Minimum LOD scale factor
+    pub min_lod_scale: f32,
+    /// Maximum LOD scale factor
+    pub max_lod_scale: f32,
 
     // Update intervals
     /// Ticks between updates in reduced mode
@@ -117,14 +162,22 @@ impl Default for AiSoaConfig {
         Self {
             // Feature toggles - all enabled by default
             dormancy_enabled: true,
+            adaptive_dormancy: true,
             zone_queries_enabled: true,
             behavior_batching_enabled: true,
             parallel_enabled: true,
 
-            // LOD thresholds
+            // LOD thresholds (base values)
             lod_full_radius: DEFAULT_LOD_FULL_RADIUS,
             lod_reduced_radius: DEFAULT_LOD_REDUCED_RADIUS,
             lod_dormant_radius: DEFAULT_LOD_DORMANT_RADIUS,
+
+            // Adaptive dormancy
+            target_tick_ms: DEFAULT_TARGET_TICK_MS,
+            critical_tick_ms: DEFAULT_CRITICAL_TICK_MS,
+            adaptation_rate: DEFAULT_ADAPTATION_RATE,
+            min_lod_scale: DEFAULT_MIN_LOD_SCALE,
+            max_lod_scale: DEFAULT_MAX_LOD_SCALE,
 
             // Update intervals
             reduced_update_interval: DEFAULT_REDUCED_UPDATE_INTERVAL,
@@ -149,6 +202,9 @@ impl AiSoaConfig {
         if let Ok(val) = std::env::var("AI_SOA_DORMANCY_ENABLED") {
             config.dormancy_enabled = val.parse().unwrap_or(true);
         }
+        if let Ok(val) = std::env::var("AI_SOA_ADAPTIVE_DORMANCY") {
+            config.adaptive_dormancy = val.parse().unwrap_or(true);
+        }
         if let Ok(val) = std::env::var("AI_SOA_ZONE_QUERIES_ENABLED") {
             config.zone_queries_enabled = val.parse().unwrap_or(true);
         }
@@ -159,7 +215,7 @@ impl AiSoaConfig {
             config.parallel_enabled = val.parse().unwrap_or(true);
         }
 
-        // LOD thresholds
+        // LOD thresholds (base values)
         if let Ok(val) = std::env::var("AI_SOA_LOD_FULL_RADIUS") {
             config.lod_full_radius = val.parse().unwrap_or(DEFAULT_LOD_FULL_RADIUS);
         }
@@ -168,6 +224,23 @@ impl AiSoaConfig {
         }
         if let Ok(val) = std::env::var("AI_SOA_LOD_DORMANT_RADIUS") {
             config.lod_dormant_radius = val.parse().unwrap_or(DEFAULT_LOD_DORMANT_RADIUS);
+        }
+
+        // Adaptive dormancy settings
+        if let Ok(val) = std::env::var("AI_SOA_TARGET_TICK_MS") {
+            config.target_tick_ms = val.parse().unwrap_or(DEFAULT_TARGET_TICK_MS);
+        }
+        if let Ok(val) = std::env::var("AI_SOA_CRITICAL_TICK_MS") {
+            config.critical_tick_ms = val.parse().unwrap_or(DEFAULT_CRITICAL_TICK_MS);
+        }
+        if let Ok(val) = std::env::var("AI_SOA_ADAPTATION_RATE") {
+            config.adaptation_rate = val.parse().unwrap_or(DEFAULT_ADAPTATION_RATE).clamp(0.0, 1.0);
+        }
+        if let Ok(val) = std::env::var("AI_SOA_MIN_LOD_SCALE") {
+            config.min_lod_scale = val.parse().unwrap_or(DEFAULT_MIN_LOD_SCALE).max(0.1);
+        }
+        if let Ok(val) = std::env::var("AI_SOA_MAX_LOD_SCALE") {
+            config.max_lod_scale = val.parse().unwrap_or(DEFAULT_MAX_LOD_SCALE).max(config.min_lod_scale);
         }
 
         // Update intervals
@@ -194,12 +267,14 @@ impl AiSoaConfig {
         // Log configuration on startup
         tracing::info!(
             dormancy = config.dormancy_enabled,
+            adaptive = config.adaptive_dormancy,
             zone_queries = config.zone_queries_enabled,
             behavior_batching = config.behavior_batching_enabled,
             parallel = config.parallel_enabled,
             lod_full = config.lod_full_radius,
             lod_reduced = config.lod_reduced_radius,
             lod_dormant = config.lod_dormant_radius,
+            target_tick_ms = config.target_tick_ms,
             "AI SoA configuration loaded"
         );
 
@@ -216,6 +291,291 @@ impl AiSoaConfig {
     pub fn set_global(config: Self) {
         let _ = CONFIG.set(config);
     }
+}
+
+// ============================================================================
+// Adaptive Dormancy Controller
+// ============================================================================
+
+/// Health status levels (matching Metrics::performance_status)
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[repr(u8)]
+pub enum HealthStatus {
+    Excellent = 0, // < 50% budget, LOD can expand
+    Good = 1,      // 50-75% budget, maintain current
+    Warning = 2,   // 75-90% budget, start tightening
+    Critical = 3,  // 90-100% budget, aggressive dormancy
+    Catastrophic = 4, // > 100% budget, emergency mode
+}
+
+impl From<u64> for HealthStatus {
+    fn from(value: u64) -> Self {
+        match value {
+            0 => HealthStatus::Excellent,
+            1 => HealthStatus::Good,
+            2 => HealthStatus::Warning,
+            3 => HealthStatus::Critical,
+            _ => HealthStatus::Catastrophic,
+        }
+    }
+}
+
+/// Adaptive dormancy controller that adjusts LOD thresholds based on game health.
+///
+/// Uses exponential moving average for smooth transitions and integrates with
+/// the existing Metrics system for performance data.
+#[derive(Debug, Clone)]
+pub struct AdaptiveDormancy {
+    /// Current LOD scale factor (1.0 = base thresholds)
+    pub lod_scale: f32,
+    /// Target LOD scale based on latest health assessment
+    pub target_scale: f32,
+    /// Exponential moving average of tick time (ms)
+    pub tick_time_ema_ms: f32,
+    /// Current health status
+    pub health_status: HealthStatus,
+    /// Whether adaptive mode is enabled
+    pub enabled: bool,
+    /// Ticks since last adaptation
+    ticks_since_adaptation: u32,
+    /// Minimum ticks between adaptations (prevents oscillation)
+    adaptation_cooldown: u32,
+}
+
+impl Default for AdaptiveDormancy {
+    fn default() -> Self {
+        Self {
+            lod_scale: 1.0,
+            target_scale: 1.0,
+            tick_time_ema_ms: 0.0,
+            health_status: HealthStatus::Excellent,
+            enabled: AiSoaConfig::global().adaptive_dormancy,
+            ticks_since_adaptation: 0,
+            adaptation_cooldown: 30, // ~1 second at 30Hz
+        }
+    }
+}
+
+impl AdaptiveDormancy {
+    /// Create a new adaptive dormancy controller
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Create with explicit enabled state (for testing)
+    pub fn with_enabled(enabled: bool) -> Self {
+        Self {
+            enabled,
+            ..Self::default()
+        }
+    }
+
+    /// Update the adaptive controller based on current metrics.
+    ///
+    /// # Arguments
+    /// * `tick_time_us` - Current tick time in microseconds
+    /// * `performance_status` - Current performance status (0-4)
+    pub fn update(&mut self, tick_time_us: u64, performance_status: u64) {
+        if !self.enabled {
+            self.lod_scale = 1.0;
+            return;
+        }
+
+        let config = AiSoaConfig::global();
+        self.ticks_since_adaptation += 1;
+
+        // Update EMA of tick time (in ms for easier comparison)
+        let tick_time_ms = tick_time_us as f32 / 1000.0;
+        let alpha = 0.1; // EMA smoothing factor
+        let old_ema = self.tick_time_ema_ms;
+        self.tick_time_ema_ms = if self.tick_time_ema_ms == 0.0 {
+            tick_time_ms
+        } else {
+            self.tick_time_ema_ms * (1.0 - alpha) + tick_time_ms * alpha
+        };
+
+        // Update health status
+        let old_status = self.health_status;
+        self.health_status = HealthStatus::from(performance_status);
+
+        // Log status changes
+        if old_status != self.health_status {
+            tracing::info!(
+                old = ?old_status,
+                new = ?self.health_status,
+                tick_ema_ms = self.tick_time_ema_ms,
+                "Adaptive dormancy: health status changed"
+            );
+        }
+
+        // Only adapt if cooldown has passed
+        if self.ticks_since_adaptation < self.adaptation_cooldown {
+            // Still interpolate toward target
+            self.interpolate_scale(config.adaptation_rate);
+            return;
+        }
+
+        // Calculate target scale based on health
+        let old_target = self.target_scale;
+        self.target_scale = self.calculate_target_scale(config);
+
+        // Log significant target changes
+        if (old_target - self.target_scale).abs() > 0.1 {
+            tracing::info!(
+                old_target = format!("{:.2}", old_target),
+                new_target = format!("{:.2}", self.target_scale),
+                current_scale = format!("{:.2}", self.lod_scale),
+                health = ?self.health_status,
+                tick_ema_ms = format!("{:.1}", self.tick_time_ema_ms),
+                "Adaptive dormancy: adjusting LOD thresholds"
+            );
+        }
+
+        // Reset cooldown
+        self.ticks_since_adaptation = 0;
+
+        // Interpolate toward target (smoothly)
+        let old_scale = self.lod_scale;
+        self.interpolate_scale(config.adaptation_rate);
+
+        // Log emergency mode entry/exit
+        if self.is_emergency() && old_ema < config.critical_tick_ms {
+            tracing::warn!(
+                tick_ema_ms = format!("{:.1}", self.tick_time_ema_ms),
+                lod_scale = format!("{:.2}", self.lod_scale),
+                full_radius = format!("{:.0}", self.scaled_full_radius()),
+                "Adaptive dormancy: EMERGENCY MODE - aggressive dormancy activated"
+            );
+        } else if !self.is_emergency() && old_status == HealthStatus::Catastrophic {
+            tracing::info!(
+                tick_ema_ms = format!("{:.1}", self.tick_time_ema_ms),
+                lod_scale = format!("{:.2}", self.lod_scale),
+                "Adaptive dormancy: recovered from emergency mode"
+            );
+        }
+
+        // Periodic debug log (every ~10 adaptations)
+        if self.ticks_since_adaptation == 0 && rand::random::<u8>() < 25 {
+            tracing::debug!(
+                scale = format!("{:.2}", self.lod_scale),
+                target = format!("{:.2}", self.target_scale),
+                health = ?self.health_status,
+                tick_ema_ms = format!("{:.1}", self.tick_time_ema_ms),
+                full_r = format!("{:.0}", self.scaled_full_radius()),
+                reduced_r = format!("{:.0}", self.scaled_reduced_radius()),
+                "Adaptive dormancy status"
+            );
+        }
+
+        let _ = old_scale; // suppress warning
+    }
+
+    /// Calculate the target LOD scale based on current health metrics
+    fn calculate_target_scale(&self, config: &AiSoaConfig) -> f32 {
+        // Primary: Use health status for coarse adjustment
+        let status_factor = match self.health_status {
+            HealthStatus::Excellent => 1.5,   // Can expand LOD
+            HealthStatus::Good => 1.0,        // Maintain current
+            HealthStatus::Warning => 0.7,     // Start shrinking
+            HealthStatus::Critical => 0.4,    // Aggressive shrink
+            HealthStatus::Catastrophic => 0.25, // Emergency mode
+        };
+
+        // Secondary: Fine-tune based on actual tick time vs target
+        let tick_ratio = self.tick_time_ema_ms / config.target_tick_ms;
+        let tick_factor = if tick_ratio < 0.5 {
+            // Under 50% budget - can expand
+            1.0 + (0.5 - tick_ratio) // Up to 1.5x
+        } else if tick_ratio < 0.8 {
+            // 50-80% budget - maintain
+            1.0
+        } else if tick_ratio < 1.0 {
+            // 80-100% budget - gentle shrink
+            1.0 - (tick_ratio - 0.8) * 0.5 // Down to 0.9x
+        } else if tick_ratio < config.critical_tick_ms / config.target_tick_ms {
+            // Over budget but not critical
+            0.8 - (tick_ratio - 1.0) * 0.3 // Down to ~0.5x
+        } else {
+            // Critical - emergency shrink
+            0.3
+        };
+
+        // Combine factors (weighted average)
+        let combined = status_factor * 0.6 + tick_factor * 0.4;
+
+        // Clamp to configured bounds
+        combined.clamp(config.min_lod_scale, config.max_lod_scale)
+    }
+
+    /// Smoothly interpolate current scale toward target
+    fn interpolate_scale(&mut self, rate: f32) {
+        let diff = self.target_scale - self.lod_scale;
+
+        // Use faster interpolation when shrinking (performance issue)
+        let effective_rate = if diff < 0.0 {
+            rate * 2.0 // Shrink faster
+        } else {
+            rate // Expand slower
+        };
+
+        self.lod_scale += diff * effective_rate;
+
+        // Snap to target if very close
+        if (self.target_scale - self.lod_scale).abs() < 0.01 {
+            self.lod_scale = self.target_scale;
+        }
+    }
+
+    /// Get the scaled LOD full radius
+    #[inline]
+    pub fn scaled_full_radius(&self) -> f32 {
+        AiSoaConfig::global().lod_full_radius * self.lod_scale
+    }
+
+    /// Get the scaled LOD reduced radius
+    #[inline]
+    pub fn scaled_reduced_radius(&self) -> f32 {
+        AiSoaConfig::global().lod_reduced_radius * self.lod_scale
+    }
+
+    /// Get the scaled LOD dormant radius
+    #[inline]
+    pub fn scaled_dormant_radius(&self) -> f32 {
+        AiSoaConfig::global().lod_dormant_radius * self.lod_scale
+    }
+
+    /// Check if system is in emergency mode
+    #[inline]
+    pub fn is_emergency(&self) -> bool {
+        self.health_status == HealthStatus::Catastrophic
+    }
+
+    /// Get current stats for debugging/metrics
+    pub fn stats(&self) -> AdaptiveDormancyStats {
+        AdaptiveDormancyStats {
+            enabled: self.enabled,
+            lod_scale: self.lod_scale,
+            target_scale: self.target_scale,
+            tick_time_ema_ms: self.tick_time_ema_ms,
+            health_status: self.health_status as u8,
+            scaled_full_radius: self.scaled_full_radius(),
+            scaled_reduced_radius: self.scaled_reduced_radius(),
+            scaled_dormant_radius: self.scaled_dormant_radius(),
+        }
+    }
+}
+
+/// Stats for adaptive dormancy (for metrics/debugging)
+#[derive(Debug, Clone, Copy)]
+pub struct AdaptiveDormancyStats {
+    pub enabled: bool,
+    pub lod_scale: f32,
+    pub target_scale: f32,
+    pub tick_time_ema_ms: f32,
+    pub health_status: u8,
+    pub scaled_full_radius: f32,
+    pub scaled_reduced_radius: f32,
+    pub scaled_dormant_radius: f32,
 }
 
 // ============================================================================
@@ -441,6 +801,8 @@ pub struct AiManagerSoA {
     pub update_modes: Vec<UpdateMode>,
     /// Active mask (1 = should update this tick)
     pub active_mask: BitVec,
+    /// Adaptive dormancy controller (adjusts thresholds based on health)
+    pub adaptive: AdaptiveDormancy,
 
     // === Hierarchical Spatial ===
     /// Zone grid for aggregate queries
@@ -484,6 +846,7 @@ impl AiManagerSoA {
 
             update_modes: Vec::with_capacity(capacity),
             active_mask: BitVec::with_capacity(capacity),
+            adaptive: AdaptiveDormancy::new(),
 
             zone_grid: ZoneGrid::default(),
             batches: BehaviorBatches::default(),
@@ -642,6 +1005,7 @@ impl AiManagerSoA {
 
     /// Update dormancy based on distance to human players
     /// Respects AI_SOA_DORMANCY_ENABLED env var - when disabled, all bots update every tick
+    /// Uses adaptive thresholds when AI_SOA_ADAPTIVE_DORMANCY is enabled
     pub fn update_dormancy(&mut self, state: &GameState) {
         let config = AiSoaConfig::global();
 
@@ -653,6 +1017,21 @@ impl AiManagerSoA {
             }
             return;
         }
+
+        // Get thresholds (scaled by adaptive controller if enabled)
+        let (full_radius, reduced_radius, dormant_radius) = if self.adaptive.enabled {
+            (
+                self.adaptive.scaled_full_radius(),
+                self.adaptive.scaled_reduced_radius(),
+                self.adaptive.scaled_dormant_radius(),
+            )
+        } else {
+            (
+                config.lod_full_radius,
+                config.lod_reduced_radius,
+                config.lod_dormant_radius,
+            )
+        };
 
         // Collect human player positions
         let human_positions: Vec<Vec2> = state
@@ -681,12 +1060,15 @@ impl AiManagerSoA {
                 .min_by(|a, b| a.partial_cmp(b).unwrap())
                 .unwrap_or(f32::MAX);
 
-            // Determine update mode based on distance (using config thresholds)
-            let mode = if min_dist < config.lod_full_radius {
+            // Determine update mode based on distance (using scaled thresholds)
+            let mode = if min_dist < full_radius {
                 UpdateMode::Full
-            } else if min_dist < config.lod_reduced_radius {
+            } else if min_dist < reduced_radius {
                 UpdateMode::Reduced
+            } else if min_dist < dormant_radius {
+                UpdateMode::Dormant
             } else {
+                // Beyond dormant radius - very infrequent updates
                 UpdateMode::Dormant
             };
             self.update_modes[i] = mode;
@@ -699,6 +1081,16 @@ impl AiManagerSoA {
             };
             self.active_mask.set(i, should_update);
         }
+    }
+
+    /// Update the adaptive dormancy controller with current metrics.
+    /// Should be called before update() with the latest tick time and performance status.
+    ///
+    /// # Arguments
+    /// * `tick_time_us` - Current tick time in microseconds (from Metrics)
+    /// * `performance_status` - Current performance status 0-4 (from Metrics)
+    pub fn update_adaptive(&mut self, tick_time_us: u64, performance_status: u64) {
+        self.adaptive.update(tick_time_us, performance_status);
     }
 
     /// Main update function - processes all active bots
@@ -735,6 +1127,19 @@ impl AiManagerSoA {
 
         // Update firing for combat behaviors
         self.update_firing(state, dt);
+    }
+
+    /// Combined update with metrics (convenience method).
+    /// Updates adaptive controller then runs main update.
+    pub fn update_with_metrics(
+        &mut self,
+        state: &GameState,
+        dt: f32,
+        tick_time_us: u64,
+        performance_status: u64,
+    ) {
+        self.update_adaptive(tick_time_us, performance_status);
+        self.update(state, dt);
     }
 
     /// Sequential update fallback (when behavior batching is disabled)
@@ -1241,7 +1646,17 @@ impl AiManagerSoA {
             reduced_mode: reduced_count,
             dormant_mode: dormant_count,
             zone_count: self.zone_grid.zones.len(),
+            adaptive: if self.adaptive.enabled {
+                Some(self.adaptive.stats())
+            } else {
+                None
+            },
         }
+    }
+
+    /// Get the current adaptive dormancy stats directly
+    pub fn adaptive_stats(&self) -> AdaptiveDormancyStats {
+        self.adaptive.stats()
     }
 }
 
@@ -1260,6 +1675,8 @@ pub struct AiManagerStats {
     pub reduced_mode: usize,
     pub dormant_mode: usize,
     pub zone_count: usize,
+    /// Adaptive dormancy stats (if enabled)
+    pub adaptive: Option<AdaptiveDormancyStats>,
 }
 
 #[cfg(test)]
@@ -2025,12 +2442,18 @@ mod tests {
     fn test_config_custom_values() {
         let config = AiSoaConfig {
             dormancy_enabled: false,
+            adaptive_dormancy: false,
             zone_queries_enabled: false,
             behavior_batching_enabled: false,
             parallel_enabled: false,
             lod_full_radius: 100.0,
             lod_reduced_radius: 500.0,
             lod_dormant_radius: 1000.0,
+            target_tick_ms: 20.0,
+            critical_tick_ms: 40.0,
+            adaptation_rate: 0.2,
+            min_lod_scale: 0.5,
+            max_lod_scale: 1.5,
             reduced_update_interval: 2,
             dormant_update_interval: 4,
             zone_cell_size: 2048.0,
@@ -2039,9 +2462,11 @@ mod tests {
         };
 
         assert!(!config.dormancy_enabled);
+        assert!(!config.adaptive_dormancy);
         assert!(!config.zone_queries_enabled);
         assert_eq!(config.reduced_update_interval, 2);
         assert!((config.lod_full_radius - 100.0).abs() < 0.01);
+        assert!((config.target_tick_ms - 20.0).abs() < 0.01);
     }
 
     #[test]
@@ -2916,5 +3341,295 @@ mod tests {
         assert_eq!(manager.tick_counter, 1);
         manager.update(&state, 0.033);
         assert_eq!(manager.tick_counter, 2);
+    }
+
+    // ========================================================================
+    // Adaptive Dormancy Tests
+    // ========================================================================
+
+    #[test]
+    fn test_adaptive_dormancy_default() {
+        let adaptive = AdaptiveDormancy::new();
+
+        assert_eq!(adaptive.lod_scale, 1.0);
+        assert_eq!(adaptive.target_scale, 1.0);
+        assert_eq!(adaptive.tick_time_ema_ms, 0.0);
+        assert_eq!(adaptive.health_status, HealthStatus::Excellent);
+    }
+
+    #[test]
+    fn test_adaptive_dormancy_disabled() {
+        let mut adaptive = AdaptiveDormancy::with_enabled(false);
+
+        // Even with bad metrics, scale should stay at 1.0 when disabled
+        adaptive.update(60000, 4); // 60ms, Catastrophic
+
+        assert_eq!(adaptive.lod_scale, 1.0);
+    }
+
+    #[test]
+    fn test_adaptive_dormancy_ema_update() {
+        let mut adaptive = AdaptiveDormancy::with_enabled(true);
+        adaptive.adaptation_cooldown = 0; // Disable cooldown for test
+
+        // First update initializes EMA
+        adaptive.update(10000, 0); // 10ms
+        assert!((adaptive.tick_time_ema_ms - 10.0).abs() < 0.1);
+
+        // Subsequent updates use EMA smoothing
+        adaptive.update(20000, 0); // 20ms
+        // EMA should be between 10 and 20 (closer to 10 due to 0.1 alpha)
+        assert!(adaptive.tick_time_ema_ms > 10.0);
+        assert!(adaptive.tick_time_ema_ms < 20.0);
+    }
+
+    #[test]
+    fn test_adaptive_dormancy_health_status_from() {
+        assert_eq!(HealthStatus::from(0), HealthStatus::Excellent);
+        assert_eq!(HealthStatus::from(1), HealthStatus::Good);
+        assert_eq!(HealthStatus::from(2), HealthStatus::Warning);
+        assert_eq!(HealthStatus::from(3), HealthStatus::Critical);
+        assert_eq!(HealthStatus::from(4), HealthStatus::Catastrophic);
+        assert_eq!(HealthStatus::from(100), HealthStatus::Catastrophic);
+    }
+
+    #[test]
+    fn test_adaptive_dormancy_excellent_expands() {
+        let mut adaptive = AdaptiveDormancy::with_enabled(true);
+        adaptive.adaptation_cooldown = 0;
+
+        // Simulate excellent performance (low tick time)
+        for _ in 0..50 {
+            adaptive.update(5000, 0); // 5ms, Excellent
+        }
+
+        // Scale should expand (> 1.0) with excellent health
+        assert!(adaptive.target_scale > 1.0);
+        assert!(adaptive.lod_scale > 1.0);
+    }
+
+    #[test]
+    fn test_adaptive_dormancy_critical_shrinks() {
+        let mut adaptive = AdaptiveDormancy::with_enabled(true);
+        adaptive.adaptation_cooldown = 0;
+
+        // Simulate critical performance
+        for _ in 0..50 {
+            adaptive.update(45000, 3); // 45ms, Critical
+        }
+
+        // Scale should shrink (< 1.0) with critical health
+        assert!(adaptive.target_scale < 1.0);
+        assert!(adaptive.lod_scale < 1.0);
+    }
+
+    #[test]
+    fn test_adaptive_dormancy_catastrophic_emergency() {
+        let mut adaptive = AdaptiveDormancy::with_enabled(true);
+        adaptive.adaptation_cooldown = 0;
+
+        // Simulate catastrophic performance
+        adaptive.update(80000, 4); // 80ms, Catastrophic
+
+        assert_eq!(adaptive.health_status, HealthStatus::Catastrophic);
+        assert!(adaptive.is_emergency());
+    }
+
+    #[test]
+    fn test_adaptive_dormancy_scaled_radii() {
+        let mut adaptive = AdaptiveDormancy::with_enabled(true);
+        let config = AiSoaConfig::global();
+
+        // At scale 1.0
+        adaptive.lod_scale = 1.0;
+        assert!((adaptive.scaled_full_radius() - config.lod_full_radius).abs() < 0.01);
+        assert!((adaptive.scaled_reduced_radius() - config.lod_reduced_radius).abs() < 0.01);
+        assert!((adaptive.scaled_dormant_radius() - config.lod_dormant_radius).abs() < 0.01);
+
+        // At scale 0.5
+        adaptive.lod_scale = 0.5;
+        assert!((adaptive.scaled_full_radius() - config.lod_full_radius * 0.5).abs() < 0.01);
+        assert!((adaptive.scaled_reduced_radius() - config.lod_reduced_radius * 0.5).abs() < 0.01);
+
+        // At scale 2.0
+        adaptive.lod_scale = 2.0;
+        assert!((adaptive.scaled_full_radius() - config.lod_full_radius * 2.0).abs() < 0.01);
+    }
+
+    #[test]
+    fn test_adaptive_dormancy_interpolation_shrinks_faster() {
+        let mut adaptive = AdaptiveDormancy::with_enabled(true);
+
+        // Set up for shrinking
+        adaptive.lod_scale = 1.0;
+        adaptive.target_scale = 0.5;
+
+        let rate = 0.1;
+        adaptive.interpolate_scale(rate);
+        let shrink_delta = 1.0 - adaptive.lod_scale;
+
+        // Reset for expanding
+        adaptive.lod_scale = 0.5;
+        adaptive.target_scale = 1.0;
+
+        adaptive.interpolate_scale(rate);
+        let expand_delta = adaptive.lod_scale - 0.5;
+
+        // Shrinking should be faster (2x rate)
+        assert!(shrink_delta > expand_delta * 1.5);
+    }
+
+    #[test]
+    fn test_adaptive_dormancy_cooldown() {
+        let mut adaptive = AdaptiveDormancy::with_enabled(true);
+        adaptive.adaptation_cooldown = 5;
+
+        // First 4 updates shouldn't recalculate target
+        let initial_target = adaptive.target_scale;
+        for i in 1..5 {
+            adaptive.update(50000, 4); // 50ms, Catastrophic
+            // Target shouldn't change during cooldown
+            if i < 5 {
+                assert_eq!(adaptive.target_scale, initial_target);
+            }
+        }
+
+        // After cooldown, target should change
+        adaptive.update(50000, 4);
+        assert!(adaptive.target_scale != initial_target || adaptive.target_scale < 1.0);
+    }
+
+    #[test]
+    fn test_adaptive_dormancy_stats() {
+        let mut adaptive = AdaptiveDormancy::with_enabled(true);
+        adaptive.lod_scale = 0.75;
+        adaptive.target_scale = 0.5;
+        adaptive.tick_time_ema_ms = 35.5;
+        adaptive.health_status = HealthStatus::Warning;
+
+        let stats = adaptive.stats();
+
+        assert!(stats.enabled);
+        assert!((stats.lod_scale - 0.75).abs() < 0.01);
+        assert!((stats.target_scale - 0.5).abs() < 0.01);
+        assert!((stats.tick_time_ema_ms - 35.5).abs() < 0.01);
+        assert_eq!(stats.health_status, 2); // Warning
+    }
+
+    #[test]
+    fn test_manager_update_adaptive() {
+        let mut manager = AiManagerSoA::default();
+
+        // Update with metrics
+        manager.update_adaptive(15000, 0); // 15ms, Excellent
+
+        assert!(manager.adaptive.tick_time_ema_ms > 0.0);
+        assert_eq!(manager.adaptive.health_status, HealthStatus::Excellent);
+    }
+
+    #[test]
+    fn test_manager_update_with_metrics() {
+        let mut manager = AiManagerSoA::default();
+        let state = create_test_state();
+
+        // Combined update
+        manager.update_with_metrics(&state, 0.033, 10000, 0);
+
+        assert_eq!(manager.tick_counter, 1);
+        assert!(manager.adaptive.tick_time_ema_ms > 0.0);
+    }
+
+    #[test]
+    fn test_manager_adaptive_stats() {
+        let mut manager = AiManagerSoA::default();
+
+        // Disable adaptive for this test
+        manager.adaptive.enabled = false;
+
+        let stats = manager.stats();
+        assert!(stats.adaptive.is_none());
+
+        // Enable adaptive
+        manager.adaptive.enabled = true;
+        let stats = manager.stats();
+        assert!(stats.adaptive.is_some());
+    }
+
+    #[test]
+    fn test_dormancy_uses_adaptive_thresholds() {
+        let mut manager = AiManagerSoA::default();
+        let mut state = create_test_state();
+
+        // Add bot at 600 units (beyond default full radius of 500)
+        let bot = create_bot_player(Vec2::new(600.0, 0.0), 100.0);
+        let bot_id = bot.id;
+        state.add_player(bot);
+        manager.register_bot(bot_id);
+
+        // Add human at origin
+        let human = create_human_player(Vec2::new(0.0, 0.0), 100.0);
+        state.add_player(human);
+
+        // With default scale (1.0), bot should be in Reduced mode
+        manager.adaptive.enabled = true;
+        manager.adaptive.lod_scale = 1.0;
+        manager.update_dormancy(&state);
+
+        let idx = manager.get_index(bot_id).unwrap() as usize;
+        assert_eq!(manager.update_modes[idx], UpdateMode::Reduced);
+
+        // With expanded scale (2.0), full radius is 1000, so bot should be Full
+        manager.adaptive.lod_scale = 2.0;
+        manager.update_dormancy(&state);
+        assert_eq!(manager.update_modes[idx], UpdateMode::Full);
+
+        // With shrunk scale (0.5), full radius is 250, so bot should still be Reduced
+        manager.adaptive.lod_scale = 0.5;
+        manager.update_dormancy(&state);
+        assert_eq!(manager.update_modes[idx], UpdateMode::Reduced);
+    }
+
+    #[test]
+    fn test_adaptive_recovery_from_critical() {
+        let mut adaptive = AdaptiveDormancy::with_enabled(true);
+        adaptive.adaptation_cooldown = 0;
+
+        // Start with critical performance
+        for _ in 0..30 {
+            adaptive.update(45000, 3); // 45ms, Critical
+        }
+        let critical_scale = adaptive.lod_scale;
+
+        // Recovery to good performance
+        for _ in 0..50 {
+            adaptive.update(15000, 1); // 15ms, Good
+        }
+
+        // Scale should have recovered (increased)
+        assert!(adaptive.lod_scale > critical_scale);
+        assert!(!adaptive.is_emergency());
+    }
+
+    #[test]
+    fn test_adaptive_scale_clamping() {
+        let mut adaptive = AdaptiveDormancy::with_enabled(true);
+        adaptive.adaptation_cooldown = 0;
+        let config = AiSoaConfig::global();
+
+        // Even with perfect performance, scale shouldn't exceed max
+        for _ in 0..100 {
+            adaptive.update(1000, 0); // 1ms, Excellent
+        }
+        assert!(adaptive.lod_scale <= config.max_lod_scale);
+
+        // Reset and test minimum
+        adaptive.lod_scale = 1.0;
+        adaptive.target_scale = 1.0;
+
+        // Even with terrible performance, scale shouldn't go below min
+        for _ in 0..100 {
+            adaptive.update(100000, 4); // 100ms, Catastrophic
+        }
+        assert!(adaptive.lod_scale >= config.min_lod_scale);
     }
 }
