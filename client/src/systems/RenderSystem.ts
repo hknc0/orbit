@@ -278,8 +278,8 @@ export class RenderSystem {
     this.renderGravityWaves(world);
     this.renderDeathEffects(world);
     this.renderCollisionEffects(world);
-    this.renderBoostFlames(world, state.input?.isBoosting ?? false); // Flames first (back)
-    this.renderPlayerTrails(world);                                    // Trails visible over flames
+    this.renderPlayerTrails(world);                                    // Trails first (back)
+    this.renderBoostFlames(world, state.input?.isBoosting ?? false);   // Flames on top of trails
     this.renderDebris(world);
     this.renderProjectiles(world);
     this.renderPlayerBodies(world);                                    // Bodies on top
