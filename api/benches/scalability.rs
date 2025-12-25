@@ -1,429 +1,270 @@
-//! Scalability benchmarks for Orbit Royale server
-//!
-//! Tests performance at various player counts to verify 500-1000+ player target.
+//! Scalability benchmarks for the Million-Scale AI SoA system
 //!
 //! Run with: cargo bench --bench scalability
 
 use criterion::{black_box, criterion_group, criterion_main, BenchmarkId, Criterion, Throughput};
-use orbit_royale_server::game::constants::physics::DT;
-use orbit_royale_server::game::state::{GameState, MatchPhase, Player};
-use orbit_royale_server::game::systems::{collision, gravity, physics};
+use orbit_royale_server::game::state::{GameState, MatchPhase, Player, GravityWell};
+use orbit_royale_server::game::systems::ai_soa::{AiManagerSoA, AiBehavior};
 use orbit_royale_server::util::vec2::Vec2;
-use rand::Rng;
 use uuid::Uuid;
 
-/// Create a game state with the specified number of randomly distributed players
-fn create_state_with_players(count: usize) -> GameState {
+// ============================================================================
+// Test Data Generators
+// ============================================================================
+
+fn create_test_state_with_bots(bot_count: usize, human_count: usize) -> (GameState, AiManagerSoA) {
     let mut state = GameState::new();
     state.match_state.phase = MatchPhase::Playing;
-    let mut rng = rand::thread_rng();
 
-    for i in 0..count {
-        // Distribute players randomly across the arena
-        let angle = rng.gen_range(0.0..std::f32::consts::TAU);
-        let radius = rng.gen_range(100.0..600.0);
-        let position = Vec2::new(angle.cos() * radius, angle.sin() * radius);
+    // Add gravity wells
+    for i in 0..5 {
+        let angle = (i as f32) * std::f32::consts::TAU / 5.0;
+        let pos = Vec2::new(angle.cos() * 2000.0, angle.sin() * 2000.0);
+        let well = GravityWell::new(i, pos, 10000.0, 50.0);
+        state.arena.gravity_wells.insert(i, well);
+    }
 
-        // Random velocity
-        let velocity = Vec2::new(
-            rng.gen_range(-50.0..50.0),
-            rng.gen_range(-50.0..50.0),
-        );
+    let mut manager = AiManagerSoA::with_capacity(bot_count);
 
-        let player = Player {
+    // Add bots distributed around the arena
+    for i in 0..bot_count {
+        let angle = (i as f32) * std::f32::consts::TAU / (bot_count as f32);
+        let radius = 500.0 + (i as f32 % 1000.0);
+        let pos = Vec2::new(angle.cos() * radius, angle.sin() * radius);
+
+        let bot = Player {
             id: Uuid::new_v4(),
-            name: format!("Player{}", i),
-            position,
-            velocity,
-            rotation: rng.gen_range(0.0..std::f32::consts::TAU),
-            mass: rng.gen_range(50.0..200.0),
+            name: format!("Bot{}", i),
+            position: pos,
+            velocity: Vec2::new(angle.sin() * 50.0, -angle.cos() * 50.0),
+            rotation: 0.0,
+            mass: 100.0,
             alive: true,
             kills: 0,
             deaths: 0,
             spawn_protection: 0.0,
             is_bot: true,
-            color_index: (i % 8) as u8,
+            color_index: 0,
             respawn_timer: 0.0,
         };
-        state.add_player(player);
+        let bot_id = bot.id;
+        state.add_player(bot);
+        manager.register_bot(bot_id);
     }
 
-    // Add some projectiles (10% of player count)
-    for _ in 0..count / 10 {
-        let angle = rng.gen_range(0.0..std::f32::consts::TAU);
-        let radius = rng.gen_range(100.0..500.0);
-        let position = Vec2::new(angle.cos() * radius, angle.sin() * radius);
-        let velocity = Vec2::new(
-            rng.gen_range(-100.0..100.0),
-            rng.gen_range(-100.0..100.0),
-        );
-        state.add_projectile(Uuid::new_v4(), position, velocity, 10.0);
+    // Add human players
+    for i in 0..human_count {
+        let angle = (i as f32) * std::f32::consts::TAU / (human_count.max(1) as f32);
+        let pos = Vec2::new(angle.cos() * 300.0, angle.sin() * 300.0);
+
+        let human = Player {
+            id: Uuid::new_v4(),
+            name: format!("Human{}", i),
+            position: pos,
+            velocity: Vec2::ZERO,
+            rotation: 0.0,
+            mass: 150.0,
+            alive: true,
+            kills: 0,
+            deaths: 0,
+            spawn_protection: 0.0,
+            is_bot: false,
+            color_index: i as u8,
+            respawn_timer: 0.0,
+        };
+        state.add_player(human);
     }
 
-    state
+    (state, manager)
 }
 
-/// Benchmark collision detection at various player counts
-fn bench_collision(c: &mut Criterion) {
-    let mut group = c.benchmark_group("collision");
-    group.sample_size(50);
+// ============================================================================
+// Registration Benchmarks
+// ============================================================================
 
-    for count in [100, 250, 500, 750, 1000] {
-        let mut state = create_state_with_players(count);
+fn bench_registration(c: &mut Criterion) {
+    let mut group = c.benchmark_group("registration");
 
-        group.throughput(Throughput::Elements(count as u64));
+    for count in [100, 1_000, 10_000, 100_000].iter() {
+        group.throughput(Throughput::Elements(*count as u64));
         group.bench_with_input(
-            BenchmarkId::new("spatial_grid", count),
-            &count,
-            |b, _| {
+            BenchmarkId::new("register_bots", count),
+            count,
+            |b, &count| {
                 b.iter(|| {
-                    black_box(collision::update(&mut state));
-                })
-            },
-        );
-    }
-    group.finish();
-}
-
-/// Benchmark physics updates at various player counts
-fn bench_physics(c: &mut Criterion) {
-    let mut group = c.benchmark_group("physics");
-    group.sample_size(50);
-
-    for count in [100, 250, 500, 750, 1000] {
-        let mut state = create_state_with_players(count);
-
-        group.throughput(Throughput::Elements(count as u64));
-        group.bench_with_input(
-            BenchmarkId::new("parallel", count),
-            &count,
-            |b, _| {
-                b.iter(|| {
-                    physics::update(&mut state, black_box(DT));
-                })
-            },
-        );
-    }
-    group.finish();
-}
-
-/// Benchmark gravity calculations at various player counts
-fn bench_gravity(c: &mut Criterion) {
-    let mut group = c.benchmark_group("gravity");
-    group.sample_size(50);
-
-    for count in [100, 250, 500, 750, 1000] {
-        let mut state = create_state_with_players(count);
-
-        group.throughput(Throughput::Elements(count as u64));
-        group.bench_with_input(
-            BenchmarkId::new("multi_well", count),
-            &count,
-            |b, _| {
-                b.iter(|| {
-                    gravity::update_central(&mut state, black_box(DT));
-                })
-            },
-        );
-    }
-    group.finish();
-}
-
-/// Benchmark a full game tick (all systems) at various player counts
-fn bench_full_tick(c: &mut Criterion) {
-    let mut group = c.benchmark_group("full_tick");
-    group.sample_size(30);
-
-    for count in [100, 250, 500, 750, 1000] {
-        let mut state = create_state_with_players(count);
-
-        group.throughput(Throughput::Elements(count as u64));
-        group.bench_with_input(
-            BenchmarkId::new("complete", count),
-            &count,
-            |b, _| {
-                b.iter(|| {
-                    // Run all systems like the game loop does
-                    gravity::update_central(&mut state, DT);
-                    physics::update(&mut state, DT);
-                    black_box(collision::update(&mut state));
-                })
-            },
-        );
-    }
-    group.finish();
-}
-
-/// Benchmark spatial grid build time
-fn bench_spatial_grid(c: &mut Criterion) {
-    use orbit_royale_server::game::spatial::{SpatialEntity, SpatialEntityId, SpatialGrid};
-
-    let mut group = c.benchmark_group("spatial_grid");
-    group.sample_size(50);
-
-    for count in [100, 500, 1000, 2000] {
-        let mut rng = rand::thread_rng();
-        let entities: Vec<SpatialEntity> = (0..count)
-            .map(|_| {
-                let angle = rng.gen_range(0.0..std::f32::consts::TAU);
-                let radius = rng.gen_range(100.0..600.0);
-                SpatialEntity {
-                    id: SpatialEntityId::Player(Uuid::new_v4()),
-                    position: Vec2::new(angle.cos() * radius, angle.sin() * radius),
-                    radius: rng.gen_range(10.0..30.0),
-                }
-            })
-            .collect();
-
-        group.throughput(Throughput::Elements(count as u64));
-        group.bench_with_input(
-            BenchmarkId::new("build", count),
-            &count,
-            |b, _| {
-                b.iter(|| {
-                    let mut grid = SpatialGrid::new(64.0);
-                    for entity in &entities {
-                        grid.insert(*entity);
+                    let mut manager = AiManagerSoA::with_capacity(count);
+                    for _ in 0..count {
+                        manager.register_bot(black_box(Uuid::new_v4()));
                     }
-                    black_box(grid.get_potential_collisions())
-                })
+                    manager
+                });
             },
         );
     }
+
     group.finish();
 }
 
-/// Performance validation test - ensures tick time stays under budget
-fn bench_tick_budget(c: &mut Criterion) {
-    let mut group = c.benchmark_group("tick_budget");
-    group.sample_size(100);
-    group.measurement_time(std::time::Duration::from_secs(10));
+// ============================================================================
+// Update Cycle Benchmarks
+// ============================================================================
 
-    // Target: 33.3ms budget at 30 Hz
-    // We want to be well under this for headroom
-
-    for count in [500, 750, 1000] {
-        let mut state = create_state_with_players(count);
-
-        group.bench_with_input(
-            BenchmarkId::new("vs_budget", count),
-            &count,
-            |b, _| {
-                b.iter(|| {
-                    gravity::update_central(&mut state, DT);
-                    physics::update(&mut state, DT);
-                    collision::update(&mut state);
-                })
-            },
-        );
-    }
-    group.finish();
-}
-
-/// Benchmark AOI filtering at various player counts
-fn bench_aoi_filtering(c: &mut Criterion) {
-    use orbit_royale_server::net::aoi::{AOIConfig, AOIManager};
-    use orbit_royale_server::game::state::MatchPhase;
-    use orbit_royale_server::net::protocol::{GameSnapshot, PlayerSnapshot};
-
-    let mut group = c.benchmark_group("aoi");
+fn bench_full_update(c: &mut Criterion) {
+    let mut group = c.benchmark_group("full_update");
     group.sample_size(50);
 
-    for count in [50, 100, 250, 500] {
-        let aoi = AOIManager::new(AOIConfig::default());
-        let mut rng = rand::thread_rng();
+    for &(bot_count, human_count) in &[
+        (100, 1),
+        (1_000, 1),
+        (10_000, 1),
+        (10_000, 10),
+        (100_000, 1),
+        (100_000, 10),
+    ] {
+        let label = format!("{}bots_{}humans", bot_count, human_count);
+        group.throughput(Throughput::Elements(bot_count as u64));
 
-        // Create a test snapshot with many players
-        let players: Vec<PlayerSnapshot> = (0..count)
-            .map(|i| {
-                let angle = rng.gen_range(0.0..std::f32::consts::TAU);
-                let radius = rng.gen_range(100.0..800.0);
-                PlayerSnapshot {
-                    id: Uuid::new_v4(),
-                    name: format!("P{}", i),
-                    position: Vec2::new(angle.cos() * radius, angle.sin() * radius),
-                    velocity: Vec2::new(rng.gen_range(-50.0..50.0), rng.gen_range(-50.0..50.0)),
-                    rotation: 0.0,
-                    mass: 100.0,
-                    alive: true,
-                    kills: rng.gen_range(0..10),
-                    deaths: 0,
-                    spawn_protection: false,
-                    is_bot: true,
-                    color_index: 0,
-                }
-            })
-            .collect();
-
-        let player_id = players[0].id;
-        let player_pos = players[0].position;
-        let player_vel = players[0].velocity;
-
-        let snapshot = GameSnapshot {
-            tick: 100,
-            match_phase: MatchPhase::Playing,
-            match_time: 60.0,
-            countdown: 0.0,
-            players,
-            projectiles: vec![],
-            debris: vec![],
-            arena_collapse_phase: 0,
-            arena_safe_radius: 800.0,
-            arena_scale: 1.0,
-            gravity_wells: vec![],
-            total_players: count as u32,
-            total_alive: count as u32,
-            density_grid: vec![],
-            notable_players: vec![],
-            echo_client_time: 0,
-            ai_status: None,
-        };
-
-        group.throughput(Throughput::Elements(count as u64));
-        group.bench_with_input(
-            BenchmarkId::new("filter", count),
-            &count,
-            |b, _| {
-                b.iter(|| {
-                    black_box(aoi.filter_for_player(player_id, player_pos, player_vel, &snapshot))
-                })
-            },
-        );
+        group.bench_function(BenchmarkId::new("update", &label), |b| {
+            let (state, mut manager) = create_test_state_with_bots(bot_count, human_count);
+            b.iter(|| {
+                manager.update(black_box(&state), black_box(0.033));
+            });
+        });
     }
+
     group.finish();
 }
 
-/// Benchmark protocol encoding performance
-fn bench_encoding(c: &mut Criterion) {
-    use orbit_royale_server::net::game_session::encode_pooled;
-    use orbit_royale_server::net::protocol::{GameSnapshot, PlayerSnapshot, ServerMessage};
-    use orbit_royale_server::game::state::MatchPhase;
+// ============================================================================
+// Dormancy Benchmarks
+// ============================================================================
 
-    let mut group = c.benchmark_group("encoding");
-    group.sample_size(100);
+fn bench_dormancy_update(c: &mut Criterion) {
+    let mut group = c.benchmark_group("dormancy");
 
-    // Create snapshots of various sizes
-    for count in [10, 50, 100, 200] {
-        let mut rng = rand::thread_rng();
+    for &bot_count in &[1_000, 10_000, 100_000] {
+        group.throughput(Throughput::Elements(bot_count as u64));
 
-        let players: Vec<PlayerSnapshot> = (0..count)
-            .map(|i| {
-                PlayerSnapshot {
-                    id: Uuid::new_v4(),
-                    name: format!("Player{}", i),
-                    position: Vec2::new(rng.gen_range(-500.0..500.0), rng.gen_range(-500.0..500.0)),
-                    velocity: Vec2::new(rng.gen_range(-50.0..50.0), rng.gen_range(-50.0..50.0)),
-                    rotation: rng.gen_range(0.0..6.28),
-                    mass: rng.gen_range(50.0..200.0),
-                    alive: true,
-                    kills: rng.gen_range(0..20),
-                    deaths: rng.gen_range(0..5),
-                    spawn_protection: false,
-                    is_bot: rng.gen_bool(0.5),
-                    color_index: rng.gen_range(0..8),
-                }
-            })
-            .collect();
-
-        let snapshot = GameSnapshot {
-            tick: 100,
-            match_phase: MatchPhase::Playing,
-            match_time: 60.0,
-            countdown: 0.0,
-            players,
-            projectiles: vec![],
-            debris: vec![],
-            arena_collapse_phase: 0,
-            arena_safe_radius: 800.0,
-            arena_scale: 1.0,
-            gravity_wells: vec![],
-            total_players: count as u32,
-            total_alive: count as u32,
-            density_grid: vec![],
-            notable_players: vec![],
-            echo_client_time: 0,
-            ai_status: None,
-        };
-
-        let message = ServerMessage::Snapshot(snapshot);
-
-        group.throughput(Throughput::Elements(count as u64));
-        group.bench_with_input(
-            BenchmarkId::new("pooled", count),
-            &count,
-            |b, _| {
-                b.iter(|| {
-                    let encoded = encode_pooled(&message).unwrap();
-                    black_box(encoded.len())
-                })
-            },
-        );
+        group.bench_function(BenchmarkId::new("update_dormancy", bot_count), |b| {
+            let (state, mut manager) = create_test_state_with_bots(bot_count, 10);
+            b.iter(|| {
+                manager.update_dormancy(black_box(&state));
+            });
+        });
     }
-    group.finish();
-}
-
-/// Benchmark input validation (anticheat)
-#[cfg(feature = "anticheat")]
-fn bench_input_validation(c: &mut Criterion) {
-    use orbit_royale_server::anticheat::validator::InputValidator;
-    use orbit_royale_server::net::protocol::PlayerInput;
-
-    let mut group = c.benchmark_group("anticheat");
-    group.sample_size(1000);
-
-    let validator = InputValidator::default();
-    let mut rng = rand::thread_rng();
-
-    // Create a batch of valid inputs
-    let inputs: Vec<PlayerInput> = (0..100)
-        .map(|i| PlayerInput {
-            sequence: i,
-            tick: 100 + i,
-            client_time: 0,
-            thrust: Vec2::new(rng.gen_range(-1.0..1.0), rng.gen_range(-1.0..1.0)).normalize(),
-            aim: Vec2::new(rng.gen_range(-1.0..1.0), rng.gen_range(-1.0..1.0)).normalize(),
-            boost: rng.gen_bool(0.1),
-            fire: rng.gen_bool(0.1),
-            fire_released: false,
-        })
-        .collect();
-
-    group.bench_function("validate_input", |b| {
-        let mut idx = 0;
-        b.iter(|| {
-            let input = &inputs[idx % inputs.len()];
-            idx += 1;
-            black_box(validator.validate_input(input))
-        })
-    });
-
-    group.bench_function("validate_sequence", |b| {
-        let mut prev_seq = 0u64;
-        b.iter(|| {
-            prev_seq += 1;
-            black_box(validator.validate_sequence(prev_seq - 1, prev_seq))
-        })
-    });
 
     group.finish();
 }
 
-#[cfg(not(feature = "anticheat"))]
-fn bench_input_validation(_c: &mut Criterion) {
-    // No-op when anticheat is disabled
+// ============================================================================
+// Zone Update Benchmarks
+// ============================================================================
+
+fn bench_zone_updates(c: &mut Criterion) {
+    let mut group = c.benchmark_group("zones");
+
+    for &bot_count in &[1_000, 10_000, 100_000] {
+        group.throughput(Throughput::Elements(bot_count as u64));
+
+        group.bench_function(BenchmarkId::new("update_zones", bot_count), |b| {
+            let (state, mut manager) = create_test_state_with_bots(bot_count, 10);
+            b.iter(|| {
+                manager.update_zones(black_box(&state));
+            });
+        });
+    }
+
+    group.finish();
+}
+
+// ============================================================================
+// Behavior Batch Benchmarks
+// ============================================================================
+
+fn bench_behavior_batches(c: &mut Criterion) {
+    let mut group = c.benchmark_group("behavior_batches");
+
+    for &bot_count in &[1_000, 10_000, 100_000] {
+        group.throughput(Throughput::Elements(bot_count as u64));
+
+        // Benchmark batch rebuild
+        group.bench_function(BenchmarkId::new("rebuild_batches", bot_count), |b| {
+            let (state, mut manager) = create_test_state_with_bots(bot_count, 10);
+            manager.update_dormancy(&state);
+
+            b.iter(|| {
+                manager.batches.rebuild(
+                    black_box(&manager.behaviors),
+                    black_box(&manager.active_mask),
+                );
+            });
+        });
+    }
+
+    group.finish();
+}
+
+// ============================================================================
+// Input Generation Benchmarks
+// ============================================================================
+
+fn bench_input_generation(c: &mut Criterion) {
+    let mut group = c.benchmark_group("input_generation");
+
+    for &bot_count in &[1_000, 10_000, 100_000] {
+        group.throughput(Throughput::Elements(bot_count as u64));
+
+        group.bench_function(BenchmarkId::new("get_all_inputs", bot_count), |b| {
+            let (_, manager) = create_test_state_with_bots(bot_count, 1);
+            let bot_ids: Vec<_> = manager.bot_ids.clone();
+
+            b.iter(|| {
+                for (tick, id) in bot_ids.iter().enumerate() {
+                    black_box(manager.get_input(*id, tick as u64));
+                }
+            });
+        });
+    }
+
+    group.finish();
+}
+
+// ============================================================================
+// Memory Layout Benchmarks
+// ============================================================================
+
+fn bench_memory_access(c: &mut Criterion) {
+    let mut group = c.benchmark_group("memory_access");
+
+    for &bot_count in &[10_000, 100_000] {
+        // Sequential access (cache-friendly)
+        group.bench_function(BenchmarkId::new("sequential_thrust", bot_count), |b| {
+            let (_, manager) = create_test_state_with_bots(bot_count, 1);
+            let thrust_x = &manager.thrust_x;
+            let thrust_y = &manager.thrust_y;
+
+            b.iter(|| {
+                let mut sum = 0.0f32;
+                for i in 0..thrust_x.len() {
+                    sum += thrust_x[i] + thrust_y[i];
+                }
+                black_box(sum)
+            });
+        });
+    }
+
+    group.finish();
 }
 
 criterion_group!(
     benches,
-    bench_collision,
-    bench_physics,
-    bench_gravity,
-    bench_full_tick,
-    bench_spatial_grid,
-    bench_tick_budget,
-    bench_aoi_filtering,
-    bench_encoding,
-    bench_input_validation,
+    bench_registration,
+    bench_full_update,
+    bench_dormancy_update,
+    bench_zone_updates,
+    bench_behavior_batches,
+    bench_input_generation,
+    bench_memory_access,
 );
 
 criterion_main!(benches);

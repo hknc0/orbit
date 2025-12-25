@@ -12,7 +12,7 @@ use crate::config::{ArenaScalingConfig, DebrisSpawnConfig, GravityConfig, Gravit
 use crate::game::constants::physics::{DT, TICK_RATE};
 use crate::game::match_result::{check_match_end, determine_result, MatchEndReason, MatchResult};
 use crate::game::state::{GameState, MatchPhase, PlayerId, WellId};
-use crate::game::systems::{ai, arena, collision, debris, gravity, physics, projectile};
+use crate::game::systems::{ai, ai_soa, arena, collision, debris, gravity, physics, projectile};
 use crate::net::protocol::PlayerInput;
 use crate::util::vec2::Vec2;
 
@@ -85,12 +85,20 @@ impl Default for GameLoopConfig {
 pub struct GameLoop {
     config: GameLoopConfig,
     state: GameState,
-    ai_manager: ai::AiManager,
+    /// Legacy AI manager (kept for bot name generation and compatibility)
+    #[allow(dead_code)]
+    legacy_ai_manager: ai::AiManager,
+    /// Million-scale SoA AI manager with adaptive dormancy
+    ai_manager_soa: ai_soa::AiManagerSoA,
     charge_manager: projectile::ChargeManager,
     debris_spawn_state: debris::DebrisSpawnState,
     pending_inputs: HashMap<PlayerId, Vec<PlayerInput>>,
     last_tick_time: Instant,
     accumulator: Duration,
+    /// Last tick duration in microseconds (for adaptive AI)
+    last_tick_us: u64,
+    /// Last performance status (0=Excellent, 4=Catastrophic)
+    last_performance_status: u64,
 }
 
 impl GameLoop {
@@ -98,12 +106,15 @@ impl GameLoop {
         Self {
             config,
             state: GameState::new(),
-            ai_manager: ai::AiManager::new(),
+            legacy_ai_manager: ai::AiManager::new(),
+            ai_manager_soa: ai_soa::AiManagerSoA::new(),
             charge_manager: projectile::ChargeManager::new(),
             debris_spawn_state: debris::DebrisSpawnState::new(),
             pending_inputs: HashMap::new(),
             last_tick_time: Instant::now(),
             accumulator: Duration::ZERO,
+            last_tick_us: 0,
+            last_performance_status: 0,
         }
     }
 
@@ -166,8 +177,13 @@ impl GameLoop {
         // Process player inputs
         self.process_inputs();
 
-        // Update AI
-        self.ai_manager.update(&self.state, DT);
+        // Update AI (SoA with adaptive dormancy)
+        self.ai_manager_soa.update_with_metrics(
+            &self.state,
+            DT,
+            self.last_tick_us,
+            self.last_performance_status,
+        );
         self.process_ai_inputs();
 
         // Run physics systems
@@ -309,7 +325,7 @@ impl GameLoop {
             .collect();
 
         for player_id in bot_ids {
-            if let Some(input) = self.ai_manager.get_input(player_id, tick) {
+            if let Some(input) = self.ai_manager_soa.get_input(player_id, tick) {
                 physics::apply_thrust(&mut self.state, player_id, &input, DT);
                 projectile::process_input(
                     &mut self.state,
@@ -389,7 +405,7 @@ impl GameLoop {
         self.state.add_player(player.clone());
 
         if player.is_bot {
-            self.ai_manager.register_bot(id);
+            self.ai_manager_soa.register_bot(id);
         }
 
         id
@@ -397,7 +413,7 @@ impl GameLoop {
 
     /// Remove a player from the game
     pub fn remove_player(&mut self, player_id: PlayerId) -> Option<crate::game::state::Player> {
-        self.ai_manager.unregister_bot(player_id);
+        self.ai_manager_soa.unregister_bot(player_id);
         self.charge_manager.remove(player_id);
         self.pending_inputs.remove(&player_id);
         self.state.remove_player(player_id)
@@ -433,10 +449,29 @@ impl GameLoop {
     /// Reset the game for a new match
     pub fn reset(&mut self) {
         self.state = GameState::new();
-        self.ai_manager = ai::AiManager::new();
+        self.legacy_ai_manager = ai::AiManager::new();
+        self.ai_manager_soa = ai_soa::AiManagerSoA::new();
         self.charge_manager = projectile::ChargeManager::new();
         self.debris_spawn_state = debris::DebrisSpawnState::new();
         self.pending_inputs.clear();
+        self.last_tick_us = 0;
+        self.last_performance_status = 0;
+    }
+
+    /// Provide metrics from the previous tick for adaptive AI dormancy.
+    /// Call this after each tick with the measured tick duration and performance status.
+    ///
+    /// # Arguments
+    /// * `tick_time_us` - Duration of the previous tick in microseconds
+    /// * `performance_status` - Performance status (0=Excellent, 1=Good, 2=Warning, 3=Critical, 4=Catastrophic)
+    pub fn provide_tick_metrics(&mut self, tick_time_us: u64, performance_status: u64) {
+        self.last_tick_us = tick_time_us;
+        self.last_performance_status = performance_status;
+    }
+
+    /// Get AI manager statistics for monitoring/debugging
+    pub fn ai_stats(&self) -> ai_soa::AiManagerStats {
+        self.ai_manager_soa.stats()
     }
 }
 
