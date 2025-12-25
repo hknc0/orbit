@@ -1253,44 +1253,47 @@ export class RenderSystem {
     const perpX = -dirY;
     const perpY = dirX;
 
+    // Helper to draw curved flame shape (smoother than triangles for large players)
+    const drawFlame = (w: number, len: number) => {
+      const baseX1 = flameX + perpX * w;
+      const baseY1 = flameY + perpY * w;
+      const baseX2 = flameX - perpX * w;
+      const baseY2 = flameY - perpY * w;
+      const tipX = flameX + dirX * len;
+      const tipY = flameY + dirY * len;
+      // Control points for curves - bulge outward for organic shape
+      const bulgeFactor = 0.4;
+      const ctrl1X = flameX + dirX * len * 0.5 + perpX * w * bulgeFactor;
+      const ctrl1Y = flameY + dirY * len * 0.5 + perpY * w * bulgeFactor;
+      const ctrl2X = flameX + dirX * len * 0.5 - perpX * w * bulgeFactor;
+      const ctrl2Y = flameY + dirY * len * 0.5 - perpY * w * bulgeFactor;
+
+      ctx.beginPath();
+      ctx.moveTo(baseX1, baseY1);
+      ctx.quadraticCurveTo(ctrl1X, ctrl1Y, tipX, tipY);
+      ctx.quadraticCurveTo(ctrl2X, ctrl2Y, baseX2, baseY2);
+      ctx.closePath();
+      ctx.fill();
+    };
+
     // === LAYER 1: Outer glow (soft, pulsing) ===
     const glowAlpha = 0.22 + Math.sin(time * MOTION_FX.FLICKER_SPEED_SLOW) * 0.08;
     ctx.fillStyle = `rgba(255, 100, 30, ${glowAlpha})`;
-    ctx.beginPath();
-    ctx.moveTo(flameX + perpX * flameWidth * 1.5, flameY + perpY * flameWidth * 1.5);
-    ctx.lineTo(flameX - perpX * flameWidth * 1.5, flameY - perpY * flameWidth * 1.5);
-    ctx.lineTo(flameX + dirX * flameLen * 1.15, flameY + dirY * flameLen * 1.15);
-    ctx.closePath();
-    ctx.fill();
+    drawFlame(flameWidth * 1.5, flameLen * 1.15);
 
     // === LAYER 2: Main outer flame (orange-red) ===
     ctx.fillStyle = 'rgba(255, 120, 40, 0.88)';
-    ctx.beginPath();
-    ctx.moveTo(flameX + perpX * flameWidth, flameY + perpY * flameWidth);
-    ctx.lineTo(flameX - perpX * flameWidth, flameY - perpY * flameWidth);
-    ctx.lineTo(flameX + dirX * flameLen, flameY + dirY * flameLen);
-    ctx.closePath();
-    ctx.fill();
+    drawFlame(flameWidth, flameLen);
 
     // === LAYER 3: Middle flame (orange-yellow, independent flicker) ===
     const midFlicker = 0.92 + Math.sin(time * MOTION_FX.FLICKER_SPEED_FAST + 1) * 0.08;
     ctx.fillStyle = 'rgba(255, 180, 60, 0.92)';
-    ctx.beginPath();
-    ctx.moveTo(flameX + perpX * flameWidth * 0.62, flameY + perpY * flameWidth * 0.62);
-    ctx.lineTo(flameX - perpX * flameWidth * 0.62, flameY - perpY * flameWidth * 0.62);
-    ctx.lineTo(flameX + dirX * flameLen * 0.72 * midFlicker, flameY + dirY * flameLen * 0.72 * midFlicker);
-    ctx.closePath();
-    ctx.fill();
+    drawFlame(flameWidth * 0.62, flameLen * 0.72 * midFlicker);
 
     // === LAYER 4: Inner core (bright yellow-white, fastest flicker) ===
     const coreFlicker = 0.85 + Math.sin(time * 0.08 + 2) * 0.15;
     ctx.fillStyle = 'rgba(255, 245, 190, 1)';
-    ctx.beginPath();
-    ctx.moveTo(flameX + perpX * flameWidth * 0.28, flameY + perpY * flameWidth * 0.28);
-    ctx.lineTo(flameX - perpX * flameWidth * 0.28, flameY - perpY * flameWidth * 0.28);
-    ctx.lineTo(flameX + dirX * flameLen * 0.42 * coreFlicker, flameY + dirY * flameLen * 0.42 * coreFlicker);
-    ctx.closePath();
-    ctx.fill();
+    drawFlame(flameWidth * 0.28, flameLen * 0.42 * coreFlicker);
 
     // === SPARKS: Size-scaled particles at higher speeds ===
     if (speed > MOTION_FX.FLAME_SPARK_THRESHOLD) {
