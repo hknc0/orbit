@@ -60,6 +60,7 @@ export interface InterpolatedPlayer {
   spawnProtection: boolean;
   isBot: boolean;
   colorIndex: number;
+  bornTime: number; // Timestamp when player spawned (0 = skip animation, >0 = show birth effect)
 }
 
 export interface InterpolatedProjectile {
@@ -109,7 +110,12 @@ export class StateSync {
   // bornTime > 0 means show birth animation
   private wellBornTimes: Map<number, number> = new Map();
 
-  // Track if we've received the first snapshot (wells in first snapshot skip birth animation)
+  // Track when players spawned (for birth animation)
+  // bornTime = 0 means skip animation (entered AOI, already alive)
+  // bornTime > 0 means show birth animation (actually spawned/respawned)
+  private playerBornTimes: Map<PlayerId, number> = new Map();
+
+  // Track if we've received the first snapshot (entities in first snapshot skip birth animation)
   private hasReceivedFirstSnapshot: boolean = false;
 
   setLocalPlayerId(id: PlayerId): void {
@@ -337,12 +343,30 @@ export class StateSync {
 
   private snapshotToInterpolatedState(entry: SnapshotEntry): InterpolatedState {
     const { snapshot, wellMap } = entry;
+    const now = performance.now();
+
+    // Track player birth times before building player map
+    // Players in first snapshot or without spawn protection = 0 (skip animation)
+    // Players appearing later with spawn protection = now (show birth animation)
+    for (const player of snapshot.players) {
+      if (!this.playerBornTimes.has(player.id)) {
+        // New player: only show birth effect if they have spawn protection (actually spawned)
+        // AND this isn't the first snapshot (pre-existing players skip animation)
+        const shouldAnimate = this.hasReceivedFirstSnapshot && player.spawnProtection;
+        this.playerBornTimes.set(player.id, shouldAnimate ? now : 0);
+      } else if (!player.alive) {
+        // Player died - remove tracking so respawn triggers animation
+        this.playerBornTimes.delete(player.id);
+      }
+    }
+
     const players = new Map<PlayerId, InterpolatedPlayer>();
     for (const player of snapshot.players) {
       players.set(player.id, {
         ...player,
         position: player.position.clone(),
         velocity: player.velocity.clone(),
+        bornTime: this.playerBornTimes.get(player.id) ?? 0,
       });
     }
 
@@ -367,7 +391,6 @@ export class StateSync {
     // Track new wells and assign born times
     // First snapshot: bornTime = 0 (skip animation for pre-existing wells)
     // Subsequent: bornTime = now (show birth animation for newly spawned wells)
-    const now = performance.now();
     for (const w of snapshot.gravityWells) {
       if (!this.wellBornTimes.has(w.id)) {
         // Use 0 for first snapshot (skip animation), now for subsequent (show animation)
@@ -421,11 +444,31 @@ export class StateSync {
   ): InterpolatedState {
     const before = beforeEntry.snapshot;
     const after = afterEntry.snapshot;
+    const now = performance.now();
     const players = new Map<PlayerId, InterpolatedPlayer>();
+
+    // Track player birth times before building player map
+    for (const afterPlayer of after.players) {
+      const beforePlayer = before.players.find((p) => p.id === afterPlayer.id);
+      const justRespawned = beforePlayer && !beforePlayer.alive && afterPlayer.alive;
+
+      if (!this.playerBornTimes.has(afterPlayer.id)) {
+        // New player: only animate if they have spawn protection (actually spawned)
+        const shouldAnimate = this.hasReceivedFirstSnapshot && afterPlayer.spawnProtection;
+        this.playerBornTimes.set(afterPlayer.id, shouldAnimate ? now : 0);
+      } else if (justRespawned && afterPlayer.spawnProtection) {
+        // Player respawned - set new birth time for animation
+        this.playerBornTimes.set(afterPlayer.id, now);
+      } else if (!afterPlayer.alive) {
+        // Player died - remove tracking so respawn triggers animation
+        this.playerBornTimes.delete(afterPlayer.id);
+      }
+    }
 
     // Interpolate players
     for (const afterPlayer of after.players) {
       const beforePlayer = before.players.find((p) => p.id === afterPlayer.id);
+      const bornTime = this.playerBornTimes.get(afterPlayer.id) ?? 0;
 
       if (beforePlayer) {
         // Check if player just respawned (was dead, now alive with spawn protection)
@@ -439,6 +482,7 @@ export class StateSync {
             ...afterPlayer,
             position: afterPlayer.position.clone(),
             velocity: afterPlayer.velocity.clone(),
+            bornTime,
           });
         } else {
           // Normal interpolation
@@ -455,6 +499,7 @@ export class StateSync {
             spawnProtection: afterPlayer.spawnProtection,
             isBot: afterPlayer.isBot,
             colorIndex: afterPlayer.colorIndex,
+            bornTime,
           });
         }
       } else {
@@ -463,6 +508,7 @@ export class StateSync {
           ...afterPlayer,
           position: afterPlayer.position.clone(),
           velocity: afterPlayer.velocity.clone(),
+          bornTime,
         });
       }
     }
@@ -511,7 +557,6 @@ export class StateSync {
 
     // Track new wells and assign born times
     // Only show birth animation for wells that appear after first snapshot
-    const now = performance.now();
     for (const [id] of afterEntry.wellMap) {
       if (!this.wellBornTimes.has(id)) {
         this.wellBornTimes.set(id, this.hasReceivedFirstSnapshot ? now : 0);

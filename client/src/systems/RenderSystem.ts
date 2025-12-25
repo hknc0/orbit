@@ -74,6 +74,9 @@ export class RenderSystem {
   // Track previous speeds to detect acceleration (for other players' boost flames)
   private previousSpeeds: Map<string, number> = new Map();
 
+  // Player birth effect duration (bornTime comes from StateSync)
+  private readonly PLAYER_BIRTH_DURATION = 800; // ms
+
   // Unified motion trails for all players (consolidates trail + thrust visuals)
   private playerTrails: Map<string, TrailPoint[]> = new Map();
   private lastTrailPositions: Map<string, { x: number; y: number; radius: number }> = new Map();
@@ -711,6 +714,7 @@ export class RenderSystem {
   // Render player bodies (rendered last, on top of trails and flames)
   private renderPlayerBodies(world: World): void {
     const players = world.getPlayers();
+    const now = Date.now();
 
     for (const player of players.values()) {
       if (!player.alive) continue;
@@ -718,6 +722,15 @@ export class RenderSystem {
       const radius = world.massToRadius(player.mass);
       const color = world.getPlayerColor(player.colorIndex);
       const isLocal = player.id === world.localPlayerId;
+
+      // Birth effect - expanding rings when player spawns
+      // bornTime > 0 means show animation, 0 means skip (entered AOI, not actually spawned)
+      if (player.bornTime > 0) {
+        const birthAge = now - player.bornTime;
+        if (birthAge < this.PLAYER_BIRTH_DURATION) {
+          this.renderPlayerBirthEffect(player.position, radius, color, birthAge / this.PLAYER_BIRTH_DURATION);
+        }
+      }
 
       // Kill effect - golden pulsing glow when player gets a kill
       const killProgress = world.getKillEffectProgress(player.id);
@@ -833,6 +846,69 @@ export class RenderSystem {
     this.ctx.beginPath();
     this.ctx.arc(position.x, position.y, ringRadius, 0, Math.PI * 2);
     this.ctx.stroke();
+  }
+
+  // Player birth effect - expanding rings with player color
+  private renderPlayerBirthEffect(position: Vec2, radius: number, color: string, progress: number): void {
+    // Ease-out cubic for smooth animation
+    const eased = 1 - Math.pow(1 - progress, 3);
+    const fadeOut = 1 - eased;
+
+    // Inner glow - bright core that fades
+    const innerGlowRadius = radius * (1.2 + fadeOut * 0.5);
+    const innerGlow = this.ctx.createRadialGradient(
+      position.x, position.y, 0,
+      position.x, position.y, innerGlowRadius
+    );
+    innerGlow.addColorStop(0, `rgba(255, 255, 255, ${fadeOut * 0.7})`);
+    innerGlow.addColorStop(0.4, this.colorWithAlpha(color, fadeOut * 0.5));
+    innerGlow.addColorStop(1, this.colorWithAlpha(color, 0));
+
+    this.ctx.fillStyle = innerGlow;
+    this.ctx.beginPath();
+    this.ctx.arc(position.x, position.y, innerGlowRadius, 0, Math.PI * 2);
+    this.ctx.fill();
+
+    // Expanding ring 1 - main ring
+    const ring1Radius = radius * (1 + eased * 2.5);
+    const ring1Alpha = fadeOut * 0.8;
+    this.ctx.strokeStyle = this.colorWithAlpha(color, ring1Alpha);
+    this.ctx.lineWidth = 3 * fadeOut + 1;
+    this.ctx.beginPath();
+    this.ctx.arc(position.x, position.y, ring1Radius, 0, Math.PI * 2);
+    this.ctx.stroke();
+
+    // Expanding ring 2 - delayed secondary ring
+    if (progress > 0.15) {
+      const ring2Progress = (progress - 0.15) / 0.85;
+      const ring2Eased = 1 - Math.pow(1 - ring2Progress, 3);
+      const ring2FadeOut = 1 - ring2Eased;
+      const ring2Radius = radius * (1 + ring2Eased * 3.5);
+      const ring2Alpha = ring2FadeOut * 0.5;
+
+      this.ctx.strokeStyle = this.colorWithAlpha(color, ring2Alpha);
+      this.ctx.lineWidth = 2 * ring2FadeOut + 0.5;
+      this.ctx.beginPath();
+      this.ctx.arc(position.x, position.y, ring2Radius, 0, Math.PI * 2);
+      this.ctx.stroke();
+    }
+
+    // Particle burst effect (small dots radiating outward)
+    const numParticles = 8;
+    for (let i = 0; i < numParticles; i++) {
+      const angle = (i / numParticles) * Math.PI * 2;
+      const particleDist = radius * (0.8 + eased * 2);
+      const particleX = position.x + Math.cos(angle) * particleDist;
+      const particleY = position.y + Math.sin(angle) * particleDist;
+      const particleSize = (3 + radius * 0.05) * fadeOut;
+
+      if (particleSize > 0.5) {
+        this.ctx.fillStyle = this.colorWithAlpha(color, fadeOut * 0.7);
+        this.ctx.beginPath();
+        this.ctx.arc(particleX, particleY, particleSize, 0, Math.PI * 2);
+        this.ctx.fill();
+      }
+    }
   }
 
   private renderDeathEffects(world: World): void {
