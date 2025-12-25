@@ -40,6 +40,8 @@ const MOTION_FX = {
   TRAIL_START_RADIUS_RATIO: 0.18,  // Trail starts at this fraction of player radius
   TRAIL_END_RADIUS_RATIO: 0.7,     // Trail ends at this fraction of player radius
   TRAIL_MAX_ALPHA: 0.6,            // Maximum trail opacity
+  TRAIL_MIN_SPEED: 30,             // Speed below which trail starts fading
+  TRAIL_FULL_SPEED: 80,            // Speed at which trail is fully visible
 
   // Boost flame configuration
   FLAME_LENGTH_BASE: 1.6,          // Flame length = radius * this (at rest)
@@ -201,6 +203,12 @@ export class RenderSystem {
       const color = world.getPlayerColor(player.colorIndex);
       const currentRadius = world.massToRadius(player.mass);
 
+      // Speed-based trail visibility - fade out when moving slowly to avoid flickering circles
+      const speed = player.velocity.length();
+      if (speed < MOTION_FX.TRAIL_MIN_SPEED) continue; // Skip trail entirely when very slow
+      const speedFade = speed >= MOTION_FX.TRAIL_FULL_SPEED ? 1.0 :
+        (speed - MOTION_FX.TRAIL_MIN_SPEED) / (MOTION_FX.TRAIL_FULL_SPEED - MOTION_FX.TRAIL_MIN_SPEED);
+
       // Performance: Set fillStyle once per player, use globalAlpha for transparency
       ctx.fillStyle = color;
 
@@ -217,8 +225,8 @@ export class RenderSystem {
 
         const indexRatio = (i + 1) * invTrailLen; // +1 so first point isn't invisible
 
-        // Smooth alpha: combines age fade with position fade
-        const alpha = lifeRatio * indexRatio * MOTION_FX.TRAIL_MAX_ALPHA;
+        // Smooth alpha: combines age fade, position fade, and speed fade
+        const alpha = lifeRatio * indexRatio * speedFade * MOTION_FX.TRAIL_MAX_ALPHA;
         if (alpha < 0.015) continue;
 
         // Use stored radius for smooth size transitions, interpolate toward current
