@@ -529,151 +529,169 @@ export class RenderSystem {
     }
 
     if (isCentral) {
-      // === SUPERMASSIVE BLACK HOLE ===
-      // Interstellar Gargantua style - smooth flowing rings
+      // === SUPERMASSIVE BLACK HOLE (Gargantua-inspired) ===
+      // Key visual: continuous glowing ring wrapping around black hole
+      // The accretion disk is gravitationally lensed over the TOP and BOTTOM
 
       const ctx = this.ctx;
       const time = performance.now() / 1000;
 
-      // Radii
-      const eh = coreRadius;
-      const innerRing = coreRadius * 1.25;
-      const diskOuter = coreRadius * 4;
+      // Core sizes
+      const eh = coreRadius; // Event horizon
+      const diskWidth = eh * 4.5; // Width of the accretion disk
 
-      // 1. Large soft ambient glow
-      const ambientGlow = ctx.createRadialGradient(x, y, eh, x, y, diskOuter * 1.8);
-      ambientGlow.addColorStop(0, 'rgba(255, 180, 120, 0.2)');
-      ambientGlow.addColorStop(0.25, 'rgba(255, 140, 80, 0.1)');
-      ambientGlow.addColorStop(0.5, 'rgba(200, 100, 50, 0.04)');
-      ambientGlow.addColorStop(1, 'rgba(100, 50, 25, 0)');
+      // 1. Outer ambient glow - soft warm halo
+      const glowRadius = eh * 8;
+      const ambientGlow = ctx.createRadialGradient(x, y, eh, x, y, glowRadius);
+      ambientGlow.addColorStop(0, 'rgba(255, 200, 150, 0.15)');
+      ambientGlow.addColorStop(0.3, 'rgba(255, 150, 100, 0.08)');
+      ambientGlow.addColorStop(0.6, 'rgba(200, 100, 60, 0.03)');
+      ambientGlow.addColorStop(1, 'rgba(100, 50, 30, 0)');
       ctx.fillStyle = ambientGlow;
       ctx.beginPath();
-      ctx.arc(x, y, diskOuter * 1.8, 0, Math.PI * 2);
+      ctx.arc(x, y, glowRadius, 0, Math.PI * 2);
       ctx.fill();
 
-      // 2. Vertical lensing halo - smooth gradient base + rings
+      // 2. Gravitationally lensed ring (wraps over top and bottom)
+      // This creates the iconic "eye" shape - the disk bent by gravity
+      const lensedRingOuter = eh * 2.8;
+      const lensedRingInner = eh * 1.15;
+
+      // Draw the lensed ring as a vertical ellipse (taller than wide)
       ctx.save();
       ctx.translate(x, y);
-      ctx.scale(0.5, 1.6);
+      ctx.scale(0.7, 1.0); // Squash horizontally to make it taller
 
-      // Smooth gradient fill first
-      const haloGrad = ctx.createRadialGradient(0, 0, eh * 0.95, 0, 0, innerRing * 1.3);
-      haloGrad.addColorStop(0, 'rgba(255, 250, 240, 0.85)');
-      haloGrad.addColorStop(0.3, 'rgba(255, 220, 170, 0.6)');
-      haloGrad.addColorStop(0.6, 'rgba(255, 180, 120, 0.3)');
-      haloGrad.addColorStop(1, 'rgba(200, 120, 60, 0)');
-      ctx.fillStyle = haloGrad;
+      const lensGrad = ctx.createRadialGradient(0, 0, lensedRingInner, 0, 0, lensedRingOuter);
+      lensGrad.addColorStop(0, 'rgba(255, 220, 160, 0.95)');
+      lensGrad.addColorStop(0.25, 'rgba(255, 180, 100, 0.8)');
+      lensGrad.addColorStop(0.5, 'rgba(255, 140, 60, 0.5)');
+      lensGrad.addColorStop(0.75, 'rgba(220, 100, 40, 0.2)');
+      lensGrad.addColorStop(1, 'rgba(180, 70, 30, 0)');
+      ctx.fillStyle = lensGrad;
       ctx.beginPath();
-      ctx.arc(0, 0, innerRing * 1.3, 0, Math.PI * 2);
-      ctx.arc(0, 0, eh * 0.95, 0, Math.PI * 2, true);
+      ctx.arc(0, 0, lensedRingOuter, 0, Math.PI * 2);
+      ctx.arc(0, 0, lensedRingInner, 0, Math.PI * 2, true);
       ctx.fill();
 
-      // Overlay thin rings for texture
-      for (let i = 0; i < 15; i++) {
-        const t = i / 14;
-        const r = eh * 1.0 + (innerRing * 1.2 - eh * 1.0) * t;
-        const alpha = (1 - t) * 0.5;
-        ctx.strokeStyle = `rgba(255, ${250 - t * 40}, ${220 - t * 80}, ${alpha})`;
-        ctx.lineWidth = 1.5 - t * 0.8;
-        ctx.beginPath();
-        ctx.arc(0, 0, r, 0, Math.PI * 2);
-        ctx.stroke();
-      }
-
+      // Add bloom to lensed ring
+      ctx.globalCompositeOperation = 'lighter';
+      ctx.strokeStyle = 'rgba(255, 200, 120, 0.4)';
+      ctx.lineWidth = 4;
+      ctx.shadowBlur = 15;
+      ctx.shadowColor = 'rgba(255, 180, 100, 0.5)';
+      ctx.beginPath();
+      ctx.arc(0, 0, (lensedRingInner + lensedRingOuter) / 2, 0, Math.PI * 2);
+      ctx.stroke();
+      ctx.shadowBlur = 0;
+      ctx.globalCompositeOperation = 'source-over';
       ctx.restore();
 
-      // 3. Horizontal accretion disk - gradient base + rings
+      // 3. Horizontal accretion disk (the main flat disk)
+      const diskInner = eh * 1.2;
+      const diskOuterRadius = eh * 6;
+
       ctx.save();
       ctx.translate(x, y);
-      ctx.scale(1, 0.12);
+      ctx.scale(1, 0.12); // Very flat horizontal disk
 
-      // Smooth gradient fill
-      const diskGrad = ctx.createRadialGradient(0, 0, innerRing * 0.9, 0, 0, diskOuter);
-      diskGrad.addColorStop(0, 'rgba(255, 250, 235, 0.9)');
-      diskGrad.addColorStop(0.15, 'rgba(255, 220, 170, 0.75)');
-      diskGrad.addColorStop(0.35, 'rgba(255, 170, 100, 0.5)');
-      diskGrad.addColorStop(0.55, 'rgba(230, 120, 60, 0.3)');
-      diskGrad.addColorStop(0.75, 'rgba(180, 80, 40, 0.15)');
-      diskGrad.addColorStop(1, 'rgba(100, 40, 20, 0)');
+      const diskGrad = ctx.createRadialGradient(0, 0, diskInner, 0, 0, diskOuterRadius);
+      diskGrad.addColorStop(0, 'rgba(255, 200, 120, 0.9)');
+      diskGrad.addColorStop(0.15, 'rgba(255, 170, 80, 0.75)');
+      diskGrad.addColorStop(0.35, 'rgba(255, 130, 50, 0.5)');
+      diskGrad.addColorStop(0.6, 'rgba(200, 90, 30, 0.25)');
+      diskGrad.addColorStop(0.85, 'rgba(150, 60, 20, 0.1)');
+      diskGrad.addColorStop(1, 'rgba(100, 40, 10, 0)');
       ctx.fillStyle = diskGrad;
       ctx.beginPath();
-      ctx.arc(0, 0, diskOuter, 0, Math.PI * 2);
-      ctx.arc(0, 0, innerRing, 0, Math.PI * 2, true);
+      ctx.arc(0, 0, diskOuterRadius, 0, Math.PI * 2);
+      ctx.arc(0, 0, diskInner, 0, Math.PI * 2, true);
       ctx.fill();
 
-      // Overlay rings for streaked texture
-      for (let i = 0; i < 20; i++) {
-        const t = i / 19;
-        const r = innerRing * 1.02 + (diskOuter * 0.92 - innerRing) * t;
-        const alpha = (1 - t * 0.9) * 0.4;
-        const g = Math.floor(250 - t * 120);
-        const b = Math.floor(220 - t * 150);
-        ctx.strokeStyle = `rgba(255, ${g}, ${b}, ${alpha})`;
-        ctx.lineWidth = 2 - t * 1.2;
-        ctx.beginPath();
-        ctx.arc(0, 0, r, 0, Math.PI * 2);
-        ctx.stroke();
-      }
-
-      // Bright inner edge
-      ctx.strokeStyle = 'rgba(255, 252, 245, 0.9)';
-      ctx.lineWidth = 3;
+      // Doppler brightening on approaching side
+      ctx.globalCompositeOperation = 'lighter';
+      const dopplerGrad = ctx.createLinearGradient(-diskOuterRadius, 0, diskOuterRadius, 0);
+      dopplerGrad.addColorStop(0, 'rgba(255, 120, 60, 0.1)');
+      dopplerGrad.addColorStop(0.5, 'rgba(255, 180, 100, 0.15)');
+      dopplerGrad.addColorStop(1, 'rgba(255, 220, 140, 0.25)');
+      ctx.fillStyle = dopplerGrad;
       ctx.beginPath();
-      ctx.arc(0, 0, innerRing, 0, Math.PI * 2);
-      ctx.stroke();
-
+      ctx.arc(0, 0, diskOuterRadius * 0.95, 0, Math.PI * 2);
+      ctx.arc(0, 0, diskInner * 1.05, 0, Math.PI * 2, true);
+      ctx.fill();
+      ctx.globalCompositeOperation = 'source-over';
       ctx.restore();
 
-      // 4. Spiraling particles
+      // 4. Spiraling particles in disk
       ctx.save();
       ctx.translate(x, y);
       ctx.lineCap = 'round';
       ctx.lineWidth = 2;
       ctx.beginPath();
-      for (let i = 0; i < 6; i++) {
-        const phase = (time * 0.5 + i * 0.5) % 2.5;
-        const progress = phase / 2.5;
-        const spiralAngle = (i / 6) * Math.PI * 2 + progress * Math.PI * 3;
-        const r = innerRing * 1.2 + (diskOuter * 0.6 - innerRing) * (1 - progress * progress);
+      for (let i = 0; i < 8; i++) {
+        const phase = (time * 0.4 + i * 0.4) % 3;
+        const progress = phase / 3;
+        const spiralAngle = (i / 8) * Math.PI * 2 + progress * Math.PI * 4;
+        const r = diskInner * 1.5 + (diskWidth - diskInner) * (1 - progress * progress);
         const px = Math.cos(spiralAngle) * r;
         const py = Math.sin(spiralAngle) * r * 0.12;
 
-        const stretch = 8 * progress;
+        const stretch = 10 * progress;
         const dx = Math.cos(spiralAngle + Math.PI * 0.5) * stretch;
         const dy = Math.sin(spiralAngle + Math.PI * 0.5) * stretch * 0.12;
         ctx.moveTo(px - dx, py - dy);
         ctx.lineTo(px, py);
       }
-      ctx.globalAlpha = 0.35;
-      ctx.strokeStyle = 'rgba(255, 220, 160, 1)';
+      ctx.globalAlpha = 0.3;
+      ctx.strokeStyle = 'rgba(255, 230, 180, 1)';
       ctx.stroke();
       ctx.globalAlpha = 1;
       ctx.restore();
 
-      // 5. Event horizon (pure black)
+      // 5. Event horizon (pure black core)
       ctx.fillStyle = '#000000';
       ctx.beginPath();
       ctx.arc(x, y, eh, 0, Math.PI * 2);
       ctx.fill();
 
-      // 6. Photon ring - bright inner edge
-      ctx.strokeStyle = 'rgba(255, 235, 200, 0.35)';
+      // Subtle depth shading on event horizon
+      const horizonGrad = ctx.createRadialGradient(
+        x - eh * 0.2, y - eh * 0.15, eh * 0.1,
+        x, y, eh
+      );
+      horizonGrad.addColorStop(0, 'rgba(10, 10, 15, 1)');
+      horizonGrad.addColorStop(0.5, 'rgba(0, 0, 0, 1)');
+      horizonGrad.addColorStop(1, 'rgba(5, 5, 8, 0.95)');
+      ctx.fillStyle = horizonGrad;
+      ctx.beginPath();
+      ctx.arc(x, y, eh, 0, Math.PI * 2);
+      ctx.fill();
+
+      // 6. Bright photon ring - the intense glow right at the edge
+      ctx.save();
+      ctx.translate(x, y);
+
+      // Inner bright ring (photon sphere) - warm golden glow
+      ctx.strokeStyle = 'rgba(255, 220, 160, 0.9)';
       ctx.lineWidth = 3;
+      ctx.shadowBlur = 8;
+      ctx.shadowColor = 'rgba(255, 180, 100, 0.8)';
       ctx.beginPath();
-      ctx.arc(x, y, eh * 1.1, 0, Math.PI * 2);
+      ctx.arc(0, 0, eh * 1.08, 0, Math.PI * 2);
       ctx.stroke();
 
-      ctx.strokeStyle = 'rgba(255, 248, 230, 0.65)';
-      ctx.lineWidth = 2;
-      ctx.beginPath();
-      ctx.arc(x, y, eh * 1.05, 0, Math.PI * 2);
-      ctx.stroke();
-
-      ctx.strokeStyle = 'rgba(255, 255, 250, 0.9)';
+      // Extra glow layer
+      ctx.globalCompositeOperation = 'lighter';
+      ctx.strokeStyle = 'rgba(255, 200, 120, 0.5)';
       ctx.lineWidth = 1.5;
+      ctx.shadowBlur = 12;
+      ctx.shadowColor = 'rgba(255, 180, 80, 0.6)';
       ctx.beginPath();
-      ctx.arc(x, y, eh * 1.015, 0, Math.PI * 2);
+      ctx.arc(0, 0, eh * 1.03, 0, Math.PI * 2);
       ctx.stroke();
+      ctx.shadowBlur = 0;
+      ctx.globalCompositeOperation = 'source-over';
+      ctx.restore();
     } else {
       // === NORMAL GRAVITY WELL (star/sun) ===
       // Different star types based on position hash for variety
