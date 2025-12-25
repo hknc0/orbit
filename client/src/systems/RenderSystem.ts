@@ -21,12 +21,39 @@ interface RenderState {
   connectionState: ConnectionState;
 }
 
-// Trail point for local player
+// Trail point for motion effects
 interface TrailPoint {
   x: number;
   y: number;
   timestamp: number;
+  radius: number; // Capture radius at point creation for smooth size transitions
 }
+
+// Motion effect configuration - all values scale with player radius
+// Base radius = 20 (mass 100), so multipliers are relative to that
+const MOTION_FX = {
+  // Trail configuration
+  TRAIL_LIFETIME_BASE: 350,        // ms - base lifetime at radius 20
+  TRAIL_LIFETIME_SCALE: 0.3,       // Larger players have slightly longer trails
+  TRAIL_MAX_POINTS: 24,            // Max trail points (fixed for memory)
+  TRAIL_MIN_DIST_RATIO: 0.4,       // Min distance = radius * this ratio
+  TRAIL_START_RADIUS_RATIO: 0.15,  // Trail starts at this fraction of player radius
+  TRAIL_END_RADIUS_RATIO: 0.6,     // Trail ends at this fraction of player radius
+  TRAIL_MAX_ALPHA: 0.5,            // Maximum trail opacity
+
+  // Boost flame configuration
+  FLAME_LENGTH_BASE: 1.8,          // Flame length = radius * this (at rest)
+  FLAME_LENGTH_SPEED_SCALE: 0.003, // Additional length per speed unit
+  FLAME_WIDTH_RATIO: 0.55,         // Flame width = radius * this
+  FLAME_MIN_SPEED: 15,             // Minimum speed to show flame
+  FLAME_SPARK_THRESHOLD: 100,      // Speed threshold for sparks
+  FLAME_SPARK_COUNT_SCALE: 50,     // Speed per additional spark
+
+  // Shared animation timing (for synchronized effects)
+  FLICKER_SPEED_SLOW: 0.02,
+  FLICKER_SPEED_MED: 0.035,
+  FLICKER_SPEED_FAST: 0.06,
+} as const;
 
 export class RenderSystem {
   private ctx: CanvasRenderingContext2D;
@@ -47,12 +74,9 @@ export class RenderSystem {
   // Track previous speeds to detect acceleration (for other players' boost flames)
   private previousSpeeds: Map<string, number> = new Map();
 
-  // Trails for all players
+  // Unified motion trails for all players (consolidates trail + thrust visuals)
   private playerTrails: Map<string, TrailPoint[]> = new Map();
-  private lastTrailPositions: Map<string, { x: number; y: number }> = new Map();
-  private readonly TRAIL_MAX_LENGTH = 30;
-  private readonly TRAIL_POINT_LIFETIME = 400; // ms
-  private readonly TRAIL_MIN_DISTANCE = 8; // minimum distance between trail points
+  private lastTrailPositions: Map<string, { x: number; y: number; radius: number }> = new Map();
 
   // Screen shake effect
   private shakeOffset = { x: 0, y: 0 };
@@ -73,7 +97,7 @@ export class RenderSystem {
     const now = Date.now();
     const players = world.getPlayers();
 
-    // Update trails for all alive players
+    // Update trails for all alive players with size-scaled parameters
     for (const player of players.values()) {
       if (!player.alive) {
         this.playerTrails.delete(player.id);
@@ -81,40 +105,48 @@ export class RenderSystem {
         continue;
       }
 
+      const radius = world.massToRadius(player.mass);
+
+      // Size-scaled trail lifetime: larger players = slightly longer trails
+      const trailLifetime = MOTION_FX.TRAIL_LIFETIME_BASE * (1 + (radius / 20 - 1) * MOTION_FX.TRAIL_LIFETIME_SCALE);
+
       let trail = this.playerTrails.get(player.id);
       if (!trail) {
         trail = [];
         this.playerTrails.set(player.id, trail);
       }
 
-      // Remove old trail points
-      while (trail.length > 0 && now - trail[0].timestamp > this.TRAIL_POINT_LIFETIME) {
+      // Remove expired trail points (age-based culling)
+      while (trail.length > 0 && now - trail[0].timestamp > trailLifetime) {
         trail.shift();
       }
 
-      // Add new trail point if moved enough distance
+      // Size-scaled minimum distance between trail points
+      const minDist = radius * MOTION_FX.TRAIL_MIN_DIST_RATIO;
       const pos = player.position;
       const lastPos = this.lastTrailPositions.get(player.id);
 
       if (lastPos) {
         const dx = pos.x - lastPos.x;
         const dy = pos.y - lastPos.y;
-        const dist = Math.sqrt(dx * dx + dy * dy);
+        const distSq = dx * dx + dy * dy; // Avoid sqrt when possible
 
-        if (dist >= this.TRAIL_MIN_DISTANCE) {
-          trail.push({ x: pos.x, y: pos.y, timestamp: now });
-          this.lastTrailPositions.set(player.id, { x: pos.x, y: pos.y });
+        if (distSq >= minDist * minDist) {
+          // Store radius with trail point for smooth size transitions during growth/shrink
+          trail.push({ x: pos.x, y: pos.y, timestamp: now, radius });
+          this.lastTrailPositions.set(player.id, { x: pos.x, y: pos.y, radius });
 
-          while (trail.length > this.TRAIL_MAX_LENGTH) {
+          // Cap trail points for memory efficiency
+          while (trail.length > MOTION_FX.TRAIL_MAX_POINTS) {
             trail.shift();
           }
         }
       } else {
-        this.lastTrailPositions.set(player.id, { x: pos.x, y: pos.y });
+        this.lastTrailPositions.set(player.id, { x: pos.x, y: pos.y, radius });
       }
     }
 
-    // Lazy cleanup of trails for players who left
+    // Lazy cleanup of trails for players who left (batch cleanup)
     if (this.playerTrails.size > players.size + 5) {
       for (const id of this.playerTrails.keys()) {
         if (!players.has(id)) {
@@ -127,6 +159,7 @@ export class RenderSystem {
 
   private renderPlayerTrails(world: World): void {
     const now = Date.now();
+    const ctx = this.ctx;
 
     for (const [playerId, trail] of this.playerTrails) {
       if (trail.length < 2) continue;
@@ -135,23 +168,41 @@ export class RenderSystem {
       if (!player || !player.alive) continue;
 
       const color = world.getPlayerColor(player.colorIndex);
-      const radius = world.massToRadius(player.mass);
+      const currentRadius = world.massToRadius(player.mass);
 
+      // Size-scaled trail lifetime for consistent fading
+      const trailLifetime = MOTION_FX.TRAIL_LIFETIME_BASE * (1 + (currentRadius / 20 - 1) * MOTION_FX.TRAIL_LIFETIME_SCALE);
+
+      // Render trail points from oldest to newest for proper layering
       for (let i = 0; i < trail.length; i++) {
         const point = trail[i];
         const age = now - point.timestamp;
-        const lifeRatio = Math.max(0, 1 - age / this.TRAIL_POINT_LIFETIME);
-        const indexRatio = i / trail.length;
+        const lifeRatio = Math.max(0, 1 - age / trailLifetime);
+        const indexRatio = (i + 1) / trail.length; // +1 so first point isn't invisible
 
-        const alpha = lifeRatio * indexRatio * 0.4;
-        if (alpha < 0.02) continue;
+        // Smooth alpha: combines age fade with position fade
+        const alpha = lifeRatio * indexRatio * MOTION_FX.TRAIL_MAX_ALPHA;
+        if (alpha < 0.015) continue;
 
-        const trailRadius = radius * (0.25 + indexRatio * 0.5);
+        // Use stored radius for smooth size transitions, interpolate toward current
+        const pointRadius = point.radius * 0.7 + currentRadius * 0.3;
 
-        this.ctx.fillStyle = this.colorWithAlpha(color, alpha);
-        this.ctx.beginPath();
-        this.ctx.arc(point.x, point.y, Math.max(trailRadius, 2), 0, Math.PI * 2);
-        this.ctx.fill();
+        // Trail size grows from start to end of trail
+        const startR = MOTION_FX.TRAIL_START_RADIUS_RATIO;
+        const endR = MOTION_FX.TRAIL_END_RADIUS_RATIO;
+        const trailRadius = pointRadius * (startR + indexRatio * (endR - startR));
+
+        // Outer glow (subtle, larger)
+        ctx.fillStyle = this.colorWithAlpha(color, alpha * 0.3);
+        ctx.beginPath();
+        ctx.arc(point.x, point.y, trailRadius * 1.4, 0, Math.PI * 2);
+        ctx.fill();
+
+        // Core trail point
+        ctx.fillStyle = this.colorWithAlpha(color, alpha);
+        ctx.beginPath();
+        ctx.arc(point.x, point.y, Math.max(trailRadius, 1.5), 0, Math.PI * 2);
+        ctx.fill();
       }
     }
   }
@@ -1028,39 +1079,46 @@ export class RenderSystem {
 
   private renderBoostFlame(position: Vec2, velocity: Vec2, radius: number): void {
     const speed = velocity.length();
-    if (speed < 10) return;
+    if (speed < MOTION_FX.FLAME_MIN_SPEED) return;
 
     const ctx = this.ctx;
     const time = performance.now();
 
-    // Flame direction is opposite to velocity
-    const dirX = -velocity.x / speed;
-    const dirY = -velocity.y / speed;
+    // Flame direction is opposite to velocity (exhaust behind player)
+    const invSpeed = 1 / speed;
+    const dirX = -velocity.x * invSpeed;
+    const dirY = -velocity.y * invSpeed;
 
+    // Flame origin at back of player, scaled with radius
     const flameX = position.x + dirX * radius;
     const flameY = position.y + dirY * radius;
 
-    // Dynamic flame length based on speed with flicker
-    const baseLen = Math.min(radius * 2, 20 + speed * 0.08);
-    const flicker = 0.85 + Math.sin(time * 0.03) * 0.1 + Math.sin(time * 0.07) * 0.05;
-    const flameLen = baseLen * flicker;
-    const flameWidth = radius * 0.5;
+    // Size-scaled flame dimensions
+    // Length scales with radius and speed (larger players = proportionally larger flames)
+    const baseLen = radius * MOTION_FX.FLAME_LENGTH_BASE + speed * MOTION_FX.FLAME_LENGTH_SPEED_SCALE * radius;
+    const flameWidth = radius * MOTION_FX.FLAME_WIDTH_RATIO;
 
+    // Organic flicker using shared timing constants
+    const flicker = 0.88 + Math.sin(time * MOTION_FX.FLICKER_SPEED_MED) * 0.08 +
+                          Math.sin(time * MOTION_FX.FLICKER_SPEED_FAST) * 0.04;
+    const flameLen = baseLen * flicker;
+
+    // Perpendicular direction for flame width
     const perpX = -dirY;
     const perpY = dirX;
 
-    // Outer glow (soft orange, no shadowBlur for performance)
-    const glowAlpha = 0.25 + Math.sin(time * 0.02) * 0.1;
+    // === LAYER 1: Outer glow (soft, pulsing) ===
+    const glowAlpha = 0.22 + Math.sin(time * MOTION_FX.FLICKER_SPEED_SLOW) * 0.08;
     ctx.fillStyle = `rgba(255, 100, 30, ${glowAlpha})`;
     ctx.beginPath();
-    ctx.moveTo(flameX + perpX * flameWidth * 1.4, flameY + perpY * flameWidth * 1.4);
-    ctx.lineTo(flameX - perpX * flameWidth * 1.4, flameY - perpY * flameWidth * 1.4);
-    ctx.lineTo(flameX + dirX * flameLen * 1.1, flameY + dirY * flameLen * 1.1);
+    ctx.moveTo(flameX + perpX * flameWidth * 1.5, flameY + perpY * flameWidth * 1.5);
+    ctx.lineTo(flameX - perpX * flameWidth * 1.5, flameY - perpY * flameWidth * 1.5);
+    ctx.lineTo(flameX + dirX * flameLen * 1.15, flameY + dirY * flameLen * 1.15);
     ctx.closePath();
     ctx.fill();
 
-    // Main outer flame (orange-red)
-    ctx.fillStyle = 'rgba(255, 120, 40, 0.9)';
+    // === LAYER 2: Main outer flame (orange-red) ===
+    ctx.fillStyle = 'rgba(255, 120, 40, 0.88)';
     ctx.beginPath();
     ctx.moveTo(flameX + perpX * flameWidth, flameY + perpY * flameWidth);
     ctx.lineTo(flameX - perpX * flameWidth, flameY - perpY * flameWidth);
@@ -1068,39 +1126,42 @@ export class RenderSystem {
     ctx.closePath();
     ctx.fill();
 
-    // Middle flame (orange-yellow)
-    const midFlicker = 0.9 + Math.sin(time * 0.05 + 1) * 0.1;
-    ctx.fillStyle = 'rgba(255, 180, 60, 0.95)';
+    // === LAYER 3: Middle flame (orange-yellow, independent flicker) ===
+    const midFlicker = 0.92 + Math.sin(time * MOTION_FX.FLICKER_SPEED_FAST + 1) * 0.08;
+    ctx.fillStyle = 'rgba(255, 180, 60, 0.92)';
     ctx.beginPath();
-    ctx.moveTo(flameX + perpX * flameWidth * 0.65, flameY + perpY * flameWidth * 0.65);
-    ctx.lineTo(flameX - perpX * flameWidth * 0.65, flameY - perpY * flameWidth * 0.65);
-    ctx.lineTo(flameX + dirX * flameLen * 0.75 * midFlicker, flameY + dirY * flameLen * 0.75 * midFlicker);
+    ctx.moveTo(flameX + perpX * flameWidth * 0.62, flameY + perpY * flameWidth * 0.62);
+    ctx.lineTo(flameX - perpX * flameWidth * 0.62, flameY - perpY * flameWidth * 0.62);
+    ctx.lineTo(flameX + dirX * flameLen * 0.72 * midFlicker, flameY + dirY * flameLen * 0.72 * midFlicker);
     ctx.closePath();
     ctx.fill();
 
-    // Inner core (bright yellow-white)
+    // === LAYER 4: Inner core (bright yellow-white, fastest flicker) ===
     const coreFlicker = 0.85 + Math.sin(time * 0.08 + 2) * 0.15;
-    ctx.fillStyle = 'rgba(255, 240, 180, 1)';
+    ctx.fillStyle = 'rgba(255, 245, 190, 1)';
     ctx.beginPath();
-    ctx.moveTo(flameX + perpX * flameWidth * 0.3, flameY + perpY * flameWidth * 0.3);
-    ctx.lineTo(flameX - perpX * flameWidth * 0.3, flameY - perpY * flameWidth * 0.3);
-    ctx.lineTo(flameX + dirX * flameLen * 0.45 * coreFlicker, flameY + dirY * flameLen * 0.45 * coreFlicker);
+    ctx.moveTo(flameX + perpX * flameWidth * 0.28, flameY + perpY * flameWidth * 0.28);
+    ctx.lineTo(flameX - perpX * flameWidth * 0.28, flameY - perpY * flameWidth * 0.28);
+    ctx.lineTo(flameX + dirX * flameLen * 0.42 * coreFlicker, flameY + dirY * flameLen * 0.42 * coreFlicker);
     ctx.closePath();
     ctx.fill();
 
-    // Sparks at higher speeds (simple dots, performant)
-    if (speed > 80) {
-      const sparkCount = Math.min(3, Math.floor((speed - 80) / 40) + 1);
+    // === SPARKS: Size-scaled particles at higher speeds ===
+    if (speed > MOTION_FX.FLAME_SPARK_THRESHOLD) {
+      const sparkCount = Math.min(4, 1 + Math.floor((speed - MOTION_FX.FLAME_SPARK_THRESHOLD) / MOTION_FX.FLAME_SPARK_COUNT_SCALE));
+      // Spark size scales with player radius
+      const baseSparkSize = Math.max(1.5, radius * 0.08);
+
       for (let i = 0; i < sparkCount; i++) {
-        const sparkPhase = (time * 0.01 + i * 2.1) % 1;
-        const sparkDist = flameLen * (0.6 + sparkPhase * 0.5);
-        const sparkOffset = Math.sin(time * 0.02 + i * 3) * flameWidth * 0.3;
+        const sparkPhase = (time * 0.012 + i * 2.1) % 1;
+        const sparkDist = flameLen * (0.55 + sparkPhase * 0.55);
+        const sparkOffset = Math.sin(time * MOTION_FX.FLICKER_SPEED_SLOW + i * 3) * flameWidth * 0.35;
         const sparkX = flameX + dirX * sparkDist + perpX * sparkOffset;
         const sparkY = flameY + dirY * sparkDist + perpY * sparkOffset;
-        const sparkAlpha = 1 - sparkPhase;
-        const sparkSize = 2 * (1 - sparkPhase * 0.5);
+        const sparkAlpha = (1 - sparkPhase) * 0.9;
+        const sparkSize = baseSparkSize * (1 - sparkPhase * 0.4);
 
-        ctx.fillStyle = `rgba(255, 220, 150, ${sparkAlpha})`;
+        ctx.fillStyle = `rgba(255, 225, 160, ${sparkAlpha})`;
         ctx.beginPath();
         ctx.arc(sparkX, sparkY, sparkSize, 0, Math.PI * 2);
         ctx.fill();
