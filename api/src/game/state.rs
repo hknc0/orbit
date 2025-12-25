@@ -183,6 +183,10 @@ pub struct GravityWell {
     /// Unique stable ID (doesn't change when other wells are removed)
     pub id: WellId,
     pub position: Vec2,
+    /// Target position for smooth lerping during arena scaling
+    /// Wells lerp toward this to avoid jittery movement
+    #[serde(default)]
+    pub target_position: Vec2,
     pub mass: f32,
     pub core_radius: f32, // Death zone radius
     /// Timer until next explosion (counts down)
@@ -198,11 +202,32 @@ impl GravityWell {
         Self {
             id,
             position,
+            target_position: position, // Start at position (no lerping needed)
             mass,
             core_radius,
             explosion_timer: Self::random_explosion_delay(),
             is_charging: false,
         }
+    }
+
+    /// Lerp position toward target_position for smooth movement
+    /// Returns true if position changed
+    pub fn lerp_to_target(&mut self, lerp_factor: f32) -> bool {
+        let diff = self.target_position - self.position;
+        let dist_sq = diff.length_sq();
+
+        // If within 1 unit, snap to target
+        if dist_sq < 1.0 {
+            if dist_sq > 0.0001 {
+                self.position = self.target_position;
+                return true;
+            }
+            return false;
+        }
+
+        // Smooth lerp toward target
+        self.position = self.position + diff * lerp_factor;
+        true
     }
 
     /// Generate a random explosion delay (30-90 seconds)
@@ -352,6 +377,15 @@ impl Arena {
         self.gravity_wells.insert(well.id, well);
     }
 
+    /// Count wells that are currently lerping toward their target position
+    /// (i.e., position != target_position)
+    pub fn wells_lerping_count(&self) -> usize {
+        self.gravity_wells.values()
+            .filter(|w| w.id != CENTRAL_WELL_ID)
+            .filter(|w| (w.position - w.target_position).length_sq() > 1.0)
+            .count()
+    }
+
     /// Rebuild the well spatial grid from current gravity_wells
     /// Call this when wells have been modified directly without using insert_well
     pub fn rebuild_well_grid(&mut self) {
@@ -451,12 +485,15 @@ impl Arena {
         let min_escape = config.min_escape_radius;
         let max_escape = config.min_escape_radius * config.max_escape_multiplier;
 
-        // Calculate target arena size based on player count
-        let additional = (target_player_count.saturating_sub(config.player_threshold) as f32)
-            * config.growth_per_player;
-        let target_escape = (config.min_escape_radius + additional)
-            .min(max_escape)
-            .max(min_escape);
+        // SQRT-BASED SCALING for constant player density
+        // Area needed = players × area_per_player
+        // Area = π × r², so r = √(Area / π)
+        // This maintains constant density regardless of player count
+        let players = (target_player_count as f32).max(1.0);
+        let target_area = players * config.area_per_player;
+        let target_escape = (target_area / std::f32::consts::PI).sqrt()
+            .max(min_escape)
+            .min(max_escape);
         let target_outer = target_escape - 200.0;
 
         // Calculate target number of wells based on arena area
@@ -473,7 +510,8 @@ impl Arena {
         let diff = target_escape - self.escape_radius;
 
         if diff > 1.0 {
-            // GROW: Reset shrink delay, lerp quickly
+            // GROW: Fast lerp for smooth expansion (no jitter)
+            // Players need space quickly but expansion should look natural
             self.shrink_delay_ticks = config.shrink_delay_ticks;
             let delta = diff * config.grow_lerp;
             self.escape_radius = (self.escape_radius + delta).min(target_escape);
@@ -495,40 +533,56 @@ impl Arena {
         // Update scale factor based on current escape_radius vs base
         self.scale = self.escape_radius / arena::ESCAPE_RADIUS;
 
-        // Scale well positions proportionally when arena size changes
-        let arena_changed = (self.escape_radius - previous_escape).abs() > 0.1;
+        // Update well TARGET positions based on TARGET arena size (not current lerping size)
+        // This prevents jittery movement - wells smoothly lerp to final positions
+        // Use target_escape for calculating where wells SHOULD end up
+        let min_dist = target_escape * config.well_min_ratio;
+        let max_dist = target_escape * config.well_max_ratio;
 
-        if arena_changed && previous_escape > 1.0 {
-            let scale_factor = self.escape_radius / previous_escape;
-
-            for well in self.gravity_wells.values_mut() {
-                // Skip central well (ID 0)
-                if well.id == CENTRAL_WELL_ID {
-                    continue;
-                }
-                let dist = well.position.length();
-                if dist < 1.0 {
-                    continue;
-                }
-
-                let new_dist = dist * scale_factor;
-                let min_dist = self.escape_radius * config.well_min_ratio;
-                let max_dist = self.escape_radius * config.well_max_ratio;
-                let clamped_dist = new_dist.clamp(min_dist, max_dist);
-
-                let direction = well.position.normalize();
-                well.position = direction * clamped_dist;
+        for well in self.gravity_wells.values_mut() {
+            // Skip central well (ID 0)
+            if well.id == CENTRAL_WELL_ID {
+                continue;
             }
 
-            // CRITICAL: Rebuild well grid after position changes
-            // Without this, gravity calculations use stale positions
+            // Use current target_position to calculate new target (maintains ratio)
+            let current_dist = well.target_position.length();
+            if current_dist < 1.0 {
+                continue;
+            }
+
+            // Scale from previous target radius to new target radius
+            // This keeps wells at consistent ratios as arena scales
+            let ratio = current_dist / previous_escape.max(1.0);
+            let new_dist = (ratio * target_escape).clamp(min_dist, max_dist);
+
+            let direction = well.target_position.normalize();
+            well.target_position = direction * new_dist;
+        }
+
+        // Lerp well positions toward their targets (smooth movement)
+        let well_lerp = config.grow_lerp * 0.5; // Wells move slightly slower than arena
+        let mut any_moved = false;
+        for well in self.gravity_wells.values_mut() {
+            if well.id == CENTRAL_WELL_ID {
+                continue;
+            }
+            if well.lerp_to_target(well_lerp) {
+                any_moved = true;
+            }
+        }
+
+        // Rebuild well grid only if wells actually moved
+        if any_moved {
             self.rebuild_well_grid();
         }
 
         // Add new wells if needed (never remove existing ones during gameplay)
+        // IMPORTANT: Use target_escape (not self.escape_radius) so wells are placed
+        // at correct positions for the target arena size, not the current lerping size
         if target_wells > current_orbital_wells {
             let wells_to_add = target_wells - current_orbital_wells;
-            self.add_orbital_wells(wells_to_add, self.escape_radius, config);
+            self.add_orbital_wells(wells_to_add, target_escape, config);
         }
     }
 
@@ -1067,21 +1121,31 @@ mod tests {
         let mut arena = Arena::default();
         let initial_escape = arena.escape_radius;
 
-        // Single call should move toward target with lerp
+        // Calculate expected target using sqrt-based formula
+        // target_area = players * area_per_player
+        // target_radius = sqrt(target_area / PI)
+        let target_area = 1000.0 * config.area_per_player;
+        let target = (target_area / std::f32::consts::PI).sqrt()
+            .max(config.min_escape_radius)
+            .min(config.min_escape_radius * config.max_escape_multiplier);
+
+        // Single call should move toward target with lerp (not instant)
         arena.scale_for_simulation(1000, &config);
         let after_one = arena.escape_radius;
 
-        // Should have moved but not instantly jumped
+        // Should have moved but not reached target instantly
         assert!(after_one > initial_escape, "Should start expanding");
-        assert!(after_one < initial_escape * 2.0, "Should not jump instantly");
+        assert!(after_one < target, "Should not reach target in one tick");
 
-        // Multiple calls should continue converging
+        // Multiple calls should converge to target
         for _ in 0..100 {
             arena.scale_for_simulation(1000, &config);
         }
         let after_many = arena.escape_radius;
 
         assert!(after_many > after_one, "Should continue expanding");
+        // Should be very close to target after 100 iterations
+        assert!((after_many - target).abs() < 1.0, "Should converge to target");
     }
 
     #[test]
@@ -1283,5 +1347,53 @@ mod tests {
 
         // Should only collapse 2 (the ones not already exploding)
         assert_eq!(collapsed, 2);
+    }
+
+    #[test]
+    fn test_wells_placed_at_target_radius_not_current() {
+        use crate::config::ArenaScalingConfig;
+
+        let config = ArenaScalingConfig::default();
+        let mut arena = Arena::default();
+
+        // Start with small arena
+        let initial_escape = arena.escape_radius;
+
+        // Call scale_for_simulation with large player count
+        // After ONE call, arena hasn't reached target yet (lerping)
+        // but any wells added should be at TARGET position
+        arena.scale_for_simulation(1000, &config);
+
+        let after_one_escape = arena.escape_radius;
+        // Calculate target using sqrt-based formula
+        let target_area = 1000.0 * config.area_per_player;
+        let target_escape = (target_area / std::f32::consts::PI).sqrt()
+            .max(config.min_escape_radius)
+            .min(config.min_escape_radius * config.max_escape_multiplier);
+
+        // Arena should not have reached target yet (smooth lerping)
+        assert!(after_one_escape < target_escape,
+            "Arena should still be lerping: {} < {}", after_one_escape, target_escape);
+        assert!(after_one_escape > initial_escape,
+            "Arena should have grown: {} > {}", after_one_escape, initial_escape);
+
+        // Check orbital wells are placed at TARGET radius range, not current
+        let orbital_wells: Vec<_> = arena.gravity_wells.values()
+            .filter(|w| w.id != CENTRAL_WELL_ID)
+            .collect();
+
+        if !orbital_wells.is_empty() {
+            for well in &orbital_wells {
+                let dist = well.position.length();
+                let min_expected = target_escape * config.well_min_ratio * 0.9; // 10% tolerance
+                let max_expected = target_escape * config.well_max_ratio * 1.1;
+
+                assert!(
+                    dist >= min_expected && dist <= max_expected,
+                    "Well at {:?} (dist {:.0}) should be in range [{:.0}, {:.0}] based on TARGET radius {:.0}, not current {:.0}",
+                    well.position, dist, min_expected, max_expected, target_escape, after_one_escape
+                );
+            }
+        }
     }
 }

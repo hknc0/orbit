@@ -190,6 +190,8 @@ pub struct GameSession {
     session_start: std::time::Instant,
     /// Last tick when simulation target was updated (rate limiting)
     last_simulation_update_tick: u64,
+    /// Last tick when a bot was spawned (rate limiting to simulate human joins)
+    last_bot_spawn_tick: u64,
     /// Last client timestamp per player for RTT echo
     last_client_times: HashMap<PlayerId, u64>,
     /// Last processed input sequence per player (for deduplication)
@@ -255,15 +257,13 @@ impl GameSession {
 
         // CRITICAL: Initialize arena with area-based well scaling BEFORE spawning bots
         // Uses scale_for_simulation for consistent area-based well calculation
-        // Run multiple iterations to converge to target size
+        // Growth is instant so arena is immediately sized for player count
         {
             let config = arena_config.read();
-            for _ in 0..50 {
-                game_loop.state_mut().arena.scale_for_simulation(bot_count, &config);
-            }
+            game_loop.state_mut().arena.scale_for_simulation(bot_count, &config);
         }
         info!(
-            "Arena configured: {} gravity wells, escape_radius={}",
+            "Arena configured: {} gravity wells, escape_radius={:.0}",
             game_loop.state().arena.gravity_wells.len(),
             game_loop.state().arena.escape_radius
         );
@@ -321,6 +321,7 @@ impl GameSession {
             arena_config,
             session_start: std::time::Instant::now(),
             last_simulation_update_tick: 0,
+            last_bot_spawn_tick: 0,
             last_client_times: HashMap::new(),
             last_input_sequences: HashMap::new(),
             #[cfg(feature = "anticheat")]
@@ -626,8 +627,35 @@ impl GameSession {
                 state.arena.escape_radius as u64,
                 Ordering::Relaxed,
             );
+
+            // Calculate target radius and area per player for metrics
+            {
+                let config = self.arena_config.read();
+                let player_count = state.players.len();
+                let players = (player_count as f32).max(1.0);
+                let target_area = players * config.area_per_player;
+                let target_radius = (target_area / std::f32::consts::PI).sqrt()
+                    .max(config.min_escape_radius)
+                    .min(config.min_escape_radius * config.max_escape_multiplier);
+
+                metrics.arena_target_radius.store(target_radius as u64, Ordering::Relaxed);
+
+                // Calculate actual area per player
+                let current_area = std::f32::consts::PI * state.arena.escape_radius * state.arena.escape_radius;
+                let actual_area_per_player = if player_count > 0 {
+                    current_area / player_count as f32
+                } else {
+                    0.0
+                };
+                metrics.arena_area_per_player.store(actual_area_per_player as u64, Ordering::Relaxed);
+            }
+
             metrics.arena_gravity_wells.store(
                 state.arena.gravity_wells.len() as u64,
+                Ordering::Relaxed,
+            );
+            metrics.arena_wells_lerping.store(
+                state.arena.wells_lerping_count() as u64,
                 Ordering::Relaxed,
             );
 
@@ -692,47 +720,47 @@ impl GameSession {
         }
     }
 
-    /// Update bot count target based on simulation mode timing
-    /// Rate-limited to once per second to prevent chaos
+    /// Update bot count target (simulation mode) and arena size (all modes)
+    /// Rate-limited to once per second
     fn update_simulation_bot_count(&mut self) {
-        if !self.simulation_config.enabled {
-            return;
-        }
-
         let current_tick = self.game_loop.state().tick;
 
-        // Rate limit: only update target once per second (every 30 ticks at 30 TPS)
+        // Rate limit: only update once per second (every 30 ticks at 30 TPS)
         if current_tick < self.last_simulation_update_tick + 30 {
             return;
         }
         self.last_simulation_update_tick = current_tick;
 
-        let elapsed = self.session_start.elapsed().as_secs_f32();
-        let target = self.simulation_config.target_bots(elapsed);
+        // Update bot target (simulation mode only)
+        if self.simulation_config.enabled {
+            let elapsed = self.session_start.elapsed().as_secs_f32();
+            let target = self.simulation_config.target_bots(elapsed);
 
-        // Only update if target changed significantly (±2 bots to reduce noise)
-        if (target as i32 - self.bot_count as i32).abs() >= 2 {
-            let old_target = self.bot_count;
-            self.bot_count = target;
+            // Only update if target changed significantly (±2 bots to reduce noise)
+            if (target as i32 - self.bot_count as i32).abs() >= 2 {
+                let old_target = self.bot_count;
+                self.bot_count = target;
 
-            info!(
-                "Simulation: bot target {} → {} (elapsed: {:.1}s, cycle {:.1}%)",
-                old_target,
-                target,
-                elapsed,
-                (elapsed % self.simulation_config.cycle_duration_secs)
-                    / self.simulation_config.cycle_duration_secs
-                    * 100.0
-            );
+                info!(
+                    "Simulation: bot target {} → {} (elapsed: {:.1}s, cycle {:.1}%)",
+                    old_target,
+                    target,
+                    elapsed,
+                    (elapsed % self.simulation_config.cycle_duration_secs)
+                        / self.simulation_config.cycle_duration_secs
+                        * 100.0
+                );
+            }
         }
 
-        // Smoothly scale arena for current target (runs every update for smooth lerping)
-        // This adjusts radii smoothly and adds wells incrementally without chaos
+        // Scale arena based on ACTUAL player count (all modes)
+        // Arena grows as players join, shrinks as they leave - natural scaling
+        let actual_player_count = self.game_loop.state().players.len();
         let config = self.arena_config.read();
         self.game_loop
             .state_mut()
             .arena
-            .scale_for_simulation(self.bot_count, &config);
+            .scale_for_simulation(actual_player_count, &config);
     }
 
     /// Scale down bots if current count exceeds target (used during simulation scale-down phase)
@@ -907,16 +935,19 @@ impl GameSession {
     }
 
     /// Maintain minimum player count with bots
-    /// Spawns bots ONE at a time (like humans) so arena scales naturally
+    /// Rate-limited to ~1 bot per second to simulate realistic human join behavior
     fn maintain_player_count(&mut self) {
         let current_count = self.game_loop.state().players.len();
         let target = self.bot_count;
+        let current_tick = self.game_loop.state().tick;
 
-        // Only add ONE bot per tick to simulate natural human join behavior
-        // Arena scaling is handled by update_simulation_bot_count (once per second)
-        // to avoid constant small updates that cause visual pulsing
-        if current_count < target {
+        // Rate limit: ~1 bot per second (30 ticks at 30 TPS)
+        // Simulates realistic human join rate on a busy server
+        const BOT_SPAWN_INTERVAL_TICKS: u64 = 30;
+
+        if current_count < target && current_tick >= self.last_bot_spawn_tick + BOT_SPAWN_INTERVAL_TICKS {
             self.game_loop.fill_with_bots(current_count + 1);
+            self.last_bot_spawn_tick = current_tick;
         }
     }
 }

@@ -103,8 +103,8 @@ Your job is to analyze game metrics and recommend parameter adjustments to maint
 | arena.shrink_lerp | 0.001-0.05 | How fast arena shrinks towards target |
 | arena.shrink_delay_ticks | 0-300 | Ticks to wait before shrinking |
 | arena.max_wells | 5-50 | Maximum gravity wells |
-| arena.growth_per_player | 5-50 | Arena growth units per player |
-| arena.player_threshold | 1-50 | Player count before arena grows |
+| arena.base_player_count | 1-100 | Base player count for density calculation |
+| arena.area_per_player | 50000-500000 | Target square units per player |
 
 ## Performance Guidelines
 

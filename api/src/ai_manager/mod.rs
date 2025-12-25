@@ -449,8 +449,8 @@ impl AIManager {
             "arena.shrink_lerp" |
             "arena.shrink_delay_ticks" |
             "arena.max_wells" |
-            "arena.growth_per_player" |
-            "arena.player_threshold"
+            "arena.base_player_count" |
+            "arena.area_per_player"
         )
     }
 
@@ -462,8 +462,8 @@ impl AIManager {
             "arena.shrink_delay_ticks" => Some(config.shrink_delay_ticks as f32),
             "arena.wells_per_area" => Some(config.wells_per_area),
             "arena.min_wells" => Some(config.min_wells as f32),
-            "arena.growth_per_player" => Some(config.growth_per_player),
-            "arena.player_threshold" => Some(config.player_threshold as f32),
+            "arena.base_player_count" => Some(config.base_player_count),
+            "arena.area_per_player" => Some(config.area_per_player),
             _ => None,
         }
     }
@@ -492,12 +492,12 @@ impl AIManager {
                 config.min_wells = (value as usize).clamp(1, 1000);
                 true
             }
-            "arena.growth_per_player" => {
-                config.growth_per_player = value.clamp(5.0, 50.0);
+            "arena.base_player_count" => {
+                config.base_player_count = value.clamp(1.0, 100.0);
                 true
             }
-            "arena.player_threshold" => {
-                config.player_threshold = (value as usize).clamp(1, 50);
+            "arena.area_per_player" => {
+                config.area_per_player = value.clamp(50_000.0, 500_000.0);
                 true
             }
             _ => false,

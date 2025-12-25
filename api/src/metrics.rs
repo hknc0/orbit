@@ -53,7 +53,10 @@ pub struct Metrics {
     pub match_time_seconds: AtomicU64,
     pub arena_scale: AtomicU64, // Stored as scale * 100 (e.g., 1.5 = 150)
     pub arena_radius: AtomicU64, // Arena escape radius in world units
+    pub arena_target_radius: AtomicU64, // Target radius before lerping
     pub arena_gravity_wells: AtomicU64, // Number of gravity wells
+    pub arena_wells_lerping: AtomicU64, // Wells currently moving toward target
+    pub arena_area_per_player: AtomicU64, // Actual area per player in square units
 
     // Server uptime
     start_time: Instant,
@@ -128,7 +131,10 @@ impl Metrics {
             match_time_seconds: AtomicU64::new(0),
             arena_scale: AtomicU64::new(100),
             arena_radius: AtomicU64::new(0),
+            arena_target_radius: AtomicU64::new(0),
             arena_gravity_wells: AtomicU64::new(0),
+            arena_wells_lerping: AtomicU64::new(0),
+            arena_area_per_player: AtomicU64::new(0),
             start_time: Instant::now(),
             simulation_enabled: AtomicU64::new(0),
             simulation_target_bots: AtomicU64::new(0),
@@ -282,8 +288,14 @@ impl Metrics {
             self.arena_scale.load(Ordering::Relaxed));
         metric!("orbit_royale_arena_radius", "Arena escape radius in world units", "gauge",
             self.arena_radius.load(Ordering::Relaxed));
+        metric!("orbit_royale_arena_target_radius", "Target arena radius before lerping", "gauge",
+            self.arena_target_radius.load(Ordering::Relaxed));
         metric!("orbit_royale_arena_gravity_wells", "Number of gravity wells", "gauge",
             self.arena_gravity_wells.load(Ordering::Relaxed));
+        metric!("orbit_royale_arena_wells_lerping", "Wells currently moving toward target position", "gauge",
+            self.arena_wells_lerping.load(Ordering::Relaxed));
+        metric!("orbit_royale_arena_area_per_player", "Actual area per player in square units", "gauge",
+            self.arena_area_per_player.load(Ordering::Relaxed));
         metric!("orbit_royale_uptime_seconds", "Server uptime in seconds", "counter",
             self.uptime_seconds());
 

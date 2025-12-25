@@ -6,7 +6,7 @@
 
 use crate::game::constants::arena::*;
 use crate::game::constants::spawn::RESPAWN_DELAY;
-use crate::game::state::{GameState, MatchPhase};
+use crate::game::state::{GameState, MatchPhase, CENTRAL_WELL_ID};
 
 // ============================================================================
 // Arena System Constants
@@ -283,11 +283,10 @@ pub fn spawn_near_well_bounded(
     use crate::game::constants::arena::CORE_RADIUS;
     use rand::Rng;
 
-    // Filter out the central supermassive black hole (at origin with large core)
-    // to distribute players across orbital wells instead of clustering at center
+    // Filter out the central well (ID 0) to distribute players across orbital wells
     let orbital_wells: Vec<_> = wells
         .iter()
-        .filter(|w| w.position.length() > ORBITAL_WELL_POSITION_THRESHOLD || w.core_radius <= CORE_RADIUS * ORBITAL_WELL_CORE_FILTER_MULTIPLIER)
+        .filter(|w| w.id != CENTRAL_WELL_ID)
         .collect();
 
     if orbital_wells.is_empty() {
@@ -876,5 +875,57 @@ mod tests {
                 );
             }
         }
+    }
+
+    #[test]
+    fn test_spawn_excludes_central_well_by_id() {
+        use crate::game::state::GravityWell;
+        use crate::game::constants::arena::CORE_RADIUS;
+        use crate::game::constants::physics::CENTRAL_MASS;
+        use crate::game::constants::spawn::{ZONE_MIN, ZONE_MAX};
+
+        // Create wells where central well has SMALL core (would pass old property-based filter)
+        // This tests that we filter by ID, not by core_radius
+        let orbital_pos = Vec2::new(800.0, 0.0);
+        let wells = vec![
+            // Central well (ID 0) with small core - would wrongly pass old filter
+            GravityWell::new(0, Vec2::ZERO, CENTRAL_MASS, CORE_RADIUS),
+            // Orbital well far from center
+            GravityWell::new(1, orbital_pos, CENTRAL_MASS, CORE_RADIUS),
+        ];
+
+        // Spawns should be near the orbital well (ID 1), not the center
+        // Spawn zone is ZONE_MIN to ZONE_MAX (250-350) from well center
+        let spawn_tolerance = ZONE_MAX + 50.0; // Allow some margin
+
+        let mut near_orbital = 0;
+        let mut near_center = 0;
+
+        for _ in 0..100 {
+            let pos = spawn_near_well(&wells);
+            let dist_from_center = pos.length();
+            let dist_from_orbital = (pos - orbital_pos).length();
+
+            if dist_from_orbital < spawn_tolerance {
+                near_orbital += 1;
+            }
+            // If spawn is within spawn zone of center, it would be ZONE_MIN to ZONE_MAX from origin
+            if dist_from_center >= ZONE_MIN && dist_from_center <= ZONE_MAX {
+                near_center += 1;
+            }
+        }
+
+        // All spawns should be near orbital well (within spawn zone)
+        assert!(
+            near_orbital > 90,
+            "Expected most spawns near orbital well, got {} near orbital, {} near center",
+            near_orbital, near_center
+        );
+        // No spawns should be in the spawn zone around center (ID 0 is excluded)
+        assert_eq!(
+            near_center, 0,
+            "Expected NO spawns in center spawn zone (ID filter), got {}",
+            near_center
+        );
     }
 }

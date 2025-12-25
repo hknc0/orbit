@@ -629,10 +629,11 @@ pub struct ArenaScalingConfig {
     pub min_escape_radius: f32,
     /// Maximum arena scale multiplier (5-20)
     pub max_escape_multiplier: f32,
-    /// Arena growth units per player (5-50)
-    pub growth_per_player: f32,
-    /// Player count before arena starts growing (1-50)
-    pub player_threshold: usize,
+    /// Base player count for density calculation (radius scales as sqrt(players/base))
+    pub base_player_count: f32,
+    /// Target square units per player (for density calculation)
+    /// Lower = more cramped, higher = more sparse
+    pub area_per_player: f32,
 
     // Well positioning
     /// Minimum well distance ratio from center (0.1-0.4)
@@ -661,13 +662,15 @@ pub struct ArenaScalingConfig {
 impl Default for ArenaScalingConfig {
     fn default() -> Self {
         Self {
-            grow_lerp: 0.02,
+            grow_lerp: 0.15,  // Fast but smooth (reaches 90% in ~0.5s at 30 TPS)
             shrink_lerp: 0.005,
             shrink_delay_ticks: 150,
             min_escape_radius: 800.0,
             max_escape_multiplier: 10.0,
-            growth_per_player: 25.0,
-            player_threshold: 1,
+            // Sqrt scaling: radius = min_radius * sqrt(players / base_players)
+            // 10 players at 800 radius = ~2M sq units = 200K per player
+            base_player_count: 10.0,
+            area_per_player: 200_000.0,  // 200K sq units per player (constant density)
             well_min_ratio: 0.20,
             well_max_ratio: 0.85,
             wells_per_area: 5_000_000.0, // 1 well per 5M square units (sparse wells)
@@ -741,22 +744,22 @@ impl ArenaScalingConfig {
             }
         }
 
-        if let Ok(val) = std::env::var("ARENA_GROWTH_PER_PLAYER") {
+        if let Ok(val) = std::env::var("ARENA_BASE_PLAYER_COUNT") {
             if let Ok(parsed) = val.parse::<f32>() {
-                if parsed >= 5.0 && parsed <= 50.0 {
-                    config.growth_per_player = parsed;
+                if parsed >= 1.0 && parsed <= 100.0 {
+                    config.base_player_count = parsed;
                 } else {
-                    tracing::warn!("ARENA_GROWTH_PER_PLAYER must be 5-50, using default");
+                    tracing::warn!("ARENA_BASE_PLAYER_COUNT must be 1-100, using default");
                 }
             }
         }
 
-        if let Ok(val) = std::env::var("ARENA_PLAYER_THRESHOLD") {
-            if let Ok(parsed) = val.parse::<usize>() {
-                if parsed >= 1 && parsed <= 50 {
-                    config.player_threshold = parsed;
+        if let Ok(val) = std::env::var("ARENA_AREA_PER_PLAYER") {
+            if let Ok(parsed) = val.parse::<f32>() {
+                if parsed >= 50_000.0 && parsed <= 500_000.0 {
+                    config.area_per_player = parsed;
                 } else {
-                    tracing::warn!("ARENA_PLAYER_THRESHOLD must be 1-50, using default");
+                    tracing::warn!("ARENA_AREA_PER_PLAYER must be 50000-500000, using default");
                 }
             }
         }
@@ -1065,7 +1068,7 @@ mod tests {
     #[test]
     fn test_arena_scaling_config_defaults() {
         let config = ArenaScalingConfig::default();
-        assert_eq!(config.grow_lerp, 0.02);
+        assert_eq!(config.grow_lerp, 0.15);  // Fast but smooth growth
         assert_eq!(config.shrink_lerp, 0.005);
         assert_eq!(config.shrink_delay_ticks, 150);
         assert_eq!(config.min_escape_radius, 800.0);

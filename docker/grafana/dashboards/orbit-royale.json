@@ -1035,144 +1035,142 @@
       "gridPos": { "h": 1, "w": 24, "x": 0, "y": 42 },
       "id": 60,
       "panels": [],
-      "title": "Entities & Arena",
+      "title": "Arena & Entities",
       "type": "row"
     },
     {
       "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
-      "description": "Current radius of the game arena in world units. The arena shrinks over time in battle royale mode, forcing players closer together. Smaller radius = more intense gameplay and more collisions to process. Track this to correlate with performance changes.",
-      "fieldConfig": {
-        "defaults": {
-          "color": { "mode": "thresholds" },
-          "thresholds": { "mode": "absolute", "steps": [{ "color": "purple", "value": null }] }
-        }
-      },
-      "gridPos": { "h": 3, "w": 3, "x": 0, "y": 43 },
+      "description": "Current arena escape radius. Boundary beyond which players are eliminated.",
+      "fieldConfig": { "defaults": { "color": { "mode": "thresholds" }, "thresholds": { "mode": "absolute", "steps": [{ "color": "green", "value": null }] } } },
+      "gridPos": { "h": 3, "w": 2, "x": 0, "y": 43 },
       "id": 61,
       "options": { "colorMode": "value", "graphMode": "area", "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false } },
-      "targets": [{ "expr": "orbit_royale_arena_radius{job=\"orbit-royale-api\"}", "legendFormat": "Radius", "refId": "A" }],
-      "title": "Arena Radius",
+      "targets": [{ "expr": "orbit_royale_arena_radius{job=\"orbit-royale-api\"}", "legendFormat": "R", "refId": "A" }],
+      "title": "Radius",
       "type": "stat"
     },
     {
       "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
-      "description": "Arena scale multiplier (displayed as 0.0-1.0). This is the current size relative to maximum size. 1.0 = full size, 0.5 = half size, etc. As the match progresses, this decreases, shrinking the playable area and intensifying combat.",
-      "fieldConfig": {
-        "defaults": {
-          "color": { "mode": "thresholds" },
-          "thresholds": { "mode": "absolute", "steps": [{ "color": "purple", "value": null }] },
-          "decimals": 2
-        }
-      },
-      "gridPos": { "h": 3, "w": 3, "x": 3, "y": 43 },
+      "description": "Target radius arena is lerping toward.",
+      "fieldConfig": { "defaults": { "color": { "mode": "thresholds" }, "thresholds": { "mode": "absolute", "steps": [{ "color": "super-light-purple", "value": null }] } } },
+      "gridPos": { "h": 3, "w": 2, "x": 2, "y": 43 },
+      "id": 91,
+      "options": { "colorMode": "value", "graphMode": "area", "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false } },
+      "targets": [{ "expr": "orbit_royale_arena_target_radius{job=\"orbit-royale-api\"}", "legendFormat": "T", "refId": "A" }],
+      "title": "Target",
+      "type": "stat"
+    },
+    {
+      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "description": "Arena scale multiplier. 1.0 = full size.",
+      "fieldConfig": { "defaults": { "color": { "mode": "thresholds" }, "thresholds": { "mode": "absolute", "steps": [{ "color": "purple", "value": null }] }, "decimals": 2 } },
+      "gridPos": { "h": 3, "w": 2, "x": 4, "y": 43 },
       "id": 62,
       "options": { "colorMode": "value", "graphMode": "area", "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false } },
-      "targets": [{ "expr": "orbit_royale_arena_scale{job=\"orbit-royale-api\"} / 100", "legendFormat": "Scale", "refId": "A" }],
-      "title": "Arena Scale",
+      "targets": [{ "expr": "orbit_royale_arena_scale{job=\"orbit-royale-api\"} / 100", "legendFormat": "S", "refId": "A" }],
+      "title": "Scale",
       "type": "stat"
     },
     {
       "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
-      "description": "Number of gravity wells currently in the arena. Gravity wells affect player and projectile physics, adding gameplay complexity. More wells = more physics calculations per tick. This is typically fixed per map configuration but may change with dynamic events.",
-      "fieldConfig": {
-        "defaults": {
-          "color": { "mode": "thresholds" },
-          "thresholds": { "mode": "absolute", "steps": [{ "color": "blue", "value": null }] }
-        }
-      },
-      "gridPos": { "h": 3, "w": 3, "x": 6, "y": 43 },
+      "description": "Total gravity wells in arena.",
+      "fieldConfig": { "defaults": { "color": { "mode": "thresholds" }, "thresholds": { "mode": "absolute", "steps": [{ "color": "blue", "value": null }] } } },
+      "gridPos": { "h": 3, "w": 2, "x": 6, "y": 43 },
       "id": 63,
       "options": { "colorMode": "value", "graphMode": "area", "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false } },
-      "targets": [{ "expr": "orbit_royale_gravity_wells{job=\"orbit-royale-api\"}", "legendFormat": "Wells", "refId": "A" }],
-      "title": "Gravity Wells",
+      "targets": [{ "expr": "orbit_royale_gravity_wells{job=\"orbit-royale-api\"}", "legendFormat": "W", "refId": "A" }],
+      "title": "Wells",
       "type": "stat"
     },
     {
       "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
-      "description": "Number of active projectiles in the game world. Projectiles (bullets, missiles, etc.) require collision detection and physics updates each tick. High projectile counts significantly impact tick time. Spikes correlate with intense combat moments.",
-      "fieldConfig": {
-        "defaults": {
-          "color": { "mode": "thresholds" },
-          "thresholds": { "mode": "absolute", "steps": [{ "color": "orange", "value": null }] }
-        }
-      },
-      "gridPos": { "h": 3, "w": 3, "x": 9, "y": 43 },
+      "description": "Wells currently moving toward target. 0 = stable, >0 = scaling.",
+      "fieldConfig": { "defaults": { "color": { "mode": "thresholds" }, "thresholds": { "mode": "absolute", "steps": [{ "color": "green", "value": null }, { "color": "yellow", "value": 1 }] } } },
+      "gridPos": { "h": 3, "w": 2, "x": 8, "y": 43 },
+      "id": 94,
+      "options": { "colorMode": "value", "graphMode": "area", "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false } },
+      "targets": [{ "expr": "orbit_royale_arena_wells_lerping{job=\"orbit-royale-api\"}", "legendFormat": "L", "refId": "A" }],
+      "title": "Lerping",
+      "type": "stat"
+    },
+    {
+      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "description": "Area per player. Target ~200K. Green = good density.",
+      "fieldConfig": { "defaults": { "color": { "mode": "thresholds" }, "thresholds": { "mode": "absolute", "steps": [{ "color": "red", "value": null }, { "color": "yellow", "value": 100000 }, { "color": "green", "value": 150000 }] }, "unit": "short" } },
+      "gridPos": { "h": 3, "w": 2, "x": 10, "y": 43 },
+      "id": 92,
+      "options": { "colorMode": "value", "graphMode": "area", "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false } },
+      "targets": [{ "expr": "orbit_royale_arena_area_per_player{job=\"orbit-royale-api\"}", "legendFormat": "A", "refId": "A" }],
+      "title": "Area/P",
+      "type": "stat"
+    },
+    {
+      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "description": "Active projectiles.",
+      "fieldConfig": { "defaults": { "color": { "mode": "thresholds" }, "thresholds": { "mode": "absolute", "steps": [{ "color": "orange", "value": null }] } } },
+      "gridPos": { "h": 3, "w": 2, "x": 12, "y": 43 },
       "id": 64,
       "options": { "colorMode": "value", "graphMode": "area", "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false } },
-      "targets": [{ "expr": "orbit_royale_projectiles{job=\"orbit-royale-api\"}", "legendFormat": "Proj", "refId": "A" }],
-      "title": "Projectiles",
+      "targets": [{ "expr": "orbit_royale_projectiles{job=\"orbit-royale-api\"}", "legendFormat": "P", "refId": "A" }],
+      "title": "Proj",
       "type": "stat"
     },
     {
       "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
-      "description": "Number of debris entities in the game world. Debris are collectible items (mass, power-ups) that players can pick up. They require collision detection but have simpler physics than projectiles. Created when players die or spawn naturally.",
-      "fieldConfig": {
-        "defaults": {
-          "color": { "mode": "thresholds" },
-          "thresholds": { "mode": "absolute", "steps": [{ "color": "semi-dark-green", "value": null }] }
-        }
-      },
-      "gridPos": { "h": 3, "w": 3, "x": 12, "y": 43 },
+      "description": "Debris entities (collectibles).",
+      "fieldConfig": { "defaults": { "color": { "mode": "thresholds" }, "thresholds": { "mode": "absolute", "steps": [{ "color": "semi-dark-green", "value": null }] } } },
+      "gridPos": { "h": 3, "w": 2, "x": 14, "y": 43 },
       "id": 65,
       "options": { "colorMode": "value", "graphMode": "area", "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false } },
-      "targets": [{ "expr": "orbit_royale_debris{job=\"orbit-royale-api\"}", "legendFormat": "Debris", "refId": "A" }],
+      "targets": [{ "expr": "orbit_royale_debris{job=\"orbit-royale-api\"}", "legendFormat": "D", "refId": "A" }],
       "title": "Debris",
       "type": "stat"
     },
     {
       "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
-      "description": "Historical view of all entity counts over time. Shows projectiles, debris, and gravity wells together. Useful for correlating entity counts with performance metrics. Spikes in projectiles often align with tick time increases.",
-      "fieldConfig": {
-        "defaults": {
-          "color": { "mode": "palette-classic" },
-          "custom": {
-            "axisBorderShow": false,
-            "drawStyle": "line",
-            "fillOpacity": 20,
-            "lineInterpolation": "smooth",
-            "lineWidth": 2,
-            "showPoints": "never"
-          }
-        }
-      },
-      "gridPos": { "h": 6, "w": 9, "x": 15, "y": 43 },
+      "description": "Arena radius over time. Solid = current, dashed = target. Wells lerping shown scaled.",
+      "fieldConfig": { "defaults": { "color": { "mode": "palette-classic" }, "custom": { "axisBorderShow": false, "drawStyle": "line", "fillOpacity": 15, "lineInterpolation": "smooth", "lineWidth": 2, "showPoints": "never" } }, "overrides": [{ "matcher": { "id": "byName", "options": "Target" }, "properties": [{ "id": "custom.lineStyle", "value": { "dash": [10, 10], "fill": "dash" } }, { "id": "custom.fillOpacity", "value": 0 }] }] },
+      "gridPos": { "h": 6, "w": 8, "x": 16, "y": 43 },
+      "id": 67,
+      "options": { "legend": { "calcs": ["lastNotNull"], "displayMode": "list", "placement": "bottom", "showLegend": true }, "tooltip": { "mode": "multi", "sort": "desc" } },
+      "targets": [
+        { "expr": "orbit_royale_arena_radius{job=\"orbit-royale-api\"}", "legendFormat": "Current", "refId": "A" },
+        { "expr": "orbit_royale_arena_target_radius{job=\"orbit-royale-api\"}", "legendFormat": "Target", "refId": "B" },
+        { "expr": "orbit_royale_arena_wells_lerping{job=\"orbit-royale-api\"} * 100", "legendFormat": "Lerping×100", "refId": "C" }
+      ],
+      "title": "Arena Scaling",
+      "type": "timeseries"
+    },
+    {
+      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "description": "Entity counts over time. Correlate with tick time.",
+      "fieldConfig": { "defaults": { "color": { "mode": "palette-classic" }, "custom": { "axisBorderShow": false, "drawStyle": "line", "fillOpacity": 20, "lineInterpolation": "smooth", "lineWidth": 2, "showPoints": "never" } } },
+      "gridPos": { "h": 3, "w": 8, "x": 0, "y": 46 },
       "id": 66,
-      "options": { "legend": { "calcs": ["mean", "max"], "displayMode": "table", "placement": "bottom", "showLegend": true }, "tooltip": { "mode": "multi", "sort": "desc" } },
+      "options": { "legend": { "calcs": ["mean", "max"], "displayMode": "list", "placement": "bottom", "showLegend": true }, "tooltip": { "mode": "multi", "sort": "desc" } },
       "targets": [
         { "expr": "orbit_royale_projectiles{job=\"orbit-royale-api\"}", "legendFormat": "Projectiles", "refId": "A" },
         { "expr": "orbit_royale_debris{job=\"orbit-royale-api\"}", "legendFormat": "Debris", "refId": "B" },
-        { "expr": "orbit_royale_gravity_wells{job=\"orbit-royale-api\"}", "legendFormat": "Gravity Wells", "refId": "C" }
+        { "expr": "orbit_royale_gravity_wells{job=\"orbit-royale-api\"}", "legendFormat": "Wells", "refId": "C" }
       ],
       "title": "Game Entities",
       "type": "timeseries"
     },
     {
       "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
-      "description": "Arena radius changing over time. Watch this during a match to see the battle royale shrinking effect. Correlate with tick time to understand how arena size affects performance (smaller arena = players clustered = more collisions).",
-      "fieldConfig": {
-        "defaults": {
-          "color": { "mode": "palette-classic" },
-          "custom": {
-            "axisBorderShow": false,
-            "drawStyle": "line",
-            "fillOpacity": 20,
-            "lineInterpolation": "smooth",
-            "lineWidth": 2,
-            "showPoints": "never"
-          }
-        }
-      },
-      "gridPos": { "h": 3, "w": 15, "x": 0, "y": 46 },
-      "id": 67,
-      "options": { "legend": { "calcs": ["mean", "max"], "displayMode": "table", "placement": "right", "showLegend": true }, "tooltip": { "mode": "multi", "sort": "desc" } },
-      "targets": [{ "expr": "orbit_royale_arena_radius{job=\"orbit-royale-api\"}", "legendFormat": "Arena Radius", "refId": "A" }],
-      "title": "Arena Radius Over Time",
+      "description": "Player density over time. Stable = sqrt scaling working. Target ~200K.",
+      "fieldConfig": { "defaults": { "color": { "mode": "palette-classic" }, "custom": { "axisBorderShow": false, "drawStyle": "line", "fillOpacity": 20, "lineInterpolation": "smooth", "lineWidth": 2, "showPoints": "never", "thresholdsStyle": { "mode": "dashed" } }, "thresholds": { "mode": "absolute", "steps": [{ "color": "green", "value": null }, { "color": "yellow", "value": 250000 }] }, "unit": "short" } },
+      "gridPos": { "h": 3, "w": 8, "x": 8, "y": 46 },
+      "id": 93,
+      "options": { "legend": { "calcs": ["mean", "lastNotNull"], "displayMode": "list", "placement": "bottom", "showLegend": true }, "tooltip": { "mode": "multi", "sort": "desc" } },
+      "targets": [{ "expr": "orbit_royale_arena_area_per_player{job=\"orbit-royale-api\"}", "legendFormat": "Area/Player", "refId": "A" }],
+      "title": "Player Density",
       "type": "timeseries"
     },
 
     {
       "collapsed": false,
-      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 49 },
+      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 52 },
       "id": 70,
       "panels": [],
       "title": "Container Resources",
@@ -1200,7 +1198,7 @@
           "unit": "percent"
         }
       },
-      "gridPos": { "h": 7, "w": 12, "x": 0, "y": 50 },
+      "gridPos": { "h": 7, "w": 12, "x": 0, "y": 53 },
       "id": 71,
       "options": {
         "legend": { "calcs": ["mean", "max"], "displayMode": "table", "placement": "bottom", "showLegend": true },
@@ -1229,7 +1227,7 @@
           "unit": "bytes"
         }
       },
-      "gridPos": { "h": 7, "w": 12, "x": 12, "y": 50 },
+      "gridPos": { "h": 7, "w": 12, "x": 12, "y": 53 },
       "id": 72,
       "options": {
         "legend": { "calcs": ["mean", "max"], "displayMode": "table", "placement": "bottom", "showLegend": true },
