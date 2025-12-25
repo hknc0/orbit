@@ -530,58 +530,150 @@ export class RenderSystem {
 
     if (isCentral) {
       // === SUPERMASSIVE BLACK HOLE ===
-      // Deep purple/violet colors with intense glow
+      // Interstellar Gargantua style - smooth flowing rings
 
-      // Accretion disk effect (spinning ring)
-      const diskRadius = coreRadius * 2.5;
-      const time = Date.now() / 1000;
-      this.ctx.save();
-      this.ctx.translate(x, y);
+      const ctx = this.ctx;
+      const time = performance.now() / 1000;
 
-      // Outer accretion glow
-      const accretionGlow = this.ctx.createRadialGradient(0, 0, coreRadius, 0, 0, diskRadius);
-      accretionGlow.addColorStop(0, 'rgba(180, 100, 255, 0.4)');
-      accretionGlow.addColorStop(0.3, 'rgba(120, 50, 200, 0.3)');
-      accretionGlow.addColorStop(0.6, 'rgba(80, 20, 150, 0.15)');
-      accretionGlow.addColorStop(1, 'rgba(40, 0, 100, 0)');
-      this.ctx.fillStyle = accretionGlow;
-      this.ctx.beginPath();
-      this.ctx.arc(0, 0, diskRadius, 0, Math.PI * 2);
-      this.ctx.fill();
+      // Radii
+      const eh = coreRadius;
+      const innerRing = coreRadius * 1.25;
+      const diskOuter = coreRadius * 4;
 
-      // Spinning accretion streaks
-      for (let i = 0; i < 6; i++) {
-        const angle = (i / 6) * Math.PI * 2 + time * 0.3;
-        const streakGrad = this.ctx.createRadialGradient(0, 0, coreRadius * 1.2, 0, 0, diskRadius * 0.9);
-        streakGrad.addColorStop(0, 'rgba(200, 150, 255, 0.2)');
-        streakGrad.addColorStop(1, 'rgba(100, 50, 200, 0)');
-        this.ctx.fillStyle = streakGrad;
-        this.ctx.beginPath();
-        this.ctx.moveTo(0, 0);
-        this.ctx.arc(0, 0, diskRadius * 0.9, angle - 0.15, angle + 0.15);
-        this.ctx.closePath();
-        this.ctx.fill();
+      // 1. Large soft ambient glow
+      const ambientGlow = ctx.createRadialGradient(x, y, eh, x, y, diskOuter * 1.8);
+      ambientGlow.addColorStop(0, 'rgba(255, 180, 120, 0.2)');
+      ambientGlow.addColorStop(0.25, 'rgba(255, 140, 80, 0.1)');
+      ambientGlow.addColorStop(0.5, 'rgba(200, 100, 50, 0.04)');
+      ambientGlow.addColorStop(1, 'rgba(100, 50, 25, 0)');
+      ctx.fillStyle = ambientGlow;
+      ctx.beginPath();
+      ctx.arc(x, y, diskOuter * 1.8, 0, Math.PI * 2);
+      ctx.fill();
+
+      // 2. Vertical lensing halo - smooth gradient base + rings
+      ctx.save();
+      ctx.translate(x, y);
+      ctx.scale(0.5, 1.6);
+
+      // Smooth gradient fill first
+      const haloGrad = ctx.createRadialGradient(0, 0, eh * 0.95, 0, 0, innerRing * 1.3);
+      haloGrad.addColorStop(0, 'rgba(255, 250, 240, 0.85)');
+      haloGrad.addColorStop(0.3, 'rgba(255, 220, 170, 0.6)');
+      haloGrad.addColorStop(0.6, 'rgba(255, 180, 120, 0.3)');
+      haloGrad.addColorStop(1, 'rgba(200, 120, 60, 0)');
+      ctx.fillStyle = haloGrad;
+      ctx.beginPath();
+      ctx.arc(0, 0, innerRing * 1.3, 0, Math.PI * 2);
+      ctx.arc(0, 0, eh * 0.95, 0, Math.PI * 2, true);
+      ctx.fill();
+
+      // Overlay thin rings for texture
+      for (let i = 0; i < 15; i++) {
+        const t = i / 14;
+        const r = eh * 1.0 + (innerRing * 1.2 - eh * 1.0) * t;
+        const alpha = (1 - t) * 0.5;
+        ctx.strokeStyle = `rgba(255, ${250 - t * 40}, ${220 - t * 80}, ${alpha})`;
+        ctx.lineWidth = 1.5 - t * 0.8;
+        ctx.beginPath();
+        ctx.arc(0, 0, r, 0, Math.PI * 2);
+        ctx.stroke();
       }
 
-      this.ctx.restore();
+      ctx.restore();
 
-      // Event horizon (the black core)
-      const eventHorizon = this.ctx.createRadialGradient(x, y, 0, x, y, coreRadius);
-      eventHorizon.addColorStop(0, 'rgba(0, 0, 0, 1)');
-      eventHorizon.addColorStop(0.7, 'rgba(20, 0, 40, 0.95)');
-      eventHorizon.addColorStop(0.9, 'rgba(80, 30, 120, 0.7)');
-      eventHorizon.addColorStop(1, 'rgba(150, 80, 200, 0.3)');
-      this.ctx.fillStyle = eventHorizon;
-      this.ctx.beginPath();
-      this.ctx.arc(x, y, coreRadius, 0, Math.PI * 2);
-      this.ctx.fill();
+      // 3. Horizontal accretion disk - gradient base + rings
+      ctx.save();
+      ctx.translate(x, y);
+      ctx.scale(1, 0.12);
 
-      // Bright ring at event horizon edge
-      this.ctx.strokeStyle = 'rgba(200, 150, 255, 0.6)';
-      this.ctx.lineWidth = 3;
-      this.ctx.beginPath();
-      this.ctx.arc(x, y, coreRadius, 0, Math.PI * 2);
-      this.ctx.stroke();
+      // Smooth gradient fill
+      const diskGrad = ctx.createRadialGradient(0, 0, innerRing * 0.9, 0, 0, diskOuter);
+      diskGrad.addColorStop(0, 'rgba(255, 250, 235, 0.9)');
+      diskGrad.addColorStop(0.15, 'rgba(255, 220, 170, 0.75)');
+      diskGrad.addColorStop(0.35, 'rgba(255, 170, 100, 0.5)');
+      diskGrad.addColorStop(0.55, 'rgba(230, 120, 60, 0.3)');
+      diskGrad.addColorStop(0.75, 'rgba(180, 80, 40, 0.15)');
+      diskGrad.addColorStop(1, 'rgba(100, 40, 20, 0)');
+      ctx.fillStyle = diskGrad;
+      ctx.beginPath();
+      ctx.arc(0, 0, diskOuter, 0, Math.PI * 2);
+      ctx.arc(0, 0, innerRing, 0, Math.PI * 2, true);
+      ctx.fill();
+
+      // Overlay rings for streaked texture
+      for (let i = 0; i < 20; i++) {
+        const t = i / 19;
+        const r = innerRing * 1.02 + (diskOuter * 0.92 - innerRing) * t;
+        const alpha = (1 - t * 0.9) * 0.4;
+        const g = Math.floor(250 - t * 120);
+        const b = Math.floor(220 - t * 150);
+        ctx.strokeStyle = `rgba(255, ${g}, ${b}, ${alpha})`;
+        ctx.lineWidth = 2 - t * 1.2;
+        ctx.beginPath();
+        ctx.arc(0, 0, r, 0, Math.PI * 2);
+        ctx.stroke();
+      }
+
+      // Bright inner edge
+      ctx.strokeStyle = 'rgba(255, 252, 245, 0.9)';
+      ctx.lineWidth = 3;
+      ctx.beginPath();
+      ctx.arc(0, 0, innerRing, 0, Math.PI * 2);
+      ctx.stroke();
+
+      ctx.restore();
+
+      // 4. Spiraling particles
+      ctx.save();
+      ctx.translate(x, y);
+      ctx.lineCap = 'round';
+      ctx.lineWidth = 2;
+      ctx.beginPath();
+      for (let i = 0; i < 6; i++) {
+        const phase = (time * 0.5 + i * 0.5) % 2.5;
+        const progress = phase / 2.5;
+        const spiralAngle = (i / 6) * Math.PI * 2 + progress * Math.PI * 3;
+        const r = innerRing * 1.2 + (diskOuter * 0.6 - innerRing) * (1 - progress * progress);
+        const px = Math.cos(spiralAngle) * r;
+        const py = Math.sin(spiralAngle) * r * 0.12;
+
+        const stretch = 8 * progress;
+        const dx = Math.cos(spiralAngle + Math.PI * 0.5) * stretch;
+        const dy = Math.sin(spiralAngle + Math.PI * 0.5) * stretch * 0.12;
+        ctx.moveTo(px - dx, py - dy);
+        ctx.lineTo(px, py);
+      }
+      ctx.globalAlpha = 0.35;
+      ctx.strokeStyle = 'rgba(255, 220, 160, 1)';
+      ctx.stroke();
+      ctx.globalAlpha = 1;
+      ctx.restore();
+
+      // 5. Event horizon (pure black)
+      ctx.fillStyle = '#000000';
+      ctx.beginPath();
+      ctx.arc(x, y, eh, 0, Math.PI * 2);
+      ctx.fill();
+
+      // 6. Photon ring - bright inner edge
+      ctx.strokeStyle = 'rgba(255, 235, 200, 0.35)';
+      ctx.lineWidth = 3;
+      ctx.beginPath();
+      ctx.arc(x, y, eh * 1.1, 0, Math.PI * 2);
+      ctx.stroke();
+
+      ctx.strokeStyle = 'rgba(255, 248, 230, 0.65)';
+      ctx.lineWidth = 2;
+      ctx.beginPath();
+      ctx.arc(x, y, eh * 1.05, 0, Math.PI * 2);
+      ctx.stroke();
+
+      ctx.strokeStyle = 'rgba(255, 255, 250, 0.9)';
+      ctx.lineWidth = 1.5;
+      ctx.beginPath();
+      ctx.arc(x, y, eh * 1.015, 0, Math.PI * 2);
+      ctx.stroke();
     } else {
       // === NORMAL GRAVITY WELL (star/sun) ===
       // Different star types based on position hash for variety
@@ -1876,11 +1968,23 @@ export class RenderSystem {
       const dist = Math.sqrt(Math.pow(wellX - centerX, 2) + Math.pow(wellY - centerY, 2));
       if (dist < minimapSize / 2 - 2) {
         if (isCentral) {
-          // Purple dot for supermassive black hole
-          this.ctx.fillStyle = '#b366ff';
+          // Black hole with warm orange accretion glow (matching main render)
+          // Outer glow
+          this.ctx.fillStyle = 'rgba(255, 160, 80, 0.4)';
           this.ctx.beginPath();
-          this.ctx.arc(wellX, wellY, 3, 0, Math.PI * 2);
+          this.ctx.arc(wellX, wellY, 5, 0, Math.PI * 2);
           this.ctx.fill();
+          // Black core
+          this.ctx.fillStyle = '#000000';
+          this.ctx.beginPath();
+          this.ctx.arc(wellX, wellY, 2.5, 0, Math.PI * 2);
+          this.ctx.fill();
+          // Bright ring
+          this.ctx.strokeStyle = 'rgba(255, 200, 140, 0.8)';
+          this.ctx.lineWidth = 1;
+          this.ctx.beginPath();
+          this.ctx.arc(wellX, wellY, 2.5, 0, Math.PI * 2);
+          this.ctx.stroke();
         } else {
           // Orange dot for normal stars, size based on core radius
           const dotSize = Math.max(1.5, well.coreRadius / 35);
