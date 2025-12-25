@@ -447,9 +447,14 @@ export class StateSync {
     const now = performance.now();
     const players = new Map<PlayerId, InterpolatedPlayer>();
 
+    // Pre-build Maps for O(1) lookups (avoids O(n²) find() calls)
+    const beforePlayerMap = new Map(before.players.map(p => [p.id, p]));
+    const beforeProjMap = new Map(before.projectiles.map(p => [p.id, p]));
+    const beforeDebrisMap = new Map(before.debris.map(d => [d.id, d]));
+
     // Track player birth times before building player map
     for (const afterPlayer of after.players) {
-      const beforePlayer = before.players.find((p) => p.id === afterPlayer.id);
+      const beforePlayer = beforePlayerMap.get(afterPlayer.id);
       const justRespawned = beforePlayer && !beforePlayer.alive && afterPlayer.alive;
 
       if (!this.playerBornTimes.has(afterPlayer.id)) {
@@ -467,7 +472,7 @@ export class StateSync {
 
     // Interpolate players
     for (const afterPlayer of after.players) {
-      const beforePlayer = before.players.find((p) => p.id === afterPlayer.id);
+      const beforePlayer = beforePlayerMap.get(afterPlayer.id);
       const bornTime = this.playerBornTimes.get(afterPlayer.id) ?? 0;
 
       if (beforePlayer) {
@@ -516,7 +521,7 @@ export class StateSync {
     // Interpolate projectiles
     const projectiles = new Map<number, InterpolatedProjectile>();
     for (const afterProj of after.projectiles) {
-      const beforeProj = before.projectiles.find((p) => p.id === afterProj.id);
+      const beforeProj = beforeProjMap.get(afterProj.id);
 
       if (beforeProj) {
         projectiles.set(afterProj.id, {
@@ -538,7 +543,7 @@ export class StateSync {
     // Interpolate debris (no velocity, just position)
     const debris = new Map<number, InterpolatedDebris>();
     for (const afterDebris of after.debris) {
-      const beforeDebris = before.debris.find((d) => d.id === afterDebris.id);
+      const beforeDebris = beforeDebrisMap.get(afterDebris.id);
 
       if (beforeDebris) {
         debris.set(afterDebris.id, {
