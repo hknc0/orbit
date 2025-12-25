@@ -432,7 +432,7 @@ export class RenderSystem {
   }
 
   // Duration of birth animation in ms
-  private readonly WELL_BIRTH_DURATION = 1500;
+  private readonly WELL_BIRTH_DURATION = 2500;
 
   private renderGravityWell(x: number, y: number, coreRadius: number, mass: number, wellId: number, bornTime: number): void {
     // Central supermassive black hole is always id 0 and near origin
