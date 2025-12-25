@@ -587,12 +587,12 @@ export class RenderSystem {
       ctx.restore();
 
       // 3. Horizontal accretion disk (the main flat disk)
-      const diskInner = eh * 1.2;
-      const diskOuterRadius = eh * 6;
+      const diskInner = eh * 1.01; // Very tight to event horizon
+      const diskOuterRadius = eh * 4.5;
 
       ctx.save();
       ctx.translate(x, y);
-      ctx.scale(1, 0.12); // Very flat horizontal disk
+      ctx.scale(1, 0.18); // Thicker disk
 
       const diskGrad = ctx.createRadialGradient(0, 0, diskInner, 0, 0, diskOuterRadius);
       diskGrad.addColorStop(0, 'rgba(255, 255, 240, 0.95)');
@@ -633,11 +633,11 @@ export class RenderSystem {
         const spiralAngle = (i / 8) * Math.PI * 2 + progress * Math.PI * 4;
         const r = diskInner * 1.5 + (diskWidth - diskInner) * (1 - progress * progress);
         const px = Math.cos(spiralAngle) * r;
-        const py = Math.sin(spiralAngle) * r * 0.12;
+        const py = Math.sin(spiralAngle) * r * 0.18;
 
         const stretch = 10 * progress;
         const dx = Math.cos(spiralAngle + Math.PI * 0.5) * stretch;
-        const dy = Math.sin(spiralAngle + Math.PI * 0.5) * stretch * 0.12;
+        const dy = Math.sin(spiralAngle + Math.PI * 0.5) * stretch * 0.18;
         ctx.moveTo(px - dx, py - dy);
         ctx.lineTo(px, py);
       }
