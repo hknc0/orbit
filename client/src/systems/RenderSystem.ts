@@ -543,10 +543,10 @@ export class RenderSystem {
       // 1. Outer ambient glow - soft warm halo
       const glowRadius = eh * 8;
       const ambientGlow = ctx.createRadialGradient(x, y, eh, x, y, glowRadius);
-      ambientGlow.addColorStop(0, 'rgba(255, 200, 150, 0.15)');
-      ambientGlow.addColorStop(0.3, 'rgba(255, 150, 100, 0.08)');
-      ambientGlow.addColorStop(0.6, 'rgba(200, 100, 60, 0.03)');
-      ambientGlow.addColorStop(1, 'rgba(100, 50, 30, 0)');
+      ambientGlow.addColorStop(0, 'rgba(255, 240, 200, 0.18)');
+      ambientGlow.addColorStop(0.3, 'rgba(255, 190, 130, 0.1)');
+      ambientGlow.addColorStop(0.6, 'rgba(220, 130, 70, 0.04)');
+      ambientGlow.addColorStop(1, 'rgba(150, 80, 40, 0)');
       ctx.fillStyle = ambientGlow;
       ctx.beginPath();
       ctx.arc(x, y, glowRadius, 0, Math.PI * 2);
@@ -563,11 +563,11 @@ export class RenderSystem {
       ctx.scale(0.8, 1.0); // Slightly squashed horizontally
 
       const lensGrad = ctx.createRadialGradient(0, 0, lensedRingInner, 0, 0, lensedRingOuter);
-      lensGrad.addColorStop(0, 'rgba(255, 220, 160, 0.95)');
-      lensGrad.addColorStop(0.25, 'rgba(255, 180, 100, 0.8)');
-      lensGrad.addColorStop(0.5, 'rgba(255, 140, 60, 0.5)');
-      lensGrad.addColorStop(0.75, 'rgba(220, 100, 40, 0.2)');
-      lensGrad.addColorStop(1, 'rgba(180, 70, 30, 0)');
+      lensGrad.addColorStop(0, 'rgba(255, 255, 245, 0.98)');
+      lensGrad.addColorStop(0.2, 'rgba(255, 245, 220, 0.85)');
+      lensGrad.addColorStop(0.4, 'rgba(255, 210, 150, 0.6)');
+      lensGrad.addColorStop(0.65, 'rgba(255, 160, 80, 0.3)');
+      lensGrad.addColorStop(1, 'rgba(200, 100, 40, 0)');
       ctx.fillStyle = lensGrad;
       ctx.beginPath();
       ctx.arc(0, 0, lensedRingOuter, 0, Math.PI * 2);
@@ -576,9 +576,9 @@ export class RenderSystem {
 
       // Soft inner glow only (no hard stroke)
       ctx.globalCompositeOperation = 'lighter';
-      ctx.shadowBlur = 25;
-      ctx.shadowColor = 'rgba(255, 200, 140, 0.4)';
-      ctx.fillStyle = 'rgba(255, 220, 160, 0.15)';
+      ctx.shadowBlur = 30;
+      ctx.shadowColor = 'rgba(255, 250, 230, 0.5)';
+      ctx.fillStyle = 'rgba(255, 255, 245, 0.2)';
       ctx.beginPath();
       ctx.arc(0, 0, lensedRingInner * 1.3, 0, Math.PI * 2);
       ctx.fill();
@@ -595,12 +595,12 @@ export class RenderSystem {
       ctx.scale(1, 0.12); // Very flat horizontal disk
 
       const diskGrad = ctx.createRadialGradient(0, 0, diskInner, 0, 0, diskOuterRadius);
-      diskGrad.addColorStop(0, 'rgba(255, 200, 120, 0.9)');
-      diskGrad.addColorStop(0.15, 'rgba(255, 170, 80, 0.75)');
-      diskGrad.addColorStop(0.35, 'rgba(255, 130, 50, 0.5)');
-      diskGrad.addColorStop(0.6, 'rgba(200, 90, 30, 0.25)');
-      diskGrad.addColorStop(0.85, 'rgba(150, 60, 20, 0.1)');
-      diskGrad.addColorStop(1, 'rgba(100, 40, 10, 0)');
+      diskGrad.addColorStop(0, 'rgba(255, 255, 240, 0.95)');
+      diskGrad.addColorStop(0.12, 'rgba(255, 240, 200, 0.8)');
+      diskGrad.addColorStop(0.3, 'rgba(255, 200, 130, 0.55)');
+      diskGrad.addColorStop(0.5, 'rgba(255, 150, 70, 0.35)');
+      diskGrad.addColorStop(0.75, 'rgba(200, 100, 40, 0.15)');
+      diskGrad.addColorStop(1, 'rgba(150, 70, 30, 0)');
       ctx.fillStyle = diskGrad;
       ctx.beginPath();
       ctx.arc(0, 0, diskOuterRadius, 0, Math.PI * 2);
@@ -610,9 +610,9 @@ export class RenderSystem {
       // Doppler brightening on approaching side
       ctx.globalCompositeOperation = 'lighter';
       const dopplerGrad = ctx.createLinearGradient(-diskOuterRadius, 0, diskOuterRadius, 0);
-      dopplerGrad.addColorStop(0, 'rgba(255, 120, 60, 0.1)');
-      dopplerGrad.addColorStop(0.5, 'rgba(255, 180, 100, 0.15)');
-      dopplerGrad.addColorStop(1, 'rgba(255, 220, 140, 0.25)');
+      dopplerGrad.addColorStop(0, 'rgba(255, 160, 100, 0.08)');
+      dopplerGrad.addColorStop(0.5, 'rgba(255, 230, 180, 0.15)');
+      dopplerGrad.addColorStop(1, 'rgba(255, 255, 230, 0.25)');
       ctx.fillStyle = dopplerGrad;
       ctx.beginPath();
       ctx.arc(0, 0, diskOuterRadius * 0.95, 0, Math.PI * 2);
@@ -673,10 +673,10 @@ export class RenderSystem {
       // Diffuse glow ring using gradient instead of stroke
       const photonGlow = ctx.createRadialGradient(0, 0, eh * 0.95, 0, 0, eh * 1.4);
       photonGlow.addColorStop(0, 'rgba(0, 0, 0, 0)');
-      photonGlow.addColorStop(0.4, 'rgba(255, 200, 140, 0.5)');
-      photonGlow.addColorStop(0.6, 'rgba(255, 220, 160, 0.7)');
-      photonGlow.addColorStop(0.75, 'rgba(255, 200, 140, 0.4)');
-      photonGlow.addColorStop(1, 'rgba(255, 180, 100, 0)');
+      photonGlow.addColorStop(0.4, 'rgba(255, 250, 230, 0.6)');
+      photonGlow.addColorStop(0.6, 'rgba(255, 255, 245, 0.8)');
+      photonGlow.addColorStop(0.75, 'rgba(255, 240, 200, 0.5)');
+      photonGlow.addColorStop(1, 'rgba(255, 200, 140, 0)');
 
       ctx.globalCompositeOperation = 'lighter';
       ctx.fillStyle = photonGlow;
