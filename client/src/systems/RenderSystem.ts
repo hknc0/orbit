@@ -554,13 +554,13 @@ export class RenderSystem {
 
       // 2. Gravitationally lensed ring (wraps over top and bottom)
       // This creates the iconic "eye" shape - the disk bent by gravity
-      const lensedRingOuter = eh * 2.8;
-      const lensedRingInner = eh * 1.15;
+      const lensedRingOuter = eh * 3.2;
+      const lensedRingInner = eh * 1.12;
 
       // Draw the lensed ring as a vertical ellipse (taller than wide)
       ctx.save();
       ctx.translate(x, y);
-      ctx.scale(0.7, 1.0); // Squash horizontally to make it taller
+      ctx.scale(0.8, 1.0); // Slightly squashed horizontally
 
       const lensGrad = ctx.createRadialGradient(0, 0, lensedRingInner, 0, 0, lensedRingOuter);
       lensGrad.addColorStop(0, 'rgba(255, 220, 160, 0.95)');
@@ -574,15 +574,14 @@ export class RenderSystem {
       ctx.arc(0, 0, lensedRingInner, 0, Math.PI * 2, true);
       ctx.fill();
 
-      // Add bloom to lensed ring
+      // Soft inner glow only (no hard stroke)
       ctx.globalCompositeOperation = 'lighter';
-      ctx.strokeStyle = 'rgba(255, 200, 120, 0.4)';
-      ctx.lineWidth = 4;
-      ctx.shadowBlur = 15;
-      ctx.shadowColor = 'rgba(255, 180, 100, 0.5)';
+      ctx.shadowBlur = 25;
+      ctx.shadowColor = 'rgba(255, 200, 140, 0.4)';
+      ctx.fillStyle = 'rgba(255, 220, 160, 0.15)';
       ctx.beginPath();
-      ctx.arc(0, 0, (lensedRingInner + lensedRingOuter) / 2, 0, Math.PI * 2);
-      ctx.stroke();
+      ctx.arc(0, 0, lensedRingInner * 1.3, 0, Math.PI * 2);
+      ctx.fill();
       ctx.shadowBlur = 0;
       ctx.globalCompositeOperation = 'source-over';
       ctx.restore();
@@ -667,29 +666,23 @@ export class RenderSystem {
       ctx.arc(x, y, eh, 0, Math.PI * 2);
       ctx.fill();
 
-      // 6. Bright photon ring - the intense glow right at the edge
+      // 6. Soft photon ring glow - diffuse edge glow instead of hard line
       ctx.save();
       ctx.translate(x, y);
 
-      // Inner bright ring (photon sphere) - warm golden glow
-      ctx.strokeStyle = 'rgba(255, 220, 160, 0.9)';
-      ctx.lineWidth = 3;
-      ctx.shadowBlur = 8;
-      ctx.shadowColor = 'rgba(255, 180, 100, 0.8)';
-      ctx.beginPath();
-      ctx.arc(0, 0, eh * 1.08, 0, Math.PI * 2);
-      ctx.stroke();
+      // Diffuse glow ring using gradient instead of stroke
+      const photonGlow = ctx.createRadialGradient(0, 0, eh * 0.95, 0, 0, eh * 1.4);
+      photonGlow.addColorStop(0, 'rgba(0, 0, 0, 0)');
+      photonGlow.addColorStop(0.4, 'rgba(255, 200, 140, 0.5)');
+      photonGlow.addColorStop(0.6, 'rgba(255, 220, 160, 0.7)');
+      photonGlow.addColorStop(0.75, 'rgba(255, 200, 140, 0.4)');
+      photonGlow.addColorStop(1, 'rgba(255, 180, 100, 0)');
 
-      // Extra glow layer
       ctx.globalCompositeOperation = 'lighter';
-      ctx.strokeStyle = 'rgba(255, 200, 120, 0.5)';
-      ctx.lineWidth = 1.5;
-      ctx.shadowBlur = 12;
-      ctx.shadowColor = 'rgba(255, 180, 80, 0.6)';
+      ctx.fillStyle = photonGlow;
       ctx.beginPath();
-      ctx.arc(0, 0, eh * 1.03, 0, Math.PI * 2);
-      ctx.stroke();
-      ctx.shadowBlur = 0;
+      ctx.arc(0, 0, eh * 1.4, 0, Math.PI * 2);
+      ctx.fill();
       ctx.globalCompositeOperation = 'source-over';
       ctx.restore();
     } else {
