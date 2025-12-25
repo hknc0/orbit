@@ -33,18 +33,18 @@ interface TrailPoint {
 // Base radius = 20 (mass 100), so multipliers are relative to that
 const MOTION_FX = {
   // Trail configuration
-  TRAIL_LIFETIME_BASE: 350,        // ms - base lifetime at radius 20
-  TRAIL_LIFETIME_SCALE: 0.3,       // Larger players have slightly longer trails
-  TRAIL_MAX_POINTS: 24,            // Max trail points (fixed for memory)
-  TRAIL_MIN_DIST_RATIO: 0.4,       // Min distance = radius * this ratio
-  TRAIL_START_RADIUS_RATIO: 0.15,  // Trail starts at this fraction of player radius
-  TRAIL_END_RADIUS_RATIO: 0.6,     // Trail ends at this fraction of player radius
-  TRAIL_MAX_ALPHA: 0.5,            // Maximum trail opacity
+  TRAIL_LIFETIME_BASE: 550,        // ms - base lifetime at radius 20
+  TRAIL_LIFETIME_SCALE: 0.35,      // Larger players have slightly longer trails
+  TRAIL_MAX_POINTS: 32,            // Max trail points (fixed for memory)
+  TRAIL_MIN_DIST_RATIO: 0.35,      // Min distance = radius * this ratio (lower = denser trail)
+  TRAIL_START_RADIUS_RATIO: 0.18,  // Trail starts at this fraction of player radius
+  TRAIL_END_RADIUS_RATIO: 0.7,     // Trail ends at this fraction of player radius
+  TRAIL_MAX_ALPHA: 0.6,            // Maximum trail opacity
 
   // Boost flame configuration
-  FLAME_LENGTH_BASE: 1.8,          // Flame length = radius * this (at rest)
-  FLAME_LENGTH_SPEED_SCALE: 0.003, // Additional length per speed unit
-  FLAME_WIDTH_RATIO: 0.55,         // Flame width = radius * this
+  FLAME_LENGTH_BASE: 1.6,          // Flame length = radius * this (at rest)
+  FLAME_LENGTH_SPEED_SCALE: 0.002, // Additional length per speed unit (reduced for better size scaling)
+  FLAME_WIDTH_RATIO: 0.5,          // Flame width = radius * this
   FLAME_MIN_SPEED: 15,             // Minimum speed to show flame
   FLAME_SPARK_THRESHOLD: 100,      // Speed threshold for sparks
   FLAME_SPARK_COUNT_SCALE: 50,     // Speed per additional spark
@@ -275,10 +275,11 @@ export class RenderSystem {
     this.renderGravityWaves(world);
     this.renderDeathEffects(world);
     this.renderCollisionEffects(world);
-    this.renderPlayerTrails(world);
+    this.renderBoostFlames(world, state.input?.isBoosting ?? false); // Flames first (back)
+    this.renderPlayerTrails(world);                                    // Trails visible over flames
     this.renderDebris(world);
     this.renderProjectiles(world);
-    this.renderPlayers(world, state.input?.isBoosting ?? false);
+    this.renderPlayerBodies(world);                                    // Bodies on top
 
     // Render aim indicator
     if (state.input && state.phase === 'playing') {
@@ -669,7 +670,8 @@ export class RenderSystem {
     }
   }
 
-  private renderPlayers(world: World, localPlayerBoosting: boolean): void {
+  // Render boost flames separately (rendered first, behind trails)
+  private renderBoostFlames(world: World, localPlayerBoosting: boolean): void {
     const players = world.getPlayers();
 
     // Clean up stale speed tracking (players who left) - runs every ~60 frames
@@ -683,30 +685,39 @@ export class RenderSystem {
       if (!player.alive) continue;
 
       const radius = world.massToRadius(player.mass);
-      const color = world.getPlayerColor(player.colorIndex);
       const isLocal = player.id === world.localPlayerId;
 
-      // Render boost flame based on velocity/acceleration
+      // Determine if flame should show
       const speed = player.velocity.length();
       let showFlame = false;
 
       if (isLocal) {
-        // Local player: show when boosting input is active
         showFlame = localPlayerBoosting;
       } else {
-        // Other players: detect acceleration (speed increasing) to infer boosting
         const prevSpeed = this.previousSpeeds.get(player.id) ?? 0;
-        const isAccelerating = speed > prevSpeed + 2; // Speed increasing by at least 2
-        const hasHighSpeed = speed > 80; // Also show if very fast and recently accelerated
+        const isAccelerating = speed > prevSpeed + 2;
+        const hasHighSpeed = speed > 80;
         showFlame = isAccelerating || (hasHighSpeed && speed > prevSpeed);
       }
 
-      // Track speed for next frame
       this.previousSpeeds.set(player.id, speed);
 
       if (showFlame) {
         this.renderBoostFlame(player.position, player.velocity, radius);
       }
+    }
+  }
+
+  // Render player bodies (rendered last, on top of trails and flames)
+  private renderPlayerBodies(world: World): void {
+    const players = world.getPlayers();
+
+    for (const player of players.values()) {
+      if (!player.alive) continue;
+
+      const radius = world.massToRadius(player.mass);
+      const color = world.getPlayerColor(player.colorIndex);
+      const isLocal = player.id === world.localPlayerId;
 
       // Kill effect - golden pulsing glow when player gets a kill
       const killProgress = world.getKillEffectProgress(player.id);
