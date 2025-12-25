@@ -76,15 +76,16 @@ const ORBITAL_MIN_RADIUS: f32 = 10.0;
 // Gravity Wave Constants
 // ============================================================================
 
-/// Mass value used to normalize well strength for wave explosions
-/// Wells with this mass produce strength 1.0
-const WAVE_STRENGTH_NORMALIZATION_MASS: f32 = 10000.0;
+/// Base surface gravity for wave strength normalization
+/// Formula: g = M / R² where M=10000, R=20 → g = 25
+/// This is the reference value for 1.0 strength
+const BASE_SURFACE_GRAVITY: f32 = 25.0;
 
-/// Minimum strength for gravity wave explosions
-const WAVE_STRENGTH_MIN: f32 = 0.3;
+/// Minimum strength for gravity wave explosions (small/less dense wells)
+const WAVE_STRENGTH_MIN: f32 = 0.4;
 
-/// Maximum strength for gravity wave explosions
-const WAVE_STRENGTH_MAX: f32 = 1.0;
+/// Maximum strength for gravity wave explosions (large/dense wells)
+const WAVE_STRENGTH_MAX: f32 = 1.8;
 
 /// Minimum distance from wave center to apply impulse (prevents zero direction)
 const WAVE_MIN_APPLY_DISTANCE: f32 = 1.0;
@@ -597,8 +598,12 @@ pub fn update_explosions(
 
         // Check for explosion
         if well.explosion_timer <= 0.0 {
-            // Calculate strength based on well mass (normalized)
-            let strength = (well.mass / WAVE_STRENGTH_NORMALIZATION_MASS).clamp(WAVE_STRENGTH_MIN, WAVE_STRENGTH_MAX);
+            // Calculate strength using surface gravity (most realistic)
+            // Formula: g = M / R² (surface gravity proportional to density)
+            // Dense, compact wells produce stronger waves than diffuse ones
+            let surface_gravity = well.mass / (well.core_radius * well.core_radius);
+            let normalized = surface_gravity / BASE_SURFACE_GRAVITY;
+            let strength = normalized.sqrt().clamp(WAVE_STRENGTH_MIN, WAVE_STRENGTH_MAX);
 
             events.push(GravityWaveEvent::WellExploded {
                 well_id: well.id,
@@ -1148,13 +1153,13 @@ mod tests {
         state1.add_player(player1);
         state2.add_player(player2);
 
-        // Add weak wave to state1
-        let mut weak_wave = crate::game::state::GravityWave::new(Vec2::ZERO, 0.3);
+        // Add weak wave to state1 (min strength = 0.4)
+        let mut weak_wave = crate::game::state::GravityWave::new(Vec2::ZERO, WAVE_STRENGTH_MIN);
         weak_wave.radius = 50.0 - config.wave_front_thickness * 0.3;
         state1.gravity_waves.push(weak_wave);
 
-        // Add strong wave to state2
-        let mut strong_wave = crate::game::state::GravityWave::new(Vec2::ZERO, 1.0);
+        // Add strong wave to state2 (max strength = 1.8)
+        let mut strong_wave = crate::game::state::GravityWave::new(Vec2::ZERO, WAVE_STRENGTH_MAX);
         strong_wave.radius = 50.0 - config.wave_front_thickness * 0.3;
         state2.gravity_waves.push(strong_wave);
 
@@ -1165,7 +1170,76 @@ mod tests {
         let vel2 = state2.get_player(id2).unwrap().velocity.length();
 
         // Strong wave should apply more force
+        // With 0.4 min and 1.8 max, ratio is 4.5x, so velocity difference should be > 2.5x
         assert!(vel2 > vel1 * 2.5);
+    }
+
+    #[test]
+    fn test_wave_strength_surface_gravity_scaling() {
+        // Test that surface gravity formula g = M/R² produces correct strength values
+        // Reference: mass=10000, radius=20 -> g=25 -> strength=1.0
+
+        // Reference well (should produce 1.0)
+        let surface_gravity = 10000.0 / (20.0 * 20.0); // = 25
+        let normalized = surface_gravity / BASE_SURFACE_GRAVITY;
+        let strength = normalized.sqrt().clamp(WAVE_STRENGTH_MIN, WAVE_STRENGTH_MAX);
+        assert!((strength - 1.0).abs() < 0.01, "Reference well should produce 1.0, got {}", strength);
+
+        // Denser well: same mass, smaller radius -> higher gravity -> stronger wave
+        let dense_g = 10000.0 / (15.0 * 15.0); // = 44.4
+        let dense_normalized = dense_g / BASE_SURFACE_GRAVITY;
+        let dense_strength = dense_normalized.sqrt().clamp(WAVE_STRENGTH_MIN, WAVE_STRENGTH_MAX);
+        assert!(dense_strength > 1.0, "Dense well should be stronger than reference");
+
+        // Diffuse well: same mass, larger radius -> lower gravity -> weaker wave
+        let diffuse_g = 10000.0 / (30.0 * 30.0); // = 11.1
+        let diffuse_normalized = diffuse_g / BASE_SURFACE_GRAVITY;
+        let diffuse_strength = diffuse_normalized.sqrt().clamp(WAVE_STRENGTH_MIN, WAVE_STRENGTH_MAX);
+        assert!(diffuse_strength < 1.0, "Diffuse well should be weaker than reference");
+    }
+
+    #[test]
+    fn test_wave_strength_clamping() {
+        // Test that extreme values get clamped properly
+
+        // Very low surface gravity should clamp to MIN (0.4)
+        // Need g/25 < 0.16 (since sqrt(0.16) = 0.4), so g < 4
+        let low_g = 2.0;
+        let low_strength = (low_g / BASE_SURFACE_GRAVITY).sqrt()
+            .clamp(WAVE_STRENGTH_MIN, WAVE_STRENGTH_MAX);
+        assert_eq!(low_strength, WAVE_STRENGTH_MIN);
+
+        // Very high surface gravity should clamp to MAX (1.8)
+        // Need g/25 > 3.24 (since sqrt(3.24) = 1.8), so g > 81
+        let high_g = 100.0;
+        let high_strength = (high_g / BASE_SURFACE_GRAVITY).sqrt()
+            .clamp(WAVE_STRENGTH_MIN, WAVE_STRENGTH_MAX);
+        assert_eq!(high_strength, WAVE_STRENGTH_MAX);
+    }
+
+    #[test]
+    fn test_wave_strength_density_matters() {
+        // Test that two wells with same mass but different radii have different strengths
+
+        let mass = 10000.0;
+        let radius_compact = 15.0;  // Compact, dense well
+        let radius_diffuse = 30.0;  // Diffuse, spread out well
+
+        let compact_g = mass / (radius_compact * radius_compact);
+        let diffuse_g = mass / (radius_diffuse * radius_diffuse);
+
+        let compact_strength = (compact_g / BASE_SURFACE_GRAVITY).sqrt()
+            .clamp(WAVE_STRENGTH_MIN, WAVE_STRENGTH_MAX);
+        let diffuse_strength = (diffuse_g / BASE_SURFACE_GRAVITY).sqrt()
+            .clamp(WAVE_STRENGTH_MIN, WAVE_STRENGTH_MAX);
+
+        // Compact well should produce about 2x stronger wave
+        // (radius ratio 2:1 -> area ratio 4:1 -> gravity ratio 4:1 -> sqrt = 2:1)
+        assert!(
+            compact_strength > diffuse_strength * 1.5,
+            "Compact well ({}) should be much stronger than diffuse ({})",
+            compact_strength, diffuse_strength
+        );
     }
 
     #[test]
