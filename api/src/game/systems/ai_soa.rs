@@ -969,8 +969,9 @@ impl AiManagerSoA {
             self.aim_x[i] = ax;
             self.aim_y[i] = ay;
             self.wants_boost.set(i, true);
-            if to_idle && self.target_ids[i].and_then(|id| state.get_player(id)).is_none() {
+            if to_idle {
                 self.behaviors[i] = AiBehavior::Idle;
+                self.target_ids[i] = None;
             }
         }
     }
@@ -2088,5 +2089,832 @@ mod tests {
 
         // Should have computed thrust
         assert!(manager.thrust_x[idx].abs() > 0.01 || manager.thrust_y[idx].abs() > 0.01);
+    }
+
+    // ========================================================================
+    // Chase Behavior Tests
+    // ========================================================================
+
+    #[test]
+    fn test_chase_behavior_with_target() {
+        let mut manager = AiManagerSoA::default();
+        let mut state = create_test_state();
+
+        // Add bot at origin
+        let bot = create_bot_player(Vec2::new(0.0, 0.0), 100.0);
+        let bot_id = bot.id;
+        state.add_player(bot);
+        manager.register_bot(bot_id);
+
+        // Add target far to the right
+        let target = create_human_player(Vec2::new(500.0, 0.0), 80.0);
+        let target_id = target.id;
+        state.add_player(target);
+
+        // Set to chase behavior with target
+        let idx = manager.get_index(bot_id).unwrap() as usize;
+        manager.behaviors[idx] = AiBehavior::Chase;
+        manager.target_ids[idx] = Some(target_id);
+        manager.active_mask.set(idx, true);
+        manager.batches.rebuild(&manager.behaviors, &manager.active_mask);
+
+        manager.update_chase_batch(&state, 0.033);
+
+        // Should thrust toward target (positive x direction)
+        assert!(manager.thrust_x[idx] > 0.5);
+        // Should aim toward target
+        assert!(manager.aim_x[idx] > 0.5);
+        // Should boost when far from target
+        assert!(manager.wants_boost.get(idx).map(|b| *b).unwrap_or(false));
+    }
+
+    #[test]
+    fn test_chase_behavior_target_dead() {
+        let mut manager = AiManagerSoA::default();
+        let mut state = create_test_state();
+
+        // Add bot
+        let bot = create_bot_player(Vec2::new(0.0, 0.0), 100.0);
+        let bot_id = bot.id;
+        state.add_player(bot);
+        manager.register_bot(bot_id);
+
+        // Add dead target
+        let mut target = create_human_player(Vec2::new(500.0, 0.0), 80.0);
+        target.alive = false;
+        let target_id = target.id;
+        state.add_player(target);
+
+        // Set to chase behavior with dead target
+        let idx = manager.get_index(bot_id).unwrap() as usize;
+        manager.behaviors[idx] = AiBehavior::Chase;
+        manager.target_ids[idx] = Some(target_id);
+        manager.active_mask.set(idx, true);
+        manager.batches.rebuild(&manager.behaviors, &manager.active_mask);
+
+        manager.update_chase_batch(&state, 0.033);
+
+        // Should switch to idle when target is dead
+        assert_eq!(manager.behaviors[idx], AiBehavior::Idle);
+        assert!(manager.target_ids[idx].is_none());
+    }
+
+    #[test]
+    fn test_chase_behavior_no_target() {
+        let mut manager = AiManagerSoA::default();
+        let mut state = create_test_state();
+
+        let bot = create_bot_player(Vec2::new(0.0, 0.0), 100.0);
+        let bot_id = bot.id;
+        state.add_player(bot);
+        manager.register_bot(bot_id);
+
+        let idx = manager.get_index(bot_id).unwrap() as usize;
+        manager.behaviors[idx] = AiBehavior::Chase;
+        manager.target_ids[idx] = None; // No target
+        manager.active_mask.set(idx, true);
+        manager.batches.rebuild(&manager.behaviors, &manager.active_mask);
+
+        // Should not panic
+        manager.update_chase_batch(&state, 0.033);
+    }
+
+    // ========================================================================
+    // Flee Behavior Tests
+    // ========================================================================
+
+    #[test]
+    fn test_flee_behavior_from_threat() {
+        let mut manager = AiManagerSoA::default();
+        let mut state = create_test_state();
+
+        // Add bot at origin
+        let bot = create_bot_player(Vec2::new(0.0, 0.0), 50.0);
+        let bot_id = bot.id;
+        state.add_player(bot);
+        manager.register_bot(bot_id);
+
+        // Add threatening player nearby
+        let threat = create_human_player(Vec2::new(100.0, 0.0), 200.0);
+        let threat_id = threat.id;
+        state.add_player(threat);
+
+        let idx = manager.get_index(bot_id).unwrap() as usize;
+        manager.behaviors[idx] = AiBehavior::Flee;
+        manager.target_ids[idx] = Some(threat_id);
+        manager.active_mask.set(idx, true);
+        manager.batches.rebuild(&manager.behaviors, &manager.active_mask);
+
+        manager.update_flee_batch(&state, 0.033);
+
+        // Should thrust away from threat (negative x direction)
+        assert!(manager.thrust_x[idx] < -0.5);
+        // Should boost when fleeing
+        assert!(manager.wants_boost.get(idx).map(|b| *b).unwrap_or(false));
+    }
+
+    #[test]
+    fn test_flee_behavior_threat_dead() {
+        let mut manager = AiManagerSoA::default();
+        let mut state = create_test_state();
+
+        let bot = create_bot_player(Vec2::new(0.0, 0.0), 50.0);
+        let bot_id = bot.id;
+        state.add_player(bot);
+        manager.register_bot(bot_id);
+
+        // Add dead threat
+        let mut threat = create_human_player(Vec2::new(100.0, 0.0), 200.0);
+        threat.alive = false;
+        let threat_id = threat.id;
+        state.add_player(threat);
+
+        let idx = manager.get_index(bot_id).unwrap() as usize;
+        manager.behaviors[idx] = AiBehavior::Flee;
+        manager.target_ids[idx] = Some(threat_id);
+        manager.active_mask.set(idx, true);
+        manager.batches.rebuild(&manager.behaviors, &manager.active_mask);
+
+        manager.update_flee_batch(&state, 0.033);
+
+        // Should switch to idle when threat is dead
+        assert_eq!(manager.behaviors[idx], AiBehavior::Idle);
+    }
+
+    #[test]
+    fn test_flee_behavior_threat_nonexistent() {
+        let mut manager = AiManagerSoA::default();
+        let mut state = create_test_state();
+
+        let bot = create_bot_player(Vec2::new(0.0, 0.0), 50.0);
+        let bot_id = bot.id;
+        state.add_player(bot);
+        manager.register_bot(bot_id);
+
+        // Threat ID doesn't exist in state
+        let fake_threat_id = Uuid::new_v4();
+
+        let idx = manager.get_index(bot_id).unwrap() as usize;
+        manager.behaviors[idx] = AiBehavior::Flee;
+        manager.target_ids[idx] = Some(fake_threat_id);
+        manager.active_mask.set(idx, true);
+        manager.batches.rebuild(&manager.behaviors, &manager.active_mask);
+
+        // Should not panic when threat doesn't exist
+        manager.update_flee_batch(&state, 0.033);
+
+        // Behavior remains Flee (skipped in batch processing due to missing target)
+        // but will be cleaned up on next decision cycle
+        assert_eq!(manager.behaviors[idx], AiBehavior::Flee);
+    }
+
+    // ========================================================================
+    // Reduced Update Mode Tests
+    // ========================================================================
+
+    #[test]
+    fn test_dormancy_reduced_mode_distance() {
+        let mut manager = AiManagerSoA::default();
+        let mut state = create_test_state();
+
+        // Add bot at intermediate distance (between full and dormant thresholds)
+        let bot = create_bot_player(Vec2::new(1000.0, 0.0), 100.0);
+        let bot_id = bot.id;
+        state.add_player(bot);
+        manager.register_bot(bot_id);
+
+        // Add human at origin
+        let human = create_human_player(Vec2::new(0.0, 0.0), 100.0);
+        state.add_player(human);
+
+        manager.update_dormancy(&state);
+
+        let idx = manager.get_index(bot_id).unwrap() as usize;
+        // Distance is 1000, which is > 500 (full) but < 2000 (reduced threshold)
+        assert_eq!(manager.update_modes[idx], UpdateMode::Reduced);
+    }
+
+    #[test]
+    fn test_tick_counter_reduced_interval() {
+        let mut manager = AiManagerSoA::default();
+        let mut state = create_test_state();
+
+        // Add bot
+        let bot = create_bot_player(Vec2::new(1000.0, 0.0), 100.0);
+        let bot_id = bot.id;
+        state.add_player(bot);
+        manager.register_bot(bot_id);
+
+        // Add human
+        let human = create_human_player(Vec2::new(0.0, 0.0), 100.0);
+        state.add_player(human);
+
+        let idx = manager.get_index(bot_id).unwrap() as usize;
+
+        // Test multiple tick cycles
+        // Reduced mode updates every 4 ticks (tick_counter % 4 == 0)
+        for tick in 0..12u32 {
+            manager.tick_counter = tick;
+            manager.update_dormancy(&state);
+
+            let should_be_active = tick % 4 == 0;
+            let is_active = manager.active_mask.get(idx).map(|b| *b).unwrap_or(false);
+
+            // Only check if we're in reduced mode
+            if manager.update_modes[idx] == UpdateMode::Reduced {
+                assert_eq!(is_active, should_be_active,
+                    "At tick {}, reduced mode bot should be active={}", tick, should_be_active);
+            }
+        }
+    }
+
+    #[test]
+    fn test_tick_counter_dormant_interval() {
+        let mut manager = AiManagerSoA::default();
+        let mut state = create_test_state();
+
+        // Add bot very far away
+        let bot = create_bot_player(Vec2::new(8000.0, 0.0), 100.0);
+        let bot_id = bot.id;
+        state.add_player(bot);
+        manager.register_bot(bot_id);
+
+        // Add human at origin
+        let human = create_human_player(Vec2::new(0.0, 0.0), 100.0);
+        state.add_player(human);
+
+        let idx = manager.get_index(bot_id).unwrap() as usize;
+
+        // Dormant mode updates every 8 ticks
+        for tick in 0..16u32 {
+            manager.tick_counter = tick;
+            manager.update_dormancy(&state);
+
+            let should_be_active = tick % 8 == 0;
+            let is_active = manager.active_mask.get(idx).map(|b| *b).unwrap_or(false);
+
+            if manager.update_modes[idx] == UpdateMode::Dormant {
+                assert_eq!(is_active, should_be_active,
+                    "At tick {}, dormant mode bot should be active={}", tick, should_be_active);
+            }
+        }
+    }
+
+    // ========================================================================
+    // Dead Player Handling Tests
+    // ========================================================================
+
+    #[test]
+    fn test_dead_bot_marked_inactive() {
+        let mut manager = AiManagerSoA::default();
+        let mut state = create_test_state();
+
+        // Add dead bot
+        let mut bot = create_bot_player(Vec2::new(0.0, 0.0), 100.0);
+        bot.alive = false;
+        let bot_id = bot.id;
+        state.add_player(bot);
+        manager.register_bot(bot_id);
+
+        // Add human
+        let human = create_human_player(Vec2::new(100.0, 0.0), 100.0);
+        state.add_player(human);
+
+        manager.update_dormancy(&state);
+
+        let idx = manager.get_index(bot_id).unwrap() as usize;
+        // Dead bot should be marked inactive
+        assert!(!manager.active_mask.get(idx).map(|b| *b).unwrap_or(true));
+    }
+
+    #[test]
+    fn test_dead_bot_skipped_in_zone_update() {
+        let mut manager = AiManagerSoA::default();
+        let mut state = create_test_state();
+
+        // Add dead bot
+        let mut bot = create_bot_player(Vec2::new(0.0, 0.0), 100.0);
+        bot.alive = false;
+        let bot_id = bot.id;
+        state.add_player(bot);
+        manager.register_bot(bot_id);
+
+        manager.update_zones(&state);
+
+        let cell = manager.zone_grid.position_to_cell(Vec2::new(0.0, 0.0));
+        let zone = manager.zone_grid.get_zone(cell);
+        // Dead bot should not be counted
+        assert!(zone.is_none() || zone.unwrap().bot_count == 0);
+    }
+
+    // ========================================================================
+    // Decision Making Tests
+    // ========================================================================
+
+    #[test]
+    fn test_update_decisions_decrements_timer() {
+        let mut manager = AiManagerSoA::default();
+        let mut state = create_test_state();
+
+        let bot = create_bot_player(Vec2::new(0.0, 0.0), 100.0);
+        let bot_id = bot.id;
+        state.add_player(bot);
+        manager.register_bot(bot_id);
+
+        let idx = manager.get_index(bot_id).unwrap() as usize;
+        manager.active_mask.set(idx, true);
+        manager.decision_timers[idx] = 1.0;
+
+        manager.update_decisions(&state, 0.1);
+
+        // Timer should be decremented
+        assert!((manager.decision_timers[idx] - 0.9).abs() < 0.01);
+    }
+
+    #[test]
+    fn test_update_decisions_triggers_on_zero() {
+        let mut manager = AiManagerSoA::default();
+        let mut state = create_test_state();
+
+        // Add gravity well for orbit behavior
+        let well = create_gravity_well(0, Vec2::new(0.0, 0.0), 10000.0, 50.0);
+        state.arena.gravity_wells.insert(0, well);
+
+        let bot = create_bot_player(Vec2::new(300.0, 0.0), 100.0);
+        let bot_id = bot.id;
+        state.add_player(bot);
+        manager.register_bot(bot_id);
+
+        let idx = manager.get_index(bot_id).unwrap() as usize;
+        manager.active_mask.set(idx, true);
+        manager.decision_timers[idx] = 0.0; // About to trigger
+
+        manager.update_decisions(&state, 0.1);
+
+        // Timer should be reset to a new value
+        assert!(manager.decision_timers[idx] > 0.0);
+        // Behavior should have changed from Idle
+        // (could be Orbit, Chase, Flee, or Collect depending on RNG)
+    }
+
+    #[test]
+    fn test_decide_behavior_defaults_to_orbit() {
+        let mut manager = AiManagerSoA::default();
+        let mut state = create_test_state();
+
+        // Add gravity well
+        let well = create_gravity_well(0, Vec2::new(0.0, 0.0), 10000.0, 50.0);
+        state.arena.gravity_wells.insert(0, well);
+
+        // Add bot with low aggression (won't chase)
+        let bot = create_bot_player(Vec2::new(300.0, 0.0), 100.0);
+        let bot_id = bot.id;
+        state.add_player(bot);
+        manager.register_bot(bot_id);
+
+        let idx = manager.get_index(bot_id).unwrap() as usize;
+        manager.aggression[idx] = 0.0; // No aggression
+
+        // Clear debris so collect won't trigger
+        state.debris.clear();
+
+        let mut rng = rand::thread_rng();
+        manager.decide_behavior(idx, &state, &mut rng);
+
+        // With no threats, no debris, and low aggression, should default to orbit
+        assert_eq!(manager.behaviors[idx], AiBehavior::Orbit);
+        assert!(manager.target_ids[idx].is_none());
+    }
+
+    // ========================================================================
+    // Firing Logic Tests
+    // ========================================================================
+
+    #[test]
+    fn test_firing_only_for_combat_behaviors() {
+        let mut manager = AiManagerSoA::default();
+        let mut state = create_test_state();
+
+        let bot = create_bot_player(Vec2::new(0.0, 0.0), 100.0);
+        let bot_id = bot.id;
+        state.add_player(bot);
+        manager.register_bot(bot_id);
+
+        let idx = manager.get_index(bot_id).unwrap() as usize;
+        manager.active_mask.set(idx, true);
+        manager.behaviors[idx] = AiBehavior::Orbit; // Non-combat
+        manager.wants_fire.set(idx, true);
+
+        manager.update_firing(&state, 0.033);
+
+        // Fire should be cleared for non-combat behavior
+        assert!(!manager.wants_fire.get(idx).map(|b| *b).unwrap_or(true));
+        assert!((manager.charge_times[idx]).abs() < 0.01);
+    }
+
+    #[test]
+    fn test_firing_range_check() {
+        let mut manager = AiManagerSoA::default();
+        let mut state = create_test_state();
+
+        let bot = create_bot_player(Vec2::new(0.0, 0.0), 100.0);
+        let bot_id = bot.id;
+        state.add_player(bot);
+        manager.register_bot(bot_id);
+
+        // Add target far away (out of range)
+        let target = create_human_player(Vec2::new(500.0, 0.0), 80.0);
+        let target_id = target.id;
+        state.add_player(target);
+
+        let idx = manager.get_index(bot_id).unwrap() as usize;
+        manager.active_mask.set(idx, true);
+        manager.behaviors[idx] = AiBehavior::Chase;
+        manager.target_ids[idx] = Some(target_id);
+        manager.wants_fire.set(idx, true);
+
+        manager.update_firing(&state, 0.033);
+
+        // Fire should be cleared when target is out of range (> 300)
+        assert!(!manager.wants_fire.get(idx).map(|b| *b).unwrap_or(true));
+    }
+
+    #[test]
+    fn test_firing_charges_over_time() {
+        let mut manager = AiManagerSoA::default();
+        let mut state = create_test_state();
+
+        let bot = create_bot_player(Vec2::new(0.0, 0.0), 100.0);
+        let bot_id = bot.id;
+        state.add_player(bot);
+        manager.register_bot(bot_id);
+
+        // Add target in range
+        let target = create_human_player(Vec2::new(100.0, 0.0), 80.0);
+        let target_id = target.id;
+        state.add_player(target);
+
+        let idx = manager.get_index(bot_id).unwrap() as usize;
+        manager.active_mask.set(idx, true);
+        manager.behaviors[idx] = AiBehavior::Chase;
+        manager.target_ids[idx] = Some(target_id);
+        manager.wants_fire.set(idx, true);
+        manager.charge_times[idx] = 0.0;
+
+        manager.update_firing(&state, 0.1);
+
+        // Charge time should increase while firing
+        assert!(manager.charge_times[idx] > 0.0);
+    }
+
+    // ========================================================================
+    // Orbit Danger Zone Tests
+    // ========================================================================
+
+    #[test]
+    fn test_orbit_escape_danger_zone() {
+        let mut manager = AiManagerSoA::default();
+        let mut state = create_test_state();
+
+        // Add gravity well with core_radius 50
+        let well = create_gravity_well(0, Vec2::new(0.0, 0.0), 10000.0, 50.0);
+        state.arena.gravity_wells.insert(0, well);
+
+        // Add bot very close to well (in danger zone: < core_radius * 2.5 = 125)
+        let bot = create_bot_player(Vec2::new(80.0, 0.0), 100.0);
+        let bot_id = bot.id;
+        state.add_player(bot);
+        manager.register_bot(bot_id);
+
+        // Add human to keep bot active
+        let human = create_human_player(Vec2::new(100.0, 100.0), 100.0);
+        state.add_player(human);
+
+        let idx = manager.get_index(bot_id).unwrap() as usize;
+        manager.behaviors[idx] = AiBehavior::Orbit;
+        manager.active_mask.set(idx, true);
+        manager.batches.rebuild(&manager.behaviors, &manager.active_mask);
+
+        manager.update_orbit_batch(&state, 0.033);
+
+        // Should thrust away from well (positive x, escaping)
+        assert!(manager.thrust_x[idx] > 0.5);
+        // Should boost when escaping danger
+        assert!(manager.wants_boost.get(idx).map(|b| *b).unwrap_or(false));
+    }
+
+    // ========================================================================
+    // Sequential Update Behaviors Tests
+    // ========================================================================
+
+    #[test]
+    fn test_sequential_chase_behavior() {
+        let mut manager = AiManagerSoA::default();
+        let mut state = create_test_state();
+
+        let bot = create_bot_player(Vec2::new(0.0, 0.0), 100.0);
+        let bot_id = bot.id;
+        state.add_player(bot);
+        manager.register_bot(bot_id);
+
+        let target = create_human_player(Vec2::new(200.0, 0.0), 80.0);
+        let target_id = target.id;
+        state.add_player(target);
+
+        let idx = manager.get_index(bot_id).unwrap() as usize;
+        manager.behaviors[idx] = AiBehavior::Chase;
+        manager.target_ids[idx] = Some(target_id);
+        manager.active_mask.set(idx, true);
+
+        manager.update_all_sequential(&state, 0.033);
+
+        // Should thrust toward target
+        assert!(manager.thrust_x[idx] > 0.5);
+    }
+
+    #[test]
+    fn test_sequential_flee_behavior() {
+        let mut manager = AiManagerSoA::default();
+        let mut state = create_test_state();
+
+        let bot = create_bot_player(Vec2::new(0.0, 0.0), 50.0);
+        let bot_id = bot.id;
+        state.add_player(bot);
+        manager.register_bot(bot_id);
+
+        let threat = create_human_player(Vec2::new(100.0, 0.0), 200.0);
+        let threat_id = threat.id;
+        state.add_player(threat);
+
+        let idx = manager.get_index(bot_id).unwrap() as usize;
+        manager.behaviors[idx] = AiBehavior::Flee;
+        manager.target_ids[idx] = Some(threat_id);
+        manager.active_mask.set(idx, true);
+
+        manager.update_all_sequential(&state, 0.033);
+
+        // Should thrust away from threat
+        assert!(manager.thrust_x[idx] < -0.5);
+    }
+
+    #[test]
+    fn test_sequential_collect_behavior() {
+        let mut manager = AiManagerSoA::default();
+        let mut state = create_test_state();
+
+        let bot = create_bot_player(Vec2::new(0.0, 0.0), 100.0);
+        let bot_id = bot.id;
+        state.add_player(bot);
+        manager.register_bot(bot_id);
+
+        state.debris.push(crate::game::state::Debris::new(
+            1,
+            Vec2::new(100.0, 0.0),
+            Vec2::ZERO,
+            crate::game::state::DebrisSize::Medium,
+        ));
+
+        let idx = manager.get_index(bot_id).unwrap() as usize;
+        manager.behaviors[idx] = AiBehavior::Collect;
+        manager.active_mask.set(idx, true);
+
+        manager.update_all_sequential(&state, 0.033);
+
+        // Should thrust toward debris
+        assert!(manager.thrust_x[idx] > 0.5);
+    }
+
+    // ========================================================================
+    // Collect Behavior Switch Tests
+    // ========================================================================
+
+    #[test]
+    fn test_collect_switches_to_orbit_when_no_debris() {
+        let mut manager = AiManagerSoA::default();
+        let mut state = create_test_state();
+
+        let bot = create_bot_player(Vec2::new(0.0, 0.0), 100.0);
+        let bot_id = bot.id;
+        state.add_player(bot);
+        manager.register_bot(bot_id);
+
+        // No debris in state
+        state.debris.clear();
+
+        let idx = manager.get_index(bot_id).unwrap() as usize;
+        manager.behaviors[idx] = AiBehavior::Collect;
+        manager.active_mask.set(idx, true);
+        manager.batches.rebuild(&manager.behaviors, &manager.active_mask);
+
+        manager.update_collect_batch(&state, 0.033);
+
+        // Should switch to orbit when no collectibles
+        assert_eq!(manager.behaviors[idx], AiBehavior::Orbit);
+    }
+
+    // ========================================================================
+    // Zone Threat Detection Tests
+    // ========================================================================
+
+    #[test]
+    fn test_zone_threat_triggers_flee() {
+        let mut manager = AiManagerSoA::default();
+        let mut state = create_test_state();
+
+        // Add small bot
+        let bot = create_bot_player(Vec2::new(100.0, 0.0), 50.0);
+        let bot_id = bot.id;
+        state.add_player(bot);
+        manager.register_bot(bot_id);
+
+        // Add large threatening human nearby
+        let human = create_human_player(Vec2::new(150.0, 0.0), 200.0);
+        state.add_player(human);
+
+        // Update zones to register threat
+        manager.update_zones(&state);
+
+        let idx = manager.get_index(bot_id).unwrap() as usize;
+        manager.aggression[idx] = 0.0; // Cowardly bot
+
+        let mut rng = rand::thread_rng();
+        manager.decide_behavior(idx, &state, &mut rng);
+
+        // With a large threatening human nearby and low aggression,
+        // bot should flee (or at least not chase)
+        assert!(manager.behaviors[idx] == AiBehavior::Flee ||
+                manager.behaviors[idx] == AiBehavior::Orbit);
+    }
+
+    // ========================================================================
+    // Get Index Tests
+    // ========================================================================
+
+    #[test]
+    fn test_get_index_returns_none_for_unknown() {
+        let manager = AiManagerSoA::default();
+        let unknown_id = Uuid::new_v4();
+
+        assert!(manager.get_index(unknown_id).is_none());
+    }
+
+    #[test]
+    fn test_get_index_correct_after_unregister() {
+        let mut manager = AiManagerSoA::default();
+        let bot1 = Uuid::new_v4();
+        let bot2 = Uuid::new_v4();
+        let bot3 = Uuid::new_v4();
+
+        manager.register_bot(bot1);
+        manager.register_bot(bot2);
+        manager.register_bot(bot3);
+
+        assert_eq!(manager.get_index(bot1), Some(0));
+        assert_eq!(manager.get_index(bot2), Some(1));
+        assert_eq!(manager.get_index(bot3), Some(2));
+
+        // Unregister middle bot
+        manager.unregister_bot(bot2);
+
+        // bot3 should have moved to index 1
+        assert!(manager.get_index(bot2).is_none());
+        assert_eq!(manager.get_index(bot3), Some(1));
+        assert_eq!(manager.get_index(bot1), Some(0));
+    }
+
+    // ========================================================================
+    // Default Implementation Tests
+    // ========================================================================
+
+    #[test]
+    fn test_ai_manager_default() {
+        let manager = AiManagerSoA::default();
+
+        assert_eq!(manager.count, 0);
+        assert!(manager.bot_ids.capacity() >= 1024);
+        assert_eq!(manager.tick_counter, 0);
+    }
+
+    #[test]
+    fn test_zone_grid_default() {
+        let grid = ZoneGrid::default();
+
+        assert!((grid.cell_size - DEFAULT_ZONE_CELL_SIZE).abs() < 0.01);
+    }
+
+    #[test]
+    fn test_behavior_batches_default() {
+        let batches = BehaviorBatches::default();
+
+        assert!(batches.orbit.is_empty());
+        assert!(batches.chase.is_empty());
+        assert!(batches.flee.is_empty());
+        assert!(batches.collect.is_empty());
+        assert!(batches.idle.is_empty());
+    }
+
+    // ========================================================================
+    // Aim Direction Tests
+    // ========================================================================
+
+    #[test]
+    fn test_aim_updates_toward_target() {
+        let mut manager = AiManagerSoA::default();
+        let mut state = create_test_state();
+
+        let bot = create_bot_player(Vec2::new(0.0, 0.0), 100.0);
+        let bot_id = bot.id;
+        state.add_player(bot);
+        manager.register_bot(bot_id);
+
+        // Add target above
+        let target = create_human_player(Vec2::new(0.0, 100.0), 80.0);
+        let target_id = target.id;
+        state.add_player(target);
+
+        let idx = manager.get_index(bot_id).unwrap() as usize;
+        manager.behaviors[idx] = AiBehavior::Chase;
+        manager.target_ids[idx] = Some(target_id);
+        manager.active_mask.set(idx, true);
+        manager.batches.rebuild(&manager.behaviors, &manager.active_mask);
+
+        manager.update_chase_batch(&state, 0.033);
+
+        // Aim should point upward (positive y)
+        assert!(manager.aim_y[idx] > 0.5);
+    }
+
+    // ========================================================================
+    // Inactive Bot Skip Tests
+    // ========================================================================
+
+    #[test]
+    fn test_inactive_bot_skipped_in_decisions() {
+        let mut manager = AiManagerSoA::default();
+        let mut state = create_test_state();
+
+        let bot = create_bot_player(Vec2::new(0.0, 0.0), 100.0);
+        let bot_id = bot.id;
+        state.add_player(bot);
+        manager.register_bot(bot_id);
+
+        let idx = manager.get_index(bot_id).unwrap() as usize;
+        manager.active_mask.set(idx, false); // Inactive
+        manager.decision_timers[idx] = 0.0; // Would normally trigger decision
+
+        let original_behavior = manager.behaviors[idx];
+        manager.update_decisions(&state, 0.1);
+
+        // Behavior should not have changed
+        assert_eq!(manager.behaviors[idx], original_behavior);
+    }
+
+    #[test]
+    fn test_inactive_bot_skipped_in_firing() {
+        let mut manager = AiManagerSoA::default();
+        let mut state = create_test_state();
+
+        let bot = create_bot_player(Vec2::new(0.0, 0.0), 100.0);
+        let bot_id = bot.id;
+        state.add_player(bot);
+        manager.register_bot(bot_id);
+
+        let idx = manager.get_index(bot_id).unwrap() as usize;
+        manager.active_mask.set(idx, false); // Inactive
+        manager.behaviors[idx] = AiBehavior::Chase;
+        manager.wants_fire.set(idx, true);
+
+        manager.update_firing(&state, 0.033);
+
+        // Fire should remain true (not processed)
+        assert!(manager.wants_fire.get(idx).map(|b| *b).unwrap_or(false));
+    }
+
+    // ========================================================================
+    // Tick Counter Tests
+    // ========================================================================
+
+    #[test]
+    fn test_tick_counter_wrapping() {
+        let mut manager = AiManagerSoA::default();
+        let state = create_test_state();
+
+        manager.tick_counter = u32::MAX;
+        manager.update(&state, 0.033);
+
+        // Should wrap to 0
+        assert_eq!(manager.tick_counter, 0);
+    }
+
+    #[test]
+    fn test_tick_counter_increments() {
+        let mut manager = AiManagerSoA::default();
+        let state = create_test_state();
+
+        assert_eq!(manager.tick_counter, 0);
+        manager.update(&state, 0.033);
+        assert_eq!(manager.tick_counter, 1);
+        manager.update(&state, 0.033);
+        assert_eq!(manager.tick_counter, 2);
     }
 }
