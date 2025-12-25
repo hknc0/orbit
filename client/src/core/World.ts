@@ -111,6 +111,9 @@ export class World {
   // Wells currently charging (warning state before explosion)
   private chargingWells: ChargingWell[] = [];
 
+  // Destroyed well IDs to filter out from snapshots (prevents stale data from restoring removed wells)
+  private destroyedWellIds: Set<number> = new Set();
+
   // Previous alive states to detect deaths
   private lastAliveStates: Map<PlayerId, { alive: boolean; position: { x: number; y: number }; color: string }> = new Map();
 
@@ -225,7 +228,16 @@ export class World {
     // Update arena
     this.arena.collapsePhase = state.arenaCollapsePhase;
     this.arena.scale = state.arenaScale;
-    this.arena.gravityWells = state.gravityWells;
+    // Filter out destroyed wells (prevents stale snapshots from restoring removed wells)
+    this.arena.gravityWells = state.gravityWells.filter(w => !this.destroyedWellIds.has(w.id));
+    // Clean up tracking: if server no longer sends a well, stop tracking it
+    const currentWellIds = new Set(state.gravityWells.map(w => w.id));
+    for (const destroyedId of this.destroyedWellIds) {
+      if (!currentWellIds.has(destroyedId)) {
+        // Server confirmed removal, stop tracking
+        this.destroyedWellIds.delete(destroyedId);
+      }
+    }
     // Calculate radii based on collapse phase
     const collapseRatio = state.arenaCollapsePhase / ARENA.COLLAPSE_PHASES;
     this.arena.coreRadius = ARENA.CORE_RADIUS + (ARENA.OUTER_RADIUS - ARENA.CORE_RADIUS) * collapseRatio * 0.5;
@@ -444,6 +456,15 @@ export class World {
     });
   }
 
+  // Remove a gravity well (called when GravityWellDestroyed event received)
+  removeGravityWell(wellId: number): void {
+    // Track destroyed wells to filter them from future snapshots
+    this.destroyedWellIds.add(wellId);
+    this.arena.gravityWells = this.arena.gravityWells.filter((w) => w.id !== wellId);
+    // Also remove any charging state for this well
+    this.chargingWells = this.chargingWells.filter((w) => w.wellId !== wellId);
+  }
+
   // Add a gravity wave effect (called when GravityWaveExplosion event received)
   addGravityWaveEffect(
     position: { x: number; y: number },
@@ -516,6 +537,7 @@ export class World {
     this.collisionEffects = [];
     this.gravityWaveEffects = [];
     this.chargingWells = [];
+    this.destroyedWellIds.clear();
     this.lastAliveStates.clear();
     this.sessionStats = {
       bestMass: 0,

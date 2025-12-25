@@ -105,7 +105,12 @@ export class StateSync {
   private destroyedWellIds: Set<number> = new Set();
 
   // Track when gravity wells were first seen (for birth animation)
+  // bornTime = 0 means skip animation (pre-existing well)
+  // bornTime > 0 means show birth animation
   private wellBornTimes: Map<number, number> = new Map();
+
+  // Track if we've received the first snapshot (wells in first snapshot skip birth animation)
+  private hasReceivedFirstSnapshot: boolean = false;
 
   setLocalPlayerId(id: PlayerId): void {
     this.localPlayerId = id;
@@ -360,12 +365,16 @@ export class StateSync {
     }
 
     // Track new wells and assign born times
+    // First snapshot: bornTime = 0 (skip animation for pre-existing wells)
+    // Subsequent: bornTime = now (show birth animation for newly spawned wells)
     const now = performance.now();
     for (const w of snapshot.gravityWells) {
       if (!this.wellBornTimes.has(w.id)) {
-        this.wellBornTimes.set(w.id, now);
+        // Use 0 for first snapshot (skip animation), now for subsequent (show animation)
+        this.wellBornTimes.set(w.id, this.hasReceivedFirstSnapshot ? now : 0);
       }
     }
+    this.hasReceivedFirstSnapshot = true;
 
     // Build gravity wells array, filtering destroyed wells using pre-computed Map
     const gravityWells: InterpolatedGravityWell[] = [];
@@ -376,7 +385,7 @@ export class StateSync {
           position: w.position.clone(),
           mass: w.mass,
           coreRadius: w.coreRadius,
-          bornTime: this.wellBornTimes.get(w.id) ?? now,
+          bornTime: this.wellBornTimes.get(w.id) ?? 0,
         });
       }
     }
@@ -501,10 +510,11 @@ export class StateSync {
     }
 
     // Track new wells and assign born times
+    // Only show birth animation for wells that appear after first snapshot
     const now = performance.now();
     for (const [id] of afterEntry.wellMap) {
       if (!this.wellBornTimes.has(id)) {
-        this.wellBornTimes.set(id, now);
+        this.wellBornTimes.set(id, this.hasReceivedFirstSnapshot ? now : 0);
       }
     }
 
@@ -515,7 +525,7 @@ export class StateSync {
       if (this.destroyedWellIds.size > 0 && this.destroyedWellIds.has(id)) {
         continue;
       }
-      const bornTime = this.wellBornTimes.get(id) ?? now;
+      const bornTime = this.wellBornTimes.get(id) ?? 0;
       const beforeWell = beforeEntry.wellMap.get(id);
       if (beforeWell) {
         gravityWells.push({

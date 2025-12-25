@@ -323,6 +323,14 @@ export class Game {
         }
         break;
       }
+
+      case 'GravityWellDestroyed': {
+        // Mark well as destroyed in StateSync (filters from interpolated state)
+        this.stateSync.markWellDestroyed(event.wellId);
+        // Also remove from World's arena state immediately
+        this.world.removeGravityWell(event.wellId);
+        break;
+      }
     }
   }
 
