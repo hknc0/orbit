@@ -816,6 +816,11 @@ pub struct AiManagerSoA {
 }
 
 impl AiManagerSoA {
+    /// Create a new SoA AI manager with default capacity
+    pub fn new() -> Self {
+        Self::with_capacity(1000)
+    }
+
     /// Create a new SoA AI manager with pre-allocated capacity
     pub fn with_capacity(capacity: usize) -> Self {
         Self {

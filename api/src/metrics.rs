@@ -82,13 +82,22 @@ pub struct Metrics {
     pub dos_messages_rate_limited: AtomicU64,  // Messages dropped by rate limit
     pub dos_active_bans: AtomicU64,            // Currently banned IPs
 
-    // AI Manager metrics (feature-gated)
+    // AI Manager metrics (feature-gated) - for AI Simulation Manager
     pub ai_enabled: AtomicU64,                 // AI manager enabled (0/1)
     pub ai_decisions_total: AtomicU64,         // Total decisions made
     pub ai_decisions_successful: AtomicU64,    // Successful decisions
     pub ai_last_confidence: AtomicU64,         // Last confidence level (0-100)
     #[allow(dead_code)]
     pub ai_pending_evaluations: AtomicU64,     // Decisions awaiting outcome evaluation
+
+    // Bot AI SoA metrics - for million-scale bot AI system
+    pub bot_ai_total: AtomicU64,               // Total bots registered
+    pub bot_ai_active: AtomicU64,              // Bots active this tick
+    pub bot_ai_full_mode: AtomicU64,           // Bots in full update mode
+    pub bot_ai_reduced_mode: AtomicU64,        // Bots in reduced update mode
+    pub bot_ai_dormant_mode: AtomicU64,        // Bots in dormant mode
+    pub bot_ai_lod_scale: AtomicU64,           // LOD scale factor (x100, e.g., 100 = 1.0x)
+    pub bot_ai_health_status: AtomicU64,       // Health status (0=Excellent, 4=Catastrophic)
 
     // Rolling tick times for percentile calculation (VecDeque for O(1) pop_front)
     tick_history: RwLock<VecDeque<u64>>,
@@ -145,6 +154,14 @@ impl Metrics {
             ai_decisions_successful: AtomicU64::new(0),
             ai_last_confidence: AtomicU64::new(0),
             ai_pending_evaluations: AtomicU64::new(0),
+            // Bot AI SoA metrics
+            bot_ai_total: AtomicU64::new(0),
+            bot_ai_active: AtomicU64::new(0),
+            bot_ai_full_mode: AtomicU64::new(0),
+            bot_ai_reduced_mode: AtomicU64::new(0),
+            bot_ai_dormant_mode: AtomicU64::new(0),
+            bot_ai_lod_scale: AtomicU64::new(100), // 1.0x default
+            bot_ai_health_status: AtomicU64::new(0),
             tick_history: RwLock::new(VecDeque::with_capacity(1000)),
         }
     }
@@ -332,6 +349,41 @@ impl Metrics {
             let success_rate = if total > 0 { (successful * 100) / total } else { 0 };
             metric!("orbit_royale_ai_success_rate_percent", "AI decision success rate", "gauge", success_rate);
         }
+
+        // Bot AI SoA metrics (always enabled - core system)
+        metric!("orbit_royale_bot_ai_total", "Total bots registered in SoA AI system", "gauge",
+            self.bot_ai_total.load(Ordering::Relaxed));
+        metric!("orbit_royale_bot_ai_active", "Bots actively updating this tick", "gauge",
+            self.bot_ai_active.load(Ordering::Relaxed));
+        metric!("orbit_royale_bot_ai_full_mode", "Bots in full update mode (near humans)", "gauge",
+            self.bot_ai_full_mode.load(Ordering::Relaxed));
+        metric!("orbit_royale_bot_ai_reduced_mode", "Bots in reduced update mode", "gauge",
+            self.bot_ai_reduced_mode.load(Ordering::Relaxed));
+        metric!("orbit_royale_bot_ai_dormant_mode", "Bots in dormant mode (far from humans)", "gauge",
+            self.bot_ai_dormant_mode.load(Ordering::Relaxed));
+
+        // LOD scale (stored as x100, display as float)
+        let lod_scale = self.bot_ai_lod_scale.load(Ordering::Relaxed);
+        output.push_str(&format!(
+            "# HELP orbit_royale_bot_ai_lod_scale Adaptive LOD scale factor (1.0 = normal, <1.0 = aggressive dormancy)\n# TYPE orbit_royale_bot_ai_lod_scale gauge\norbit_royale_bot_ai_lod_scale {:.2}\n",
+            lod_scale as f32 / 100.0
+        ));
+
+        metric!("orbit_royale_bot_ai_health_status", "Bot AI health status (0=Excellent, 4=Catastrophic)", "gauge",
+            self.bot_ai_health_status.load(Ordering::Relaxed));
+
+        // Human-readable health status label
+        let health_name = match self.bot_ai_health_status.load(Ordering::Relaxed) {
+            0 => "excellent",
+            1 => "good",
+            2 => "warning",
+            3 => "critical",
+            _ => "catastrophic",
+        };
+        output.push_str(&format!(
+            "# HELP orbit_royale_bot_ai_health_state Human-readable bot AI health state\n# TYPE orbit_royale_bot_ai_health_state gauge\norbit_royale_bot_ai_health_state{{state=\"{}\"}} 1\n",
+            health_name
+        ));
 
         output
     }

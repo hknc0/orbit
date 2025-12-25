@@ -646,7 +646,30 @@ impl GameSession {
                     / self.simulation_config.cycle_duration_secs * 100.0) as u64;
                 metrics.simulation_cycle_progress.store(cycle_progress, Ordering::Relaxed);
             }
+
+            // Bot AI SoA metrics
+            let ai_stats = self.game_loop.ai_stats();
+            metrics.bot_ai_total.store(ai_stats.total_bots as u64, Ordering::Relaxed);
+            metrics.bot_ai_active.store(ai_stats.active_this_tick as u64, Ordering::Relaxed);
+            metrics.bot_ai_full_mode.store(ai_stats.full_mode as u64, Ordering::Relaxed);
+            metrics.bot_ai_reduced_mode.store(ai_stats.reduced_mode as u64, Ordering::Relaxed);
+            metrics.bot_ai_dormant_mode.store(ai_stats.dormant_mode as u64, Ordering::Relaxed);
+            if let Some(adaptive) = &ai_stats.adaptive {
+                metrics.bot_ai_lod_scale.store((adaptive.lod_scale * 100.0) as u64, Ordering::Relaxed);
+                metrics.bot_ai_health_status.store(adaptive.health_status as u64, Ordering::Relaxed);
+            }
         }
+
+        // Provide tick metrics to AI manager for adaptive dormancy
+        let tick_us = tick_start.elapsed().as_micros() as u64;
+        let perf_status = match self.performance.status() {
+            PerformanceStatus::Excellent => 0,
+            PerformanceStatus::Good => 1,
+            PerformanceStatus::Warning => 2,
+            PerformanceStatus::Critical => 3,
+            PerformanceStatus::Catastrophic => 4,
+        };
+        self.game_loop.provide_tick_metrics(tick_us, perf_status);
 
         events
     }
