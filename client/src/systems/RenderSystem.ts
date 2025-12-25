@@ -92,8 +92,36 @@ export class RenderSystem {
   private readonly SCALE_HISTORY_SIZE = 60; // ~1 second at 60fps
   private scaleDirection: 'growing' | 'shrinking' | 'stable' = 'stable';
 
+  // Performance: Cache parsed RGB values to avoid repeated hex parsing
+  private colorCache: Map<string, { r: number; g: number; b: number }> = new Map();
+
+  // Performance: Pre-computed sin/cos for 8-particle birth effect (fixed angles)
+  private static readonly PARTICLE_ANGLES = (() => {
+    const angles: { cos: number; sin: number }[] = [];
+    for (let i = 0; i < 8; i++) {
+      const angle = (i / 8) * Math.PI * 2;
+      angles.push({ cos: Math.cos(angle), sin: Math.sin(angle) });
+    }
+    return angles;
+  })();
+
   constructor(ctx: CanvasRenderingContext2D) {
     this.ctx = ctx;
+  }
+
+  // Performance: Get cached RGB values, parse only once per color
+  private getRGB(color: string): { r: number; g: number; b: number } {
+    let rgb = this.colorCache.get(color);
+    if (!rgb) {
+      const hex = color.replace('#', '');
+      rgb = {
+        r: parseInt(hex.substring(0, 2), 16),
+        g: parseInt(hex.substring(2, 4), 16),
+        b: parseInt(hex.substring(4, 6), 16),
+      };
+      this.colorCache.set(color, rgb);
+    }
+    return rgb;
   }
 
   private updatePlayerTrails(world: World): void {
@@ -173,15 +201,21 @@ export class RenderSystem {
       const color = world.getPlayerColor(player.colorIndex);
       const currentRadius = world.massToRadius(player.mass);
 
+      // Performance: Set fillStyle once per player, use globalAlpha for transparency
+      ctx.fillStyle = color;
+
       // Size-scaled trail lifetime for consistent fading
       const trailLifetime = MOTION_FX.TRAIL_LIFETIME_BASE * (1 + (currentRadius / 20 - 1) * MOTION_FX.TRAIL_LIFETIME_SCALE);
+      const invTrailLen = 1 / trail.length; // Pre-compute division
 
       // Render trail points from oldest to newest for proper layering
       for (let i = 0; i < trail.length; i++) {
         const point = trail[i];
         const age = now - point.timestamp;
-        const lifeRatio = Math.max(0, 1 - age / trailLifetime);
-        const indexRatio = (i + 1) / trail.length; // +1 so first point isn't invisible
+        const lifeRatio = 1 - age / trailLifetime;
+        if (lifeRatio <= 0) continue; // Early exit for expired points
+
+        const indexRatio = (i + 1) * invTrailLen; // +1 so first point isn't invisible
 
         // Smooth alpha: combines age fade with position fade
         const alpha = lifeRatio * indexRatio * MOTION_FX.TRAIL_MAX_ALPHA;
@@ -191,23 +225,23 @@ export class RenderSystem {
         const pointRadius = point.radius * 0.7 + currentRadius * 0.3;
 
         // Trail size grows from start to end of trail
-        const startR = MOTION_FX.TRAIL_START_RADIUS_RATIO;
-        const endR = MOTION_FX.TRAIL_END_RADIUS_RATIO;
-        const trailRadius = pointRadius * (startR + indexRatio * (endR - startR));
+        const trailRadius = pointRadius * (MOTION_FX.TRAIL_START_RADIUS_RATIO + indexRatio * (MOTION_FX.TRAIL_END_RADIUS_RATIO - MOTION_FX.TRAIL_START_RADIUS_RATIO));
 
-        // Outer glow (subtle, larger)
-        ctx.fillStyle = this.colorWithAlpha(color, alpha * 0.3);
+        // Outer glow (subtle, larger) - use globalAlpha instead of colorWithAlpha
+        ctx.globalAlpha = alpha * 0.3;
         ctx.beginPath();
         ctx.arc(point.x, point.y, trailRadius * 1.4, 0, Math.PI * 2);
         ctx.fill();
 
-        // Core trail point
-        ctx.fillStyle = this.colorWithAlpha(color, alpha);
+        // Core trail point - use globalAlpha (fillStyle already set)
+        ctx.globalAlpha = alpha;
         ctx.beginPath();
-        ctx.arc(point.x, point.y, Math.max(trailRadius, 1.5), 0, Math.PI * 2);
+        ctx.arc(point.x, point.y, trailRadius > 1.5 ? trailRadius : 1.5, 0, Math.PI * 2);
         ctx.fill();
       }
     }
+    // Reset globalAlpha after trail rendering
+    ctx.globalAlpha = 1.0;
   }
 
   render(world: World, state: RenderState): void {
@@ -893,21 +927,22 @@ export class RenderSystem {
       this.ctx.stroke();
     }
 
-    // Particle burst effect (small dots radiating outward)
-    const numParticles = 8;
-    for (let i = 0; i < numParticles; i++) {
-      const angle = (i / numParticles) * Math.PI * 2;
-      const particleDist = radius * (0.8 + eased * 2);
-      const particleX = position.x + Math.cos(angle) * particleDist;
-      const particleY = position.y + Math.sin(angle) * particleDist;
-      const particleSize = (3 + radius * 0.05) * fadeOut;
+    // Particle burst effect - use pre-computed sin/cos and globalAlpha
+    const particleDist = radius * (0.8 + eased * 2);
+    const particleSize = (3 + radius * 0.05) * fadeOut;
 
-      if (particleSize > 0.5) {
-        this.ctx.fillStyle = this.colorWithAlpha(color, fadeOut * 0.7);
+    if (particleSize > 0.5) {
+      this.ctx.fillStyle = color;
+      this.ctx.globalAlpha = fadeOut * 0.7;
+      const angles = RenderSystem.PARTICLE_ANGLES;
+      for (let i = 0; i < 8; i++) {
+        const particleX = position.x + angles[i].cos * particleDist;
+        const particleY = position.y + angles[i].sin * particleDist;
         this.ctx.beginPath();
         this.ctx.arc(particleX, particleY, particleSize, 0, Math.PI * 2);
         this.ctx.fill();
       }
+      this.ctx.globalAlpha = 1.0;
     }
   }
 
@@ -2306,18 +2341,15 @@ export class RenderSystem {
   }
 
   private colorWithAlpha(color: string, alpha: number): string {
-    const hex = color.replace('#', '');
-    const r = parseInt(hex.substring(0, 2), 16);
-    const g = parseInt(hex.substring(2, 4), 16);
-    const b = parseInt(hex.substring(4, 6), 16);
-    return `rgba(${r}, ${g}, ${b}, ${alpha})`;
+    const rgb = this.getRGB(color);
+    return `rgba(${rgb.r}, ${rgb.g}, ${rgb.b}, ${alpha})`;
   }
 
   private lightenColor(color: string, percent: number): string {
-    const hex = color.replace('#', '');
-    const r = Math.min(255, parseInt(hex.substring(0, 2), 16) + percent);
-    const g = Math.min(255, parseInt(hex.substring(2, 4), 16) + percent);
-    const b = Math.min(255, parseInt(hex.substring(4, 6), 16) + percent);
+    const rgb = this.getRGB(color);
+    const r = Math.min(255, rgb.r + percent);
+    const g = Math.min(255, rgb.g + percent);
+    const b = Math.min(255, rgb.b + percent);
     return `rgb(${r}, ${g}, ${b})`;
   }
 
