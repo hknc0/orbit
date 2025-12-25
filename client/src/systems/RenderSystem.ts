@@ -552,35 +552,35 @@ export class RenderSystem {
       ctx.arc(x, y, glowRadius, 0, Math.PI * 2);
       ctx.fill();
 
-      // 2. Gravitationally lensed ring (wraps over top and bottom)
-      // This creates the iconic "eye" shape - the disk bent by gravity
-      const lensedRingOuter = eh * 3.2;
-      const lensedRingInner = eh * 1.12;
+      // 2. Gravitational lensing halo - disk light bent around the black hole
+      // NOT a tall vertical structure - just a circular glow hugging the event horizon
+      const haloOuter = eh * 1.8;
+      const haloInner = eh * 1.08;
 
-      // Draw the lensed ring as a vertical ellipse (taller than wide)
+      // Nearly circular halo that wraps around the black hole
       ctx.save();
       ctx.translate(x, y);
-      ctx.scale(0.8, 1.0); // Slightly squashed horizontally
 
-      const lensGrad = ctx.createRadialGradient(0, 0, lensedRingInner, 0, 0, lensedRingOuter);
-      lensGrad.addColorStop(0, 'rgba(255, 255, 245, 0.98)');
-      lensGrad.addColorStop(0.2, 'rgba(255, 245, 220, 0.85)');
-      lensGrad.addColorStop(0.4, 'rgba(255, 210, 150, 0.6)');
-      lensGrad.addColorStop(0.65, 'rgba(255, 160, 80, 0.3)');
-      lensGrad.addColorStop(1, 'rgba(200, 100, 40, 0)');
-      ctx.fillStyle = lensGrad;
+      // Bright inner halo (the lensed light hugging the black hole)
+      const haloGrad = ctx.createRadialGradient(0, 0, haloInner, 0, 0, haloOuter);
+      haloGrad.addColorStop(0, 'rgba(255, 255, 250, 0.95)');
+      haloGrad.addColorStop(0.25, 'rgba(255, 250, 235, 0.8)');
+      haloGrad.addColorStop(0.5, 'rgba(255, 230, 190, 0.5)');
+      haloGrad.addColorStop(0.75, 'rgba(255, 190, 130, 0.2)');
+      haloGrad.addColorStop(1, 'rgba(220, 140, 80, 0)');
+      ctx.fillStyle = haloGrad;
       ctx.beginPath();
-      ctx.arc(0, 0, lensedRingOuter, 0, Math.PI * 2);
-      ctx.arc(0, 0, lensedRingInner, 0, Math.PI * 2, true);
+      ctx.arc(0, 0, haloOuter, 0, Math.PI * 2);
+      ctx.arc(0, 0, haloInner, 0, Math.PI * 2, true);
       ctx.fill();
 
-      // Soft inner glow only (no hard stroke)
+      // Soft bloom
       ctx.globalCompositeOperation = 'lighter';
-      ctx.shadowBlur = 30;
-      ctx.shadowColor = 'rgba(255, 250, 230, 0.5)';
-      ctx.fillStyle = 'rgba(255, 255, 245, 0.2)';
+      ctx.shadowBlur = 15;
+      ctx.shadowColor = 'rgba(255, 250, 235, 0.5)';
+      ctx.fillStyle = 'rgba(255, 255, 248, 0.15)';
       ctx.beginPath();
-      ctx.arc(0, 0, lensedRingInner * 1.3, 0, Math.PI * 2);
+      ctx.arc(0, 0, haloInner * 1.1, 0, Math.PI * 2);
       ctx.fill();
       ctx.shadowBlur = 0;
       ctx.globalCompositeOperation = 'source-over';
