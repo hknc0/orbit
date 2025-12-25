@@ -46,6 +46,7 @@ interface DeathEffect {
   position: { x: number; y: number };
   timestamp: number;
   color: string;
+  radius: number;
 }
 
 // Collision effect data
@@ -115,7 +116,7 @@ export class World {
   private destroyedWellIds: Set<number> = new Set();
 
   // Previous alive states to detect deaths
-  private lastAliveStates: Map<PlayerId, { alive: boolean; position: { x: number; y: number }; color: string }> = new Map();
+  private lastAliveStates: Map<PlayerId, { alive: boolean; position: { x: number; y: number }; color: string; mass: number }> = new Map();
 
   // Session stats tracking
   private sessionStats = {
@@ -163,6 +164,7 @@ export class World {
           position: { x: lastState.position.x, y: lastState.position.y },
           timestamp: now,
           color: lastState.color,
+          radius: this.massToRadius(lastState.mass),
         });
 
         // Reset local player kill streak on death and track best time alive
@@ -186,6 +188,7 @@ export class World {
         alive: player.alive,
         position: { x: player.position.x, y: player.position.y },
         color: this.getPlayerColor(player.colorIndex),
+        mass: player.mass,
       });
 
       // Track best mass for local player
@@ -402,12 +405,13 @@ export class World {
   }
 
   // Get active death effects for rendering
-  getDeathEffects(): Array<{ position: { x: number; y: number }; progress: number; color: string }> {
+  getDeathEffects(): Array<{ position: { x: number; y: number }; progress: number; color: string; radius: number }> {
     const now = Date.now();
     return this.deathEffects.map((effect) => ({
       position: effect.position,
       progress: 1 - (now - effect.timestamp) / DEATH_EFFECT_DURATION,
       color: effect.color,
+      radius: effect.radius,
     }));
   }
 

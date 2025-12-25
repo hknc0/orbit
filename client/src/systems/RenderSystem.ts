@@ -202,7 +202,6 @@ export class RenderSystem {
 
       const color = world.getPlayerColor(player.colorIndex);
       const currentRadius = world.massToRadius(player.mass);
-      const isLocal = player.id === world.localPlayerId;
 
       // Speed-based trail visibility - fade out when moving slowly to avoid flickering circles
       const speed = player.velocity.length();
@@ -210,9 +209,9 @@ export class RenderSystem {
       const speedFade = speed >= MOTION_FX.TRAIL_FULL_SPEED ? 1.0 :
         (speed - MOTION_FX.TRAIL_MIN_SPEED) / (MOTION_FX.TRAIL_FULL_SPEED - MOTION_FX.TRAIL_MIN_SPEED);
 
-      // For local player (hollow), calculate min distance to avoid trail showing through center
-      // Trail points closer than this will be skipped
-      const minDistFromPlayer = isLocal ? currentRadius * 1.5 : 0;
+      // All players now have transparent fill, so skip trail points too close to player
+      // to avoid flickering through the hollow center
+      const minDistFromPlayer = currentRadius * 1.5;
       const minDistSq = minDistFromPlayer * minDistFromPlayer;
       const playerX = player.position.x;
       const playerY = player.position.y;
@@ -228,12 +227,10 @@ export class RenderSystem {
       for (let i = 0; i < trail.length; i++) {
         const point = trail[i];
 
-        // Skip trail points too close to local player (avoids flickering through hollow center)
-        if (isLocal) {
-          const dx = point.x - playerX;
-          const dy = point.y - playerY;
-          if (dx * dx + dy * dy < minDistSq) continue;
-        }
+        // Skip trail points too close to player (avoids flickering through hollow center)
+        const dx = point.x - playerX;
+        const dy = point.y - playerY;
+        if (dx * dx + dy * dy < minDistSq) continue;
 
         const age = now - point.timestamp;
         const lifeRatio = 1 - age / trailLifetime;
@@ -807,44 +804,31 @@ export class RenderSystem {
         this.ctx.setLineDash([]);
       }
 
-      // Player body - local player is hollow (outline only) so map is visible
-      if (isLocal) {
-        // Local player: hollow circle with player color outline
-        this.ctx.strokeStyle = color;
-        this.ctx.lineWidth = 3;
-        this.ctx.beginPath();
-        this.ctx.arc(player.position.x, player.position.y, radius, 0, Math.PI * 2);
-        this.ctx.stroke();
+      // Player body - semi-transparent fill with solid outline (same style for all)
+      // Semi-transparent fill
+      this.ctx.fillStyle = this.colorWithAlpha(color, 0.15);
+      this.ctx.beginPath();
+      this.ctx.arc(player.position.x, player.position.y, radius, 0, Math.PI * 2);
+      this.ctx.fill();
 
-        // Outer glow ring in player color
-        this.ctx.strokeStyle = this.colorWithAlpha(color, 0.4);
-        this.ctx.lineWidth = 2;
-        this.ctx.beginPath();
-        this.ctx.arc(player.position.x, player.position.y, radius + 4, 0, Math.PI * 2);
-        this.ctx.stroke();
-      } else {
-        // Other players: filled gradient
-        const gradient = this.ctx.createRadialGradient(
-          player.position.x - radius * 0.3,
-          player.position.y - radius * 0.3,
-          0,
-          player.position.x,
-          player.position.y,
-          radius
-        );
-        gradient.addColorStop(0, this.lightenColor(color, 30));
-        gradient.addColorStop(1, color);
+      // Solid color outline
+      this.ctx.strokeStyle = color;
+      this.ctx.lineWidth = 3;
+      this.ctx.beginPath();
+      this.ctx.arc(player.position.x, player.position.y, radius, 0, Math.PI * 2);
+      this.ctx.stroke();
 
-        this.ctx.fillStyle = gradient;
-        this.ctx.beginPath();
-        this.ctx.arc(player.position.x, player.position.y, radius, 0, Math.PI * 2);
-        this.ctx.fill();
-      }
+      // Outer glow ring
+      this.ctx.strokeStyle = this.colorWithAlpha(color, 0.4);
+      this.ctx.lineWidth = 2;
+      this.ctx.beginPath();
+      this.ctx.arc(player.position.x, player.position.y, radius + 4, 0, Math.PI * 2);
+      this.ctx.stroke();
 
       // Direction indicator
       const dirX = Math.cos(player.rotation);
       const dirY = Math.sin(player.rotation);
-      this.ctx.strokeStyle = isLocal ? color : 'rgba(255, 255, 255, 0.7)';
+      this.ctx.strokeStyle = color;
       this.ctx.lineWidth = 2;
       this.ctx.beginPath();
       this.ctx.moveTo(player.position.x, player.position.y);
@@ -972,62 +956,99 @@ export class RenderSystem {
 
   private renderDeathEffects(world: World): void {
     const effects = world.getDeathEffects();
+    if (effects.length === 0) return;
+
+    const ctx = this.ctx;
 
     for (const effect of effects) {
-      const { position, color } = effect;
-      // Guard against negative/zero progress
+      const { position, color, radius } = effect;
       const progress = Math.max(0.001, effect.progress);
       if (progress <= 0) continue;
 
-      // Multiple expanding rings
-      const numRings = 3;
-      for (let i = 0; i < numRings; i++) {
-        const ringProgress = Math.max(0, progress - i * 0.15);
-        if (ringProgress <= 0) continue;
+      const rgb = this.getRGB(color);
+      const invProgress = 1 - progress;
 
-        const ringRadius = Math.max(1, 10 + (1 - ringProgress) * (60 + i * 20));
-        const alpha = ringProgress * 0.7;
+      // Scale factor based on player size (baseline radius ~20)
+      const scale = Math.max(0.5, radius / 20);
 
-        this.ctx.strokeStyle = this.colorWithAlpha(color, alpha);
-        this.ctx.lineWidth = Math.max(0.5, 4 * ringProgress);
-        this.ctx.beginPath();
-        this.ctx.arc(position.x, position.y, ringRadius, 0, Math.PI * 2);
-        this.ctx.stroke();
+      // Cubic ease for explosive initial burst
+      const easeOut = 1 - invProgress * invProgress * invProgress;
+      const easeIn = progress * progress;
+
+      // === Quick bright flash (first 20%) ===
+      if (progress > 0.8) {
+        const flashT = (progress - 0.8) / 0.2;
+        ctx.globalAlpha = flashT * 0.7;
+        ctx.fillStyle = '#ffffff';
+        ctx.beginPath();
+        ctx.arc(position.x, position.y, radius * flashT, 0, Math.PI * 2);
+        ctx.fill();
       }
 
-      // Central flash
-      if (progress > 0.5) {
-        const flashProgress = (progress - 0.5) * 2;
-        const flashRadius = Math.max(1, 30 * flashProgress);
+      // === Expanding shockwave ring ===
+      const ringRadius = radius * 0.5 + easeOut * radius * 2.5;
+      const heat = progress * 0.4;
+      const wr = Math.round(rgb.r + (255 - rgb.r) * heat);
+      const wg = Math.round(rgb.g + (255 - rgb.g) * heat);
+      const wb = Math.round(rgb.b + (255 - rgb.b) * heat);
+      ctx.globalAlpha = easeIn * 0.3;
+      ctx.strokeStyle = `rgb(${wr}, ${wg}, ${wb})`;
+      ctx.lineWidth = Math.max(2, 3 * progress * scale);
+      ctx.beginPath();
+      ctx.arc(position.x, position.y, ringRadius, 0, Math.PI * 2);
+      ctx.stroke();
 
-        const flashGradient = this.ctx.createRadialGradient(
-          position.x, position.y, 0,
-          position.x, position.y, flashRadius
-        );
-        flashGradient.addColorStop(0, `rgba(255, 255, 255, ${flashProgress * 0.8})`);
-        flashGradient.addColorStop(0.5, this.colorWithAlpha(color, flashProgress * 0.5));
-        flashGradient.addColorStop(1, 'rgba(255, 255, 255, 0)');
+      // Particle color (white-hot → player color)
+      const particleHeat = progress * 0.3;
+      const pr = Math.round(rgb.r + (255 - rgb.r) * particleHeat);
+      const pg = Math.round(rgb.g + (255 - rgb.g) * particleHeat);
+      const pb = Math.round(rgb.b + (255 - rgb.b) * particleHeat);
+      ctx.strokeStyle = `rgb(${pr}, ${pg}, ${pb})`;
+      ctx.lineCap = 'round';
 
-        this.ctx.fillStyle = flashGradient;
-        this.ctx.beginPath();
-        this.ctx.arc(position.x, position.y, flashRadius, 0, Math.PI * 2);
-        this.ctx.fill();
+      // === Primary debris (4 larger, slower, motion-stretched) ===
+      ctx.lineWidth = Math.max(3, 5 * progress * scale);
+      ctx.globalAlpha = easeIn * 0.45;
+      ctx.beginPath();
+
+      for (let i = 0; i < 4; i++) {
+        const { cos, sin } = RenderSystem.PARTICLE_ANGLES[i * 2];
+        const dist = radius * 0.4 + easeOut * radius * 1.8;
+        const px = position.x + cos * dist;
+        const py = position.y + sin * dist;
+        // Motion stretch: trails behind, shrinks as particle slows
+        const stretch = 5 * progress * scale;
+        ctx.moveTo(px - cos * stretch, py - sin * stretch);
+        ctx.lineTo(px, py);
       }
+      ctx.stroke();
 
-      // Particle burst (simple dots flying outward)
-      const numParticles = 8;
-      for (let i = 0; i < numParticles; i++) {
-        const angle = (i / numParticles) * Math.PI * 2;
-        const distance = (1 - progress) * 50 + 10;
-        const particleX = position.x + Math.cos(angle) * distance;
-        const particleY = position.y + Math.sin(angle) * distance;
-        const particleSize = Math.max(0.5, 3 * progress);
+      // === Secondary debris (4 smaller, faster, further) ===
+      ctx.lineWidth = Math.max(2, 3.5 * progress * scale);
+      ctx.globalAlpha = easeIn * 0.3;
+      ctx.beginPath();
 
-        this.ctx.fillStyle = this.colorWithAlpha(color, progress * 0.8);
-        this.ctx.beginPath();
-        this.ctx.arc(particleX, particleY, particleSize, 0, Math.PI * 2);
-        this.ctx.fill();
+      for (let i = 0; i < 4; i++) {
+        const { cos, sin } = RenderSystem.PARTICLE_ANGLES[i * 2 + 1];
+        const dist = radius * 0.6 + easeOut * radius * 2.8;
+        const px = position.x + cos * dist;
+        const py = position.y + sin * dist;
+        const stretch = 4 * progress * scale;
+        ctx.moveTo(px - cos * stretch, py - sin * stretch);
+        ctx.lineTo(px, py);
       }
+      ctx.stroke();
+
+      ctx.lineCap = 'butt';
+
+      // === Inner hot core ===
+      ctx.globalAlpha = easeIn * 0.2;
+      ctx.fillStyle = color;
+      ctx.beginPath();
+      ctx.arc(position.x, position.y, radius * 0.2 + easeOut * radius * 0.5, 0, Math.PI * 2);
+      ctx.fill();
+
+      ctx.globalAlpha = 1;
     }
   }
 
@@ -1253,47 +1274,44 @@ export class RenderSystem {
     const perpX = -dirY;
     const perpY = dirX;
 
-    // Helper to draw curved flame shape (smoother than triangles for large players)
-    const drawFlame = (w: number, len: number) => {
-      const baseX1 = flameX + perpX * w;
-      const baseY1 = flameY + perpY * w;
-      const baseX2 = flameX - perpX * w;
-      const baseY2 = flameY - perpY * w;
-      const tipX = flameX + dirX * len;
-      const tipY = flameY + dirY * len;
-      // Control points for curves - bulge outward for organic shape
-      const bulgeFactor = 0.4;
-      const ctrl1X = flameX + dirX * len * 0.5 + perpX * w * bulgeFactor;
-      const ctrl1Y = flameY + dirY * len * 0.5 + perpY * w * bulgeFactor;
-      const ctrl2X = flameX + dirX * len * 0.5 - perpX * w * bulgeFactor;
-      const ctrl2Y = flameY + dirY * len * 0.5 - perpY * w * bulgeFactor;
-
-      ctx.beginPath();
-      ctx.moveTo(baseX1, baseY1);
-      ctx.quadraticCurveTo(ctrl1X, ctrl1Y, tipX, tipY);
-      ctx.quadraticCurveTo(ctrl2X, ctrl2Y, baseX2, baseY2);
-      ctx.closePath();
-      ctx.fill();
-    };
-
     // === LAYER 1: Outer glow (soft, pulsing) ===
     const glowAlpha = 0.22 + Math.sin(time * MOTION_FX.FLICKER_SPEED_SLOW) * 0.08;
     ctx.fillStyle = `rgba(255, 100, 30, ${glowAlpha})`;
-    drawFlame(flameWidth * 1.5, flameLen * 1.15);
+    ctx.beginPath();
+    ctx.moveTo(flameX + perpX * flameWidth * 1.5, flameY + perpY * flameWidth * 1.5);
+    ctx.lineTo(flameX - perpX * flameWidth * 1.5, flameY - perpY * flameWidth * 1.5);
+    ctx.lineTo(flameX + dirX * flameLen * 1.15, flameY + dirY * flameLen * 1.15);
+    ctx.closePath();
+    ctx.fill();
 
     // === LAYER 2: Main outer flame (orange-red) ===
     ctx.fillStyle = 'rgba(255, 120, 40, 0.88)';
-    drawFlame(flameWidth, flameLen);
+    ctx.beginPath();
+    ctx.moveTo(flameX + perpX * flameWidth, flameY + perpY * flameWidth);
+    ctx.lineTo(flameX - perpX * flameWidth, flameY - perpY * flameWidth);
+    ctx.lineTo(flameX + dirX * flameLen, flameY + dirY * flameLen);
+    ctx.closePath();
+    ctx.fill();
 
     // === LAYER 3: Middle flame (orange-yellow, independent flicker) ===
     const midFlicker = 0.92 + Math.sin(time * MOTION_FX.FLICKER_SPEED_FAST + 1) * 0.08;
     ctx.fillStyle = 'rgba(255, 180, 60, 0.92)';
-    drawFlame(flameWidth * 0.62, flameLen * 0.72 * midFlicker);
+    ctx.beginPath();
+    ctx.moveTo(flameX + perpX * flameWidth * 0.62, flameY + perpY * flameWidth * 0.62);
+    ctx.lineTo(flameX - perpX * flameWidth * 0.62, flameY - perpY * flameWidth * 0.62);
+    ctx.lineTo(flameX + dirX * flameLen * 0.72 * midFlicker, flameY + dirY * flameLen * 0.72 * midFlicker);
+    ctx.closePath();
+    ctx.fill();
 
     // === LAYER 4: Inner core (bright yellow-white, fastest flicker) ===
     const coreFlicker = 0.85 + Math.sin(time * 0.08 + 2) * 0.15;
     ctx.fillStyle = 'rgba(255, 245, 190, 1)';
-    drawFlame(flameWidth * 0.28, flameLen * 0.42 * coreFlicker);
+    ctx.beginPath();
+    ctx.moveTo(flameX + perpX * flameWidth * 0.28, flameY + perpY * flameWidth * 0.28);
+    ctx.lineTo(flameX - perpX * flameWidth * 0.28, flameY - perpY * flameWidth * 0.28);
+    ctx.lineTo(flameX + dirX * flameLen * 0.42 * coreFlicker, flameY + dirY * flameLen * 0.42 * coreFlicker);
+    ctx.closePath();
+    ctx.fill();
 
     // === SPARKS: Size-scaled particles at higher speeds ===
     if (speed > MOTION_FX.FLAME_SPARK_THRESHOLD) {
