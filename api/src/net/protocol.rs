@@ -224,32 +224,61 @@ impl GameSnapshot {
         }
     }
 
-    /// Calculate player density grid (16x16) for minimap heatmap
+    /// Calculate mass density grid (16x16) for minimap heatmap
+    /// Includes: player mass + gravity well influence (1/r falloff)
     fn calculate_density_grid(state: &GameState) -> Vec<u8> {
-        let mut grid = vec![0u8; DENSITY_GRID_SIZE * DENSITY_GRID_SIZE];
-        // Use current_safe_radius() to match minimap scaling on client
+        let mut grid = vec![0.0f32; DENSITY_GRID_SIZE * DENSITY_GRID_SIZE];
         let arena_radius = state.arena.current_safe_radius();
         let cell_size = (arena_radius * 2.0) / DENSITY_GRID_SIZE as f32;
+        let inv_cell_size = 1.0 / cell_size; // Multiply instead of divide
 
+        // 1. Add player MASS to cells (O(players) - fast)
         for player in state.players.values() {
             if !player.alive {
                 continue;
             }
 
-            // Convert position to grid cell (centered at origin)
-            let grid_x = ((player.position.x + arena_radius) / cell_size) as usize;
-            let grid_y = ((player.position.y + arena_radius) / cell_size) as usize;
+            let gx = ((player.position.x + arena_radius) * inv_cell_size) as usize;
+            let gy = ((player.position.y + arena_radius) * inv_cell_size) as usize;
 
-            // Clamp to grid bounds
-            let grid_x = grid_x.min(DENSITY_GRID_SIZE - 1);
-            let grid_y = grid_y.min(DENSITY_GRID_SIZE - 1);
-
-            let idx = grid_y * DENSITY_GRID_SIZE + grid_x;
-            // Saturating add to prevent overflow
-            grid[idx] = grid[idx].saturating_add(1);
+            if gx < DENSITY_GRID_SIZE && gy < DENSITY_GRID_SIZE {
+                grid[gy * DENSITY_GRID_SIZE + gx] += player.mass;
+            }
         }
 
-        grid
+        // 2. Add gravity well influence (O(cells × wells) = ~4000 ops)
+        for gy in 0..DENSITY_GRID_SIZE {
+            let cell_y = (gy as f32 + 0.5) * cell_size - arena_radius;
+            for gx in 0..DENSITY_GRID_SIZE {
+                let cell_x = (gx as f32 + 0.5) * cell_size - arena_radius;
+                let idx = gy * DENSITY_GRID_SIZE + gx;
+
+                for well in state.arena.gravity_wells.values() {
+                    let dx = well.position.x - cell_x;
+                    let dy = well.position.y - cell_y;
+                    let dist_sq = dx * dx + dy * dy;
+                    let min_dist = well.core_radius * 2.0;
+                    let min_dist_sq = min_dist * min_dist;
+
+                    // 1/r falloff matching physics, clamped at core
+                    let influence = if dist_sq < min_dist_sq {
+                        well.mass / min_dist
+                    } else {
+                        well.mass / dist_sq.sqrt()
+                    };
+
+                    grid[idx] += influence;
+                }
+            }
+        }
+
+        // 3. Normalize to u8 (0-255)
+        let max_density = grid.iter().cloned().fold(0.0f32, f32::max).max(1.0);
+        let scale = 255.0 / max_density;
+
+        grid.iter()
+            .map(|&d| (d * scale).min(255.0) as u8)
+            .collect()
     }
 
     /// Calculate notable players (high mass) for minimap radar

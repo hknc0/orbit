@@ -1912,7 +1912,37 @@ export class RenderSystem {
       this.ctx.arc(centerX, centerY, minimapSize / 2 - 2, 0, Math.PI * 2);
       this.ctx.clip();
 
-      // Render with radial gradients for smoother appearance
+      // Subtle density colormap: muted blue → teal → warm glow
+      const getDensityColor = (t: number): [number, number, number] => {
+        // Muted 3-stop gradient for subtle background appearance
+        if (t < 0.4) {
+          // Dark blue-teal (low density - barely visible)
+          const s = t / 0.4;
+          return [
+            Math.floor(20 + 20 * s),      // 20 → 40
+            Math.floor(50 + 60 * s),      // 50 → 110
+            Math.floor(80 + 40 * s)       // 80 → 120
+          ];
+        } else if (t < 0.7) {
+          // Teal to muted amber (medium density)
+          const s = (t - 0.4) / 0.3;
+          return [
+            Math.floor(40 + 80 * s),      // 40 → 120
+            Math.floor(110 + 30 * s),     // 110 → 140
+            Math.floor(120 - 60 * s)      // 120 → 60
+          ];
+        } else {
+          // Muted amber to warm orange (high density)
+          const s = (t - 0.7) / 0.3;
+          return [
+            Math.floor(120 + 60 * s),     // 120 → 180
+            Math.floor(140 - 20 * s),     // 140 → 120
+            Math.floor(60 - 20 * s)       // 60 → 40
+          ];
+        }
+      };
+
+      // Render with soft gradients as subtle background
       for (let gy = 0; gy < GRID_SIZE; gy++) {
         for (let gx = 0; gx < GRID_SIZE; gx++) {
           const idx = gy * GRID_SIZE + gx;
@@ -1923,36 +1953,24 @@ export class RenderSystem {
             const cellCenterX = centerX - gridPixelSize / 2 + (gx + 0.5) * cellPixelSize;
             const cellCenterY = centerY - gridPixelSize / 2 + (gy + 0.5) * cellPixelSize;
 
-            // Intensity with log scale for better distribution
+            // Intensity with strong gamma for subtle low-end
             const rawIntensity = Math.min(density / maxDensity, 1);
-            const intensity = Math.pow(rawIntensity, 0.6); // Gamma for visibility
+            const intensity = Math.pow(rawIntensity, 0.7); // Gentler curve
 
-            // Hot color scheme: low=blue, mid=cyan, high=yellow/orange
-            let r: number, g: number, b: number;
-            if (intensity < 0.5) {
-              // Blue to cyan
-              const t = intensity * 2;
-              r = Math.floor(30 * t);
-              g = Math.floor(100 + 155 * t);
-              b = Math.floor(200 - 50 * t);
-            } else {
-              // Cyan to orange/yellow
-              const t = (intensity - 0.5) * 2;
-              r = Math.floor(30 + 225 * t);
-              g = Math.floor(255 - 55 * t);
-              b = Math.floor(150 - 130 * t);
-            }
+            const [r, g, b] = getDensityColor(intensity);
 
-            // Radial gradient for soft blob effect
-            const blobRadius = cellPixelSize * 1.2;
+            // Soft blob with gentle overlap
+            const blobRadius = cellPixelSize * 1.1;
             const gradient = this.ctx.createRadialGradient(
               cellCenterX, cellCenterY, 0,
               cellCenterX, cellCenterY, blobRadius
             );
 
-            const alpha = 0.15 + intensity * 0.4;
-            gradient.addColorStop(0, `rgba(${r}, ${g}, ${b}, ${alpha})`);
-            gradient.addColorStop(0.6, `rgba(${r}, ${g}, ${b}, ${alpha * 0.5})`);
+            // Very subtle alpha - background hint only
+            const baseAlpha = 0.08 + intensity * 0.17; // 0.08-0.25 range
+            gradient.addColorStop(0, `rgba(${r}, ${g}, ${b}, ${baseAlpha})`);
+            gradient.addColorStop(0.4, `rgba(${r}, ${g}, ${b}, ${baseAlpha * 0.6})`);
+            gradient.addColorStop(0.7, `rgba(${r}, ${g}, ${b}, ${baseAlpha * 0.25})`);
             gradient.addColorStop(1, `rgba(${r}, ${g}, ${b}, 0)`);
 
             this.ctx.fillStyle = gradient;
@@ -2089,29 +2107,36 @@ export class RenderSystem {
       this.ctx.stroke();
     }
 
-    // 3. Other players (nearby/visible) - only show larger players to reduce clutter
-    const MIN_MASS_FOR_MINIMAP = 120; // Only show players above this mass
+    // 3. Other players (nearby/visible) - dynamic filtering based on player count
+    const totalAlive = world.getAlivePlayerCount();
+    // Smooth scaling: 100 at 0 players → ~250 at 200+ players
+    // Formula: base + (playerCount / scale)^curve
+    const massThreshold = Math.min(100 + Math.pow(totalAlive / 1.5, 0.8), 300);
+
     for (const [playerId, player] of world.getPlayers()) {
       if (!player.alive) continue;
       if (playerId === world.localPlayerId) continue;
-      if (player.mass < MIN_MASS_FOR_MINIMAP) continue; // Skip small players
+      if (player.mass < massThreshold) continue;
 
       const pos = clampToMinimap(
         centerX + player.position.x * scale,
         centerY + player.position.y * scale
       );
 
-      // Size based on mass (bigger players = bigger dots)
-      const dotSize = Math.min(2 + (player.mass - MIN_MASS_FOR_MINIMAP) / 100, 4);
+      // Smaller dots to reduce overlap
+      const dotSize = Math.min(1.5 + (player.mass - massThreshold) / 150, 3);
       const color = world.getPlayerColor(player.colorIndex);
 
-      // Dark outline
-      this.ctx.fillStyle = 'rgba(0, 0, 0, 0.5)';
-      this.ctx.beginPath();
-      this.ctx.arc(pos.x, pos.y, dotSize + 1, 0, Math.PI * 2);
-      this.ctx.fill();
-      // Colored fill
-      this.ctx.fillStyle = color;
+      // Opacity based on mass - lower mass = more transparent
+      const opacity = Math.min(0.5 + (player.mass - massThreshold) / (massThreshold * 2), 1);
+
+      // Parse hex color to RGB for opacity
+      const r = parseInt(color.slice(1, 3), 16);
+      const g = parseInt(color.slice(3, 5), 16);
+      const b = parseInt(color.slice(5, 7), 16);
+
+      // No outline - just colored fill with opacity
+      this.ctx.fillStyle = `rgba(${r}, ${g}, ${b}, ${opacity})`;
       this.ctx.beginPath();
       this.ctx.arc(pos.x, pos.y, dotSize, 0, Math.PI * 2);
       this.ctx.fill();
