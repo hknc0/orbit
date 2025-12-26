@@ -514,6 +514,7 @@ impl Arena {
 
     /// Try to find a valid position near the target, adjusting if needed.
     /// Returns Some(position) if valid position found, None if impossible.
+    /// Uses expanding spiral search: first try near target, then expand outward.
     fn find_valid_well_position(
         &self,
         target_radius: f32,
@@ -528,46 +529,43 @@ impl Arena {
             return Some(original);
         }
 
-        // Try small angular adjustments (up to +/-30 degrees)
-        const ANGLE_STEPS: usize = 6;
-        const MAX_ANGLE_OFFSET: f32 = 0.52; // ~30 degrees
+        let radial_range = max_radius - min_radius;
 
+        // Spiral search: combine angular and radial adjustments
+        // This covers more of the search space efficiently
+        const ANGLE_STEPS: usize = 12; // Cover full circle in 30° increments
+        const RADIAL_STEPS: usize = 8; // Cover more radial range
+
+        // First pass: angular adjustments at target radius
         for step in 1..=ANGLE_STEPS {
-            let offset = (step as f32 / ANGLE_STEPS as f32) * MAX_ANGLE_OFFSET;
+            let offset = (step as f32 / ANGLE_STEPS as f32) * std::f32::consts::TAU;
 
-            // Try positive offset
-            let pos_plus = Vec2::from_angle(target_angle + offset) * target_radius;
-            if self.is_valid_well_position(pos_plus, min_spacing) {
-                return Some(pos_plus);
-            }
-
-            // Try negative offset
-            let pos_minus = Vec2::from_angle(target_angle - offset) * target_radius;
-            if self.is_valid_well_position(pos_minus, min_spacing) {
-                return Some(pos_minus);
+            let pos = Vec2::from_angle(target_angle + offset) * target_radius;
+            if self.is_valid_well_position(pos, min_spacing) {
+                return Some(pos);
             }
         }
 
-        // Try radial adjustments if angular didn't work
-        const RADIAL_STEPS: usize = 4;
-        let radial_range = max_radius - min_radius;
+        // Second pass: combined radial + angular search (spiral outward)
+        for radial_step in 1..=RADIAL_STEPS {
+            // Try both smaller and larger radii, up to 30% of radial range
+            let radial_offset = (radial_step as f32 / RADIAL_STEPS as f32) * (radial_range * 0.3);
 
-        for step in 1..=RADIAL_STEPS {
-            let offset = (step as f32 / RADIAL_STEPS as f32) * (radial_range * 0.1);
-
-            // Try larger radius
-            if target_radius + offset <= max_radius {
-                let pos = Vec2::from_angle(target_angle) * (target_radius + offset);
-                if self.is_valid_well_position(pos, min_spacing) {
-                    return Some(pos);
+            for &radius in &[
+                target_radius + radial_offset,
+                target_radius - radial_offset,
+            ] {
+                if radius < min_radius || radius > max_radius {
+                    continue;
                 }
-            }
 
-            // Try smaller radius
-            if target_radius - offset >= min_radius {
-                let pos = Vec2::from_angle(target_angle) * (target_radius - offset);
-                if self.is_valid_well_position(pos, min_spacing) {
-                    return Some(pos);
+                // At each radius, try multiple angles
+                for angle_step in 0..ANGLE_STEPS {
+                    let angle_offset = (angle_step as f32 / ANGLE_STEPS as f32) * std::f32::consts::TAU;
+                    let pos = Vec2::from_angle(target_angle + angle_offset) * radius;
+                    if self.is_valid_well_position(pos, min_spacing) {
+                        return Some(pos);
+                    }
                 }
             }
         }
@@ -663,10 +661,12 @@ impl Arena {
             .min(max_escape);
         let target_outer = target_escape - 200.0;
 
-        // Calculate target number of wells based on arena area
+        // Calculate target number of wells based on CURRENT arena area (not target)
+        // This ensures we only spawn wells that can actually fit in the current arena
+        // Wells are added progressively as the arena grows, rather than all at once
         // Area = PI * r^2, wells = area / wells_per_area
-        let arena_area = std::f32::consts::PI * target_escape * target_escape;
-        let target_wells = ((arena_area / config.wells_per_area).ceil() as usize)
+        let current_area = std::f32::consts::PI * self.escape_radius * self.escape_radius;
+        let target_wells = ((current_area / config.wells_per_area).ceil() as usize)
             .max(config.min_wells)
             .min(config.max_wells); // Hard cap for performance and gameplay
         let current_orbital_wells = self.gravity_wells.len().saturating_sub(1);
@@ -722,11 +722,11 @@ impl Arena {
         }
 
         // Add new wells if needed (never remove existing ones during gameplay)
-        // IMPORTANT: Use target_escape (not self.escape_radius) so wells are placed
-        // at correct positions for the target arena size, not the current lerping size
+        // Wells are placed based on CURRENT arena size - they're added progressively
+        // as the arena grows, ensuring spacing constraints can always be met
         if target_wells > current_orbital_wells {
             let wells_to_add = target_wells - current_orbital_wells;
-            self.add_orbital_wells(wells_to_add, target_escape, config);
+            self.add_orbital_wells(wells_to_add, self.escape_radius, config);
         }
     }
 
@@ -1682,7 +1682,7 @@ mod tests {
     }
 
     #[test]
-    fn test_wells_placed_at_target_radius_not_current() {
+    fn test_wells_placed_at_current_radius_for_progressive_growth() {
         use crate::config::ArenaScalingConfig;
 
         let config = ArenaScalingConfig::default();
@@ -1693,7 +1693,7 @@ mod tests {
 
         // Call scale_for_simulation with large player count
         // After ONE call, arena hasn't reached target yet (lerping)
-        // but any wells added should be at TARGET position
+        // Wells should be placed based on CURRENT arena size (progressive growth)
         arena.scale_for_simulation(1000, &config);
 
         let after_one_escape = arena.escape_radius;
@@ -1709,7 +1709,8 @@ mod tests {
         assert!(after_one_escape > initial_escape,
             "Arena should have grown: {} > {}", after_one_escape, initial_escape);
 
-        // Check orbital wells are placed at TARGET radius range, not current
+        // Check orbital wells are placed at CURRENT radius range (progressive growth)
+        // This ensures spacing constraints can always be met
         let orbital_wells: Vec<_> = arena.gravity_wells.values()
             .filter(|w| w.id != CENTRAL_WELL_ID)
             .collect();
@@ -1717,13 +1718,14 @@ mod tests {
         if !orbital_wells.is_empty() {
             for well in &orbital_wells {
                 let dist = well.position.length();
-                let min_expected = target_escape * config.well_min_ratio * 0.9; // 10% tolerance
-                let max_expected = target_escape * config.well_max_ratio * 1.1;
+                // Wells should be within current arena bounds, not target
+                let min_expected = after_one_escape * config.center_exclusion_ratio * 0.9; // 10% tolerance
+                let max_expected = after_one_escape * config.well_max_ratio * 1.1;
 
                 assert!(
                     dist >= min_expected && dist <= max_expected,
-                    "Well at {:?} (dist {:.0}) should be in range [{:.0}, {:.0}] based on TARGET radius {:.0}, not current {:.0}",
-                    well.position, dist, min_expected, max_expected, target_escape, after_one_escape
+                    "Well at {:?} (dist {:.0}) should be in range [{:.0}, {:.0}] based on CURRENT radius {:.0}",
+                    well.position, dist, min_expected, max_expected, after_one_escape
                 );
             }
         }
