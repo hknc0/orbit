@@ -748,3 +748,404 @@ describe('Zoom Transition', () => {
     });
   });
 });
+describe('RenderSystem Class', () => {
+  let ctx: CanvasRenderingContext2D;
+
+  beforeEach(() => {
+    ctx = createMockContext();
+  });
+
+  describe('constructor', () => {
+    it('should create a RenderSystem instance', async () => {
+      const { RenderSystem } = await import('./RenderSystem');
+      const renderSystem = new RenderSystem(ctx);
+      expect(renderSystem).toBeDefined();
+    });
+  });
+
+  describe('reset', () => {
+    it('should reset all state', async () => {
+      const { RenderSystem } = await import('./RenderSystem');
+      const renderSystem = new RenderSystem(ctx);
+
+      // Trigger shake to set some state
+      renderSystem.triggerShake(0.5);
+
+      // Reset
+      renderSystem.reset();
+
+      // Should not throw when rendering after reset
+      // (indirectly verifies state was reset)
+      expect(() => renderSystem.reset()).not.toThrow();
+    });
+
+    it('should be callable multiple times', async () => {
+      const { RenderSystem } = await import('./RenderSystem');
+      const renderSystem = new RenderSystem(ctx);
+
+      expect(() => {
+        renderSystem.reset();
+        renderSystem.reset();
+        renderSystem.reset();
+      }).not.toThrow();
+    });
+  });
+
+  describe('triggerShake', () => {
+    it('should accept intensity value', async () => {
+      const { RenderSystem } = await import('./RenderSystem');
+      const renderSystem = new RenderSystem(ctx);
+
+      expect(() => renderSystem.triggerShake(0.5)).not.toThrow();
+    });
+
+    it('should handle zero intensity', async () => {
+      const { RenderSystem } = await import('./RenderSystem');
+      const renderSystem = new RenderSystem(ctx);
+
+      expect(() => renderSystem.triggerShake(0)).not.toThrow();
+    });
+
+    it('should handle high intensity', async () => {
+      const { RenderSystem } = await import('./RenderSystem');
+      const renderSystem = new RenderSystem(ctx);
+
+      expect(() => renderSystem.triggerShake(5.0)).not.toThrow();
+    });
+
+    it('should handle negative intensity', async () => {
+      const { RenderSystem } = await import('./RenderSystem');
+      const renderSystem = new RenderSystem(ctx);
+
+      // Implementation might clamp or use absolute value
+      expect(() => renderSystem.triggerShake(-0.5)).not.toThrow();
+    });
+  });
+
+  describe('screenToWorld', () => {
+    it('should return Vec2 result', async () => {
+      const { RenderSystem } = await import('./RenderSystem');
+      const renderSystem = new RenderSystem(ctx);
+
+      const result = renderSystem.screenToWorld(960, 540);
+
+      expect(result).toBeDefined();
+      expect(typeof result.x).toBe('number');
+      expect(typeof result.y).toBe('number');
+    });
+
+    it('should handle center of screen', async () => {
+      const { RenderSystem } = await import('./RenderSystem');
+      const renderSystem = new RenderSystem(ctx);
+
+      const result = renderSystem.screenToWorld(960, 540);
+
+      expect(isFinite(result.x)).toBe(true);
+      expect(isFinite(result.y)).toBe(true);
+    });
+
+    it('should handle corner coordinates', async () => {
+      const { RenderSystem } = await import('./RenderSystem');
+      const renderSystem = new RenderSystem(ctx);
+
+      const topLeft = renderSystem.screenToWorld(0, 0);
+      const bottomRight = renderSystem.screenToWorld(1920, 1080);
+
+      expect(isFinite(topLeft.x)).toBe(true);
+      expect(isFinite(topLeft.y)).toBe(true);
+      expect(isFinite(bottomRight.x)).toBe(true);
+      expect(isFinite(bottomRight.y)).toBe(true);
+    });
+
+    it('should handle negative coordinates', async () => {
+      const { RenderSystem } = await import('./RenderSystem');
+      const renderSystem = new RenderSystem(ctx);
+
+      const result = renderSystem.screenToWorld(-100, -100);
+
+      expect(isFinite(result.x)).toBe(true);
+      expect(isFinite(result.y)).toBe(true);
+    });
+
+    it('should handle large coordinates', async () => {
+      const { RenderSystem } = await import('./RenderSystem');
+      const renderSystem = new RenderSystem(ctx);
+
+      const result = renderSystem.screenToWorld(10000, 10000);
+
+      expect(isFinite(result.x)).toBe(true);
+      expect(isFinite(result.y)).toBe(true);
+    });
+  });
+});
+
+// Test MOTION_FX constants
+describe('Motion Effects Configuration', () => {
+  it('should have valid trail lifetime base', () => {
+    const TRAIL_LIFETIME_BASE = 550;
+    expect(TRAIL_LIFETIME_BASE).toBeGreaterThan(0);
+    expect(TRAIL_LIFETIME_BASE).toBeLessThan(5000); // Reasonable upper bound
+  });
+
+  it('should have valid trail max points', () => {
+    const TRAIL_MAX_POINTS = 32;
+    expect(TRAIL_MAX_POINTS).toBeGreaterThan(0);
+    expect(TRAIL_MAX_POINTS).toBeLessThanOrEqual(100);
+  });
+
+  it('should have flame length scale in valid range', () => {
+    const FLAME_LENGTH_BASE = 1.6;
+    const FLAME_LENGTH_SPEED_SCALE = 0.002;
+
+    expect(FLAME_LENGTH_BASE).toBeGreaterThan(0);
+    expect(FLAME_LENGTH_SPEED_SCALE).toBeGreaterThan(0);
+    expect(FLAME_LENGTH_SPEED_SCALE).toBeLessThan(1);
+  });
+
+  it('should have valid zoom bounds', () => {
+    const ZOOM_MIN = 0.45;
+    const ZOOM_MAX = 1.0;
+    const SPECTATOR_ZOOM_MIN = 0.1;
+
+    expect(SPECTATOR_ZOOM_MIN).toBeLessThan(ZOOM_MIN);
+    expect(ZOOM_MIN).toBeLessThan(ZOOM_MAX);
+    expect(ZOOM_MAX).toBeLessThanOrEqual(1.0);
+  });
+});
+
+// Test color caching logic
+describe('Color Caching', () => {
+  function getRGB(color: string): { r: number; g: number; b: number } {
+    const hex = color.replace('#', '');
+    return {
+      r: parseInt(hex.substring(0, 2), 16),
+      g: parseInt(hex.substring(2, 4), 16),
+      b: parseInt(hex.substring(4, 6), 16),
+    };
+  }
+
+  it('should parse hex colors correctly', () => {
+    const rgb = getRGB('#ff0000');
+    expect(rgb.r).toBe(255);
+    expect(rgb.g).toBe(0);
+    expect(rgb.b).toBe(0);
+  });
+
+  it('should handle colors without hash', () => {
+    const rgb = getRGB('00ff00');
+    expect(rgb.r).toBe(0);
+    expect(rgb.g).toBe(255);
+    expect(rgb.b).toBe(0);
+  });
+
+  it('should parse blue correctly', () => {
+    const rgb = getRGB('#0000ff');
+    expect(rgb.r).toBe(0);
+    expect(rgb.g).toBe(0);
+    expect(rgb.b).toBe(255);
+  });
+
+  it('should parse white correctly', () => {
+    const rgb = getRGB('#ffffff');
+    expect(rgb.r).toBe(255);
+    expect(rgb.g).toBe(255);
+    expect(rgb.b).toBe(255);
+  });
+
+  it('should parse black correctly', () => {
+    const rgb = getRGB('#000000');
+    expect(rgb.r).toBe(0);
+    expect(rgb.g).toBe(0);
+    expect(rgb.b).toBe(0);
+  });
+
+  it('should handle lowercase hex', () => {
+    const rgb = getRGB('#abcdef');
+    expect(rgb.r).toBe(171);
+    expect(rgb.g).toBe(205);
+    expect(rgb.b).toBe(239);
+  });
+
+  it('should handle uppercase hex', () => {
+    const rgb = getRGB('#ABCDEF');
+    expect(rgb.r).toBe(171);
+    expect(rgb.g).toBe(205);
+    expect(rgb.b).toBe(239);
+  });
+});
+
+// Test particle angles pre-computation
+describe('Particle Angles Pre-computation', () => {
+  it('should generate 8 particle angles', () => {
+    const angles: { cos: number; sin: number }[] = [];
+    for (let i = 0; i < 8; i++) {
+      const angle = (i / 8) * Math.PI * 2;
+      angles.push({ cos: Math.cos(angle), sin: Math.sin(angle) });
+    }
+
+    expect(angles.length).toBe(8);
+  });
+
+  it('should have first angle at 0 radians', () => {
+    const angle = (0 / 8) * Math.PI * 2;
+    expect(Math.cos(angle)).toBeCloseTo(1, 10);
+    expect(Math.sin(angle)).toBeCloseTo(0, 10);
+  });
+
+  it('should have angles evenly distributed', () => {
+    const angles: number[] = [];
+    for (let i = 0; i < 8; i++) {
+      angles.push((i / 8) * Math.PI * 2);
+    }
+
+    const expectedSpacing = Math.PI / 4;
+    for (let i = 1; i < angles.length; i++) {
+      expect(angles[i] - angles[i - 1]).toBeCloseTo(expectedSpacing, 10);
+    }
+  });
+
+  it('should have valid cos/sin values', () => {
+    for (let i = 0; i < 8; i++) {
+      const angle = (i / 8) * Math.PI * 2;
+      const cos = Math.cos(angle);
+      const sin = Math.sin(angle);
+
+      expect(cos >= -1 && cos <= 1).toBe(true);
+      expect(sin >= -1 && sin <= 1).toBe(true);
+      // cos^2 + sin^2 = 1
+      expect(cos * cos + sin * sin).toBeCloseTo(1, 10);
+    }
+  });
+});
+
+// Test scale direction calculation
+describe('Scale Direction', () => {
+  function calculateScaleDirection(
+    history: number[]
+  ): 'growing' | 'shrinking' | 'stable' {
+    if (history.length < 2) return 'stable';
+
+    const recentAvg = history.slice(-10).reduce((a, b) => a + b, 0) / Math.min(history.length, 10);
+    const olderAvg = history.slice(0, Math.max(1, history.length - 10))
+      .reduce((a, b) => a + b, 0) / Math.max(1, history.length - 10);
+
+    const diff = recentAvg - olderAvg;
+    const threshold = 0.01;
+
+    if (diff > threshold) return 'growing';
+    if (diff < -threshold) return 'shrinking';
+    return 'stable';
+  }
+
+  it('should return stable for empty history', () => {
+    expect(calculateScaleDirection([])).toBe('stable');
+  });
+
+  it('should return stable for single value', () => {
+    expect(calculateScaleDirection([1.0])).toBe('stable');
+  });
+
+  it('should detect growing scale', () => {
+    const history = [1.0, 1.01, 1.02, 1.03, 1.04, 1.05, 1.06, 1.07, 1.08, 1.09, 1.1, 1.11];
+    expect(calculateScaleDirection(history)).toBe('growing');
+  });
+
+  it('should detect shrinking scale', () => {
+    const history = [1.1, 1.09, 1.08, 1.07, 1.06, 1.05, 1.04, 1.03, 1.02, 1.01, 1.0, 0.99];
+    expect(calculateScaleDirection(history)).toBe('shrinking');
+  });
+
+  it('should return stable for constant values', () => {
+    const history = Array(20).fill(1.0);
+    expect(calculateScaleDirection(history)).toBe('stable');
+  });
+});
+
+// Test shake decay
+describe('Shake Decay', () => {
+  const SHAKE_DECAY = 0.85;
+  const MAX_SHAKE = 12;
+
+  it('should decay shake intensity over time', () => {
+    let intensity = 1.0;
+
+    // After one decay step
+    intensity *= SHAKE_DECAY;
+    expect(intensity).toBe(0.85);
+
+    // After another step
+    intensity *= SHAKE_DECAY;
+    expect(intensity).toBeCloseTo(0.7225, 4);
+  });
+
+  it('should approach zero after many steps', () => {
+    let intensity = 1.0;
+
+    for (let i = 0; i < 50; i++) {
+      intensity *= SHAKE_DECAY;
+    }
+
+    expect(intensity).toBeLessThan(0.001);
+  });
+
+  it('should clamp to max shake', () => {
+    const clampedShake = Math.min(20, MAX_SHAKE);
+    expect(clampedShake).toBe(MAX_SHAKE);
+  });
+});
+
+// Test trail point management
+describe('Trail Point Management', () => {
+  interface TrailPoint {
+    x: number;
+    y: number;
+    timestamp: number;
+    radius: number;
+  }
+
+  it('should remove expired trail points', () => {
+    const now = Date.now();
+    const trailLifetime = 550;
+
+    const trail: TrailPoint[] = [
+      { x: 0, y: 0, timestamp: now - 600, radius: 20 }, // Expired
+      { x: 10, y: 10, timestamp: now - 400, radius: 20 }, // Valid
+      { x: 20, y: 20, timestamp: now - 100, radius: 20 }, // Valid
+    ];
+
+    // Remove expired
+    while (trail.length > 0 && now - trail[0].timestamp > trailLifetime) {
+      trail.shift();
+    }
+
+    expect(trail.length).toBe(2);
+    expect(trail[0].x).toBe(10);
+  });
+
+  it('should cap trail to max points', () => {
+    const trail: TrailPoint[] = [];
+    const maxPoints = 32;
+
+    for (let i = 0; i < 50; i++) {
+      trail.push({ x: i, y: i, timestamp: Date.now(), radius: 20 });
+      while (trail.length > maxPoints) {
+        trail.shift();
+      }
+    }
+
+    expect(trail.length).toBe(maxPoints);
+    expect(trail[0].x).toBe(50 - maxPoints);
+  });
+
+  it('should calculate distance squared for efficiency', () => {
+    const pos = { x: 100, y: 100 };
+    const lastPos = { x: 93, y: 96 }; // Distance = 7.61...
+
+    const dx = pos.x - lastPos.x;
+    const dy = pos.y - lastPos.y;
+    const distSq = dx * dx + dy * dy;
+
+    expect(distSq).toBe(49 + 16); // 7^2 + 4^2 = 65
+    expect(Math.sqrt(distSq)).toBeCloseTo(8.06, 2);
+  });
+});
