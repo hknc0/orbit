@@ -205,6 +205,14 @@ window.addEventListener('keydown', (e) => {
     const colorIndex = screens.getSelectedColor();
     game.start(playerName, colorIndex);
   }
+
+  // Enter to retry when disconnected
+  if (e.code === 'Enter' && game.getPhase() === 'disconnected') {
+    screens.hideError();
+    const playerName = screens.getPlayerName();
+    const colorIndex = screens.getSelectedColor();
+    game.start(playerName, colorIndex);
+  }
 });
 
 // Start with menu screen visible
