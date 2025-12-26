@@ -506,9 +506,6 @@ impl Arena {
             .min(config.max_wells); // Hard cap for performance and gameplay
         let current_orbital_wells = self.gravity_wells.len().saturating_sub(1);
 
-        // Track previous radius for proportional well scaling
-        let previous_escape = self.escape_radius;
-
         // Smooth lerp toward target (called every tick at 30Hz)
         let diff = target_escape - self.escape_radius;
 
@@ -538,48 +535,25 @@ impl Arena {
         // Update scale factor based on current escape_radius vs base
         self.scale = self.escape_radius / arena::ESCAPE_RADIUS;
 
-        // Update well TARGET positions based on TARGET arena size (not current lerping size)
-        // This prevents jittery movement - wells smoothly lerp to final positions
-        // Use target_escape for calculating where wells SHOULD end up
-        let min_dist = target_escape * config.well_min_ratio;
-        let max_dist = target_escape * config.well_max_ratio;
+        // Wells stay FIXED - no position scaling during arena resize
+        // This prevents chaotic movement that disrupts player orbits
+        // Instead, out-of-bounds wells are triggered to explode naturally
 
-        for well in self.gravity_wells.values_mut() {
-            // Skip central well (ID 0)
-            if well.id == CENTRAL_WELL_ID {
-                continue;
+        // Trigger explosions for wells outside escape radius after shrinking
+        // Uses charge duration for visual warning before death
+        if diff < -1.0 && self.shrink_delay_ticks == 0 {
+            use crate::game::constants::gravity_waves::CHARGE_DURATION;
+            for well in self.gravity_wells.values_mut() {
+                if well.id == CENTRAL_WELL_ID {
+                    continue;
+                }
+                // Well outside escape radius and not already charging? Trigger explosion
+                let well_dist = well.position.length();
+                if well_dist > self.escape_radius && !well.is_charging {
+                    well.explosion_timer = CHARGE_DURATION;
+                    well.is_charging = true;
+                }
             }
-
-            // Use current target_position to calculate new target (maintains ratio)
-            let current_dist = well.target_position.length();
-            if current_dist < 1.0 {
-                continue;
-            }
-
-            // Scale from previous target radius to new target radius
-            // This keeps wells at consistent ratios as arena scales
-            let ratio = current_dist / previous_escape.max(1.0);
-            let new_dist = (ratio * target_escape).clamp(min_dist, max_dist);
-
-            let direction = well.target_position.normalize();
-            well.target_position = direction * new_dist;
-        }
-
-        // Lerp well positions toward their targets (smooth movement)
-        let well_lerp = config.grow_lerp * 0.5; // Wells move slightly slower than arena
-        let mut any_moved = false;
-        for well in self.gravity_wells.values_mut() {
-            if well.id == CENTRAL_WELL_ID {
-                continue;
-            }
-            if well.lerp_to_target(well_lerp) {
-                any_moved = true;
-            }
-        }
-
-        // Rebuild well grid only if wells actually moved
-        if any_moved {
-            self.rebuild_well_grid();
         }
 
         // Add new wells if needed (never remove existing ones during gameplay)
@@ -1095,54 +1069,108 @@ mod tests {
     }
 
     #[test]
-    fn test_scale_for_simulation_scales_wells_proportionally() {
+    fn test_scale_for_simulation_wells_stay_fixed() {
+        // Wells should NOT move when arena scales - they stay at original positions
+        // This prevents chaotic movement that disrupts player orbits
         use crate::config::ArenaScalingConfig;
         let config = ArenaScalingConfig::default();
         let mut arena = Arena::default();
-        let initial_escape = arena.escape_radius;
-        assert_eq!(initial_escape, 800.0, "Default arena should be 800");
 
         // First grow arena and add wells via scale_for_simulation
-        // With slower lerp/cap, need more iterations
         for _ in 0..150 {
             arena.scale_for_simulation(100, &config);
         }
 
-        // Record well ratios after initial setup
-        let setup_escape = arena.escape_radius;
-        let _setup_ratios: Vec<f32> = arena.gravity_wells.values()
+        // Record exact well positions after initial setup
+        let well_positions: Vec<(WellId, Vec2)> = arena.gravity_wells.values()
             .filter(|w| w.id != CENTRAL_WELL_ID)
-            .map(|w| w.position.length() / setup_escape)
+            .map(|w| (w.id, w.position))
             .collect();
-        let setup_well_count = arena.gravity_wells.len();
-        assert!(setup_well_count > 1, "Should have wells after setup");
+        assert!(!well_positions.is_empty(), "Should have orbital wells after setup");
+
+        let setup_escape = arena.escape_radius;
 
         // Now scale up significantly
         for _ in 0..300 {
             arena.scale_for_simulation(500, &config);
         }
 
-        let final_escape = arena.escape_radius;
-
         // Arena should have grown
-        assert!(final_escape > setup_escape,
-            "Arena should have grown: {} > {}", final_escape, setup_escape);
+        assert!(arena.escape_radius > setup_escape,
+            "Arena should have grown: {} > {}", arena.escape_radius, setup_escape);
 
-        // Wells should have scaled proportionally - check that all orbital wells are in valid range
-        for well in arena.gravity_wells.values() {
-            if well.id != CENTRAL_WELL_ID {
-                let current_ratio = well.position.length() / arena.escape_radius;
-
-                // Ratio should be within clamped range
-                assert!(current_ratio >= config.well_min_ratio - 0.01 &&
-                        current_ratio <= config.well_max_ratio + 0.01,
-                    "Well {} ratio {} outside valid range", well.id, current_ratio);
+        // Original wells should NOT have moved (positions should be identical)
+        for (well_id, original_pos) in &well_positions {
+            if let Some(well) = arena.gravity_wells.get(well_id) {
+                let distance_moved = (well.position - *original_pos).length();
+                assert!(distance_moved < 0.01,
+                    "Well {} should not have moved. Original: {:?}, Current: {:?}",
+                    well_id, original_pos, well.position);
             }
         }
+    }
 
-        // Should have same or more wells (never removes)
-        assert!(arena.gravity_wells.len() >= setup_well_count,
-            "Wells should not decrease: {} >= {}", arena.gravity_wells.len(), setup_well_count);
+    #[test]
+    fn test_scale_for_simulation_triggers_out_of_bounds_explosions() {
+        // When arena shrinks, wells outside escape_radius should start charging
+        use crate::config::ArenaScalingConfig;
+        use crate::game::constants::arena::CORE_RADIUS;
+        use crate::game::constants::physics::CENTRAL_MASS;
+
+        let config = ArenaScalingConfig::default();
+        let mut arena = Arena::default();
+
+        // Start with large arena
+        arena.escape_radius = 1500.0;
+
+        // Add a well far from center (will be outside after shrink)
+        let outer_well_id = arena.alloc_well_id();
+        let outer_well = GravityWell::new(
+            outer_well_id,
+            Vec2::new(1200.0, 0.0), // At 1200 units from center
+            CENTRAL_MASS,
+            CORE_RADIUS,
+        );
+        arena.gravity_wells.insert(outer_well_id, outer_well);
+
+        // Add a well close to center (will remain inside after shrink)
+        let inner_well_id = arena.alloc_well_id();
+        let inner_well = GravityWell::new(
+            inner_well_id,
+            Vec2::new(400.0, 0.0), // At 400 units from center
+            CENTRAL_MASS,
+            CORE_RADIUS,
+        );
+        arena.gravity_wells.insert(inner_well_id, inner_well);
+
+        // Verify neither is charging initially
+        assert!(!arena.gravity_wells.get(&outer_well_id).unwrap().is_charging);
+        assert!(!arena.gravity_wells.get(&inner_well_id).unwrap().is_charging);
+
+        // Shrink arena - exhaust delay and call with low player count
+        arena.shrink_delay_ticks = 0;
+
+        // Keep shrinking until we're below 1200 (outer well position)
+        for _ in 0..200 {
+            arena.scale_for_simulation(1, &config);
+            arena.shrink_delay_ticks = 0; // Keep delay exhausted
+        }
+
+        // Verify arena actually shrunk below outer well
+        assert!(arena.escape_radius < 1200.0,
+            "Arena should have shrunk below 1200, got {}", arena.escape_radius);
+
+        // Outer well (at 1200) should now be charging (outside escape radius)
+        let outer = arena.gravity_wells.get(&outer_well_id).unwrap();
+        assert!(outer.is_charging,
+            "Outer well at 1200 should be charging when escape_radius is {}",
+            arena.escape_radius);
+
+        // Inner well (at 400) should NOT be charging (still inside)
+        let inner = arena.gravity_wells.get(&inner_well_id).unwrap();
+        assert!(!inner.is_charging,
+            "Inner well at 400 should NOT be charging when escape_radius is {}",
+            arena.escape_radius);
     }
 
     #[test]
