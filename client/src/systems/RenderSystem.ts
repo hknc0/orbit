@@ -1543,7 +1543,14 @@ export class RenderSystem {
 
   // Trigger screen shake (called when local player is in collision)
   triggerShake(intensity: number, direction?: { x: number; y: number }): void {
-    this.shakeIntensity = Math.min(this.shakeIntensity + intensity * 8, this.MAX_SHAKE);
+    // Diminishing returns: contribution scales with available headroom
+    // This prevents "maxed out" feeling during chain reactions while still
+    // making multiple explosions feel stronger than single ones
+    const headroom = this.MAX_SHAKE - this.shakeIntensity;
+    const headroomRatio = headroom / this.MAX_SHAKE;
+    const contribution = intensity * 8 * headroomRatio;
+    this.shakeIntensity = Math.min(this.shakeIntensity + contribution, this.MAX_SHAKE);
+
     if (direction) {
       // Normalize direction
       const len = Math.sqrt(direction.x * direction.x + direction.y * direction.y);

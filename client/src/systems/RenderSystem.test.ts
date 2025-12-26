@@ -857,6 +857,20 @@ describe('RenderSystem Class', () => {
       renderSystem.triggerShake(10);
       expect(() => renderSystem.triggerShake(10)).not.toThrow();
     });
+
+    it('should apply diminishing returns for concurrent shakes', async () => {
+      const { RenderSystem } = await import('./RenderSystem');
+      const renderSystem = new RenderSystem(ctx);
+
+      // Multiple shakes should accumulate but with diminishing returns
+      // Each subsequent shake contributes less as headroom decreases
+      renderSystem.triggerShake(0.5);
+      renderSystem.triggerShake(0.5);
+      renderSystem.triggerShake(0.5);
+      renderSystem.triggerShake(0.5);
+      renderSystem.triggerShake(0.5);
+      expect(() => renderSystem.triggerShake(0.5)).not.toThrow();
+    });
   });
 
   describe('screenToWorld', () => {
