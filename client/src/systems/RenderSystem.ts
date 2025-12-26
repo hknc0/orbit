@@ -55,6 +55,26 @@ const MOTION_FX = {
   FLICKER_SPEED_SLOW: 0.02,
   FLICKER_SPEED_MED: 0.035,
   FLICKER_SPEED_FAST: 0.06,
+
+  // Stellar flicker for gravity wells (stars)
+  // Intensity scales with zoom: subtle when close, obvious when far
+  STELLAR_FLICKER: {
+    // Multi-frequency flicker (inharmonic for natural feel)
+    FREQ_PRIMARY: 0.005,     // ~2s period - slow brightness drift
+    FREQ_SECONDARY: 0.013,   // ~0.8s period - visible shimmer
+    FREQ_TERTIARY: 0.029,    // ~0.35s period - twinkle
+
+    // Base amplitudes (scaled by zoom)
+    AMP_GLOW_BASE: 0.08,     // Subtle when zoomed in
+    AMP_CORE_BASE: 0.05,
+    AMP_GLOW_MAX: 0.45,      // Dramatic when zoomed out
+    AMP_CORE_MAX: 0.35,
+
+    // Color temperature shift
+    TEMP_FREQ: 0.004,        // ~4s period
+    TEMP_SHIFT_BASE: 8,      // Subtle color shift when close
+    TEMP_SHIFT_MAX: 30,      // Dramatic color shift when far
+  },
 } as const;
 
 export class RenderSystem {
@@ -117,6 +137,9 @@ export class RenderSystem {
   // Performance: Cache parsed RGB values to avoid repeated hex parsing
   private colorCache: Map<string, { r: number; g: number; b: number }> = new Map();
 
+  // Stellar flicker: reusable result object to avoid allocation per well
+  private flickerResult = { glow: 1.0, core: 1.0, tempR: 0, tempB: 0 };
+
   // Performance: Pre-computed sin/cos for 8-particle birth effect (fixed angles)
   private static readonly PARTICLE_ANGLES = (() => {
     const angles: { cos: number; sin: number }[] = [];
@@ -129,6 +152,34 @@ export class RenderSystem {
 
   constructor(ctx: CanvasRenderingContext2D) {
     this.ctx = ctx;
+  }
+
+  // Calculate stellar flicker for natural-looking star brightness/color variation
+  // intensity: 0 = subtle (zoomed in), 1 = dramatic (zoomed out spectator)
+  private calculateStellarFlicker(time: number, seed: number, intensity: number): typeof this.flickerResult {
+    const cfg = MOTION_FX.STELLAR_FLICKER;
+    const phase = (seed % 1000) / 1000 * Math.PI * 2;
+
+    // Layer 3 frequencies for organic shimmer
+    const p = Math.sin(time * cfg.FREQ_PRIMARY + phase);
+    const s = Math.sin(time * cfg.FREQ_SECONDARY + phase * 1.3);
+    const t = Math.sin(time * cfg.FREQ_TERTIARY + phase * 0.7);
+    const combined = p * 0.5 + s * 0.35 + t * 0.15;
+
+    // Interpolate amplitudes based on intensity (0=subtle, 1=dramatic)
+    const ampGlow = cfg.AMP_GLOW_BASE + (cfg.AMP_GLOW_MAX - cfg.AMP_GLOW_BASE) * intensity;
+    const ampCore = cfg.AMP_CORE_BASE + (cfg.AMP_CORE_MAX - cfg.AMP_CORE_BASE) * intensity;
+    const tempShift = cfg.TEMP_SHIFT_BASE + (cfg.TEMP_SHIFT_MAX - cfg.TEMP_SHIFT_BASE) * intensity;
+
+    // Temperature shift (slow, anti-phase r/b)
+    const temp = Math.sin(time * cfg.TEMP_FREQ + phase * 0.5);
+
+    this.flickerResult.glow = 1.0 + combined * ampGlow;
+    this.flickerResult.core = 1.0 + combined * ampCore;
+    this.flickerResult.tempR = Math.round(temp * tempShift);
+    this.flickerResult.tempB = Math.round(-temp * tempShift * 0.7);
+
+    return this.flickerResult;
   }
 
   // Effect quality levels based on zoom for spectator optimization
@@ -959,12 +1010,17 @@ export class RenderSystem {
       const colors = starTypes[starType];
 
       if (quality === 'minimal') {
-        // MINIMAL: Star-like appearance visible when zoomed out (2 passes)
+        // MINIMAL: Dramatic flicker visible when zoomed out far (spectator full-view)
+        // Use intensity=1 for maximum flicker effect
+        const flicker = birthProgress >= 0.95 ? this.calculateStellarFlicker(now, seed, 1.0) : null;
+        const glowAlpha = flicker ? 0.5 * flicker.glow : 0.5;
+        const coreAlpha = flicker ? 1.0 * flicker.core : 1.0;
+
         // Larger glow so it's visible at small screen sizes
         const glowRadius = coreRadius * 2.5;
         const outerGlow = this.ctx.createRadialGradient(x, y, coreRadius * 0.3, x, y, glowRadius);
-        outerGlow.addColorStop(0, `rgba(${colors.glow[0]}, ${colors.glow[1]}, ${colors.glow[2]}, 0.5)`);
-        outerGlow.addColorStop(0.4, `rgba(${colors.glow[0]}, ${colors.glow[1]}, ${colors.glow[2]}, 0.2)`);
+        outerGlow.addColorStop(0, `rgba(${colors.glow[0]}, ${colors.glow[1]}, ${colors.glow[2]}, ${glowAlpha})`);
+        outerGlow.addColorStop(0.4, `rgba(${colors.glow[0]}, ${colors.glow[1]}, ${colors.glow[2]}, ${glowAlpha * 0.4})`);
         outerGlow.addColorStop(1, `rgba(${colors.glow[0]}, ${colors.glow[1]}, ${colors.glow[2]}, 0)`);
         this.ctx.fillStyle = outerGlow;
         this.ctx.beginPath();
@@ -973,55 +1029,66 @@ export class RenderSystem {
 
         // Core with bright white-hot center (star-like gradient)
         const coreGrad = this.ctx.createRadialGradient(x, y, 0, x, y, coreRadius);
-        coreGrad.addColorStop(0, 'rgba(255, 255, 255, 1)'); // White-hot center
-        coreGrad.addColorStop(0.25, `rgba(${colors.core[0]}, ${colors.core[1]}, ${colors.core[2]}, 0.95)`);
+        coreGrad.addColorStop(0, `rgba(255, 255, 255, ${coreAlpha})`);
+        coreGrad.addColorStop(0.25, `rgba(${colors.core[0]}, ${colors.core[1]}, ${colors.core[2]}, ${0.95 * (flicker?.core ?? 1)})`);
         coreGrad.addColorStop(1, `rgba(${colors.outer[0]}, ${colors.outer[1]}, ${colors.outer[2]}, 0.6)`);
         this.ctx.fillStyle = coreGrad;
         this.ctx.beginPath();
         this.ctx.arc(x, y, coreRadius, 0, Math.PI * 2);
         this.ctx.fill();
       } else if (quality === 'reduced') {
-        // REDUCED: Skip corona shimmer, use simpler gradients (2 stops instead of 3-4)
-        // Simplified outer glow
+        // REDUCED: Medium intensity flicker (intensity=0.5)
+        const flicker = birthProgress >= 0.95 ? this.calculateStellarFlicker(now, seed, 0.5) : null;
+        const glowAlpha = flicker ? 0.3 * flicker.glow : 0.3;
+
+        // Simplified outer glow with flicker
         const glowRadius = coreRadius * 1.5;
         const outerGlow = this.ctx.createRadialGradient(x, y, coreRadius * 0.6, x, y, glowRadius);
-        outerGlow.addColorStop(0, `rgba(${colors.glow[0]}, ${colors.glow[1]}, ${colors.glow[2]}, 0.3)`);
+        outerGlow.addColorStop(0, `rgba(${colors.glow[0]}, ${colors.glow[1]}, ${colors.glow[2]}, ${glowAlpha})`);
         outerGlow.addColorStop(1, `rgba(${colors.glow[0]}, ${colors.glow[1]}, ${colors.glow[2]}, 0)`);
         this.ctx.fillStyle = outerGlow;
         this.ctx.beginPath();
         this.ctx.arc(x, y, glowRadius, 0, Math.PI * 2);
         this.ctx.fill();
 
-        // Simplified core gradient (2 stops)
+        // Simplified core gradient with flicker
+        const coreAlpha = flicker ? 0.95 * flicker.core : 0.95;
         const gradient = this.ctx.createRadialGradient(x, y, 0, x, y, coreRadius);
-        gradient.addColorStop(0, `rgba(${colors.core[0]}, ${colors.core[1]}, ${colors.core[2]}, 0.95)`);
+        gradient.addColorStop(0, `rgba(${colors.core[0]}, ${colors.core[1]}, ${colors.core[2]}, ${coreAlpha})`);
         gradient.addColorStop(1, `rgba(${colors.outer[0]}, ${colors.outer[1]}, ${colors.outer[2]}, 0.4)`);
         this.ctx.fillStyle = gradient;
         this.ctx.beginPath();
         this.ctx.arc(x, y, coreRadius, 0, Math.PI * 2);
         this.ctx.fill();
       } else {
-        // FULL: All effects (original implementation)
+        // FULL: Subtle flicker when zoomed in (intensity=0)
         const variation = (seed % 100) / 100;
         const vary = (c: number, amount: number) => Math.min(255, Math.max(0, c + (variation - 0.5) * amount));
 
-        // Outer glow based on mass
+        // Calculate stellar flicker (skip during birth animation)
+        const flicker = birthProgress >= 0.95 ? this.calculateStellarFlicker(now, seed, 0) : null;
+        const tr = flicker?.tempR ?? 0;
+        const tb = flicker?.tempB ?? 0;
+
+        // Outer glow based on mass (with flicker)
+        const glowAlpha = flicker ? 0.35 * flicker.glow : 0.35;
         const glowRadius = coreRadius * (1.5 + Math.log10(mass) * 0.1);
         const outerGlow = this.ctx.createRadialGradient(x, y, coreRadius * 0.5, x, y, glowRadius);
-        outerGlow.addColorStop(0, `rgba(${vary(colors.glow[0], 20)}, ${vary(colors.glow[1], 20)}, ${vary(colors.glow[2], 20)}, 0.35)`);
-        outerGlow.addColorStop(0.5, `rgba(${vary(colors.glow[0], 30)}, ${vary(colors.glow[1], 30)}, ${vary(colors.glow[2], 30)}, 0.15)`);
+        outerGlow.addColorStop(0, `rgba(${Math.min(255, vary(colors.glow[0], 20) + tr)}, ${vary(colors.glow[1], 20)}, ${Math.min(255, vary(colors.glow[2], 20) + tb)}, ${glowAlpha})`);
+        outerGlow.addColorStop(0.5, `rgba(${Math.min(255, vary(colors.glow[0], 30) + tr)}, ${vary(colors.glow[1], 30)}, ${Math.min(255, vary(colors.glow[2], 30) + tb)}, ${glowAlpha * 0.43})`);
         outerGlow.addColorStop(1, `rgba(${colors.glow[0]}, ${colors.glow[1]}, ${colors.glow[2]}, 0)`);
         this.ctx.fillStyle = outerGlow;
         this.ctx.beginPath();
         this.ctx.arc(x, y, glowRadius, 0, Math.PI * 2);
         this.ctx.fill();
 
-        // Corona/surface activity (subtle shimmer effect for larger stars)
+        // Corona/surface activity (subtle shimmer effect for larger stars, combined with flicker)
         if (coreRadius > 40) {
           const time = Date.now() / 2000;
           const coronaRadius = coreRadius * 1.15;
           this.ctx.save();
-          this.ctx.globalAlpha = 0.3 + Math.sin(time * 2 + seed) * 0.1;
+          const baseShimmer = 0.3 + Math.sin(time * 2 + seed) * 0.1;
+          this.ctx.globalAlpha = flicker ? baseShimmer * (0.95 + flicker.core * 0.05) : baseShimmer;
           const corona = this.ctx.createRadialGradient(x, y, coreRadius * 0.9, x, y, coronaRadius);
           corona.addColorStop(0, `rgba(${colors.core[0]}, ${colors.core[1]}, ${colors.core[2]}, 0.4)`);
           corona.addColorStop(1, `rgba(${colors.mid[0]}, ${colors.mid[1]}, ${colors.mid[2]}, 0)`);
@@ -1032,9 +1099,10 @@ export class RenderSystem {
           this.ctx.restore();
         }
 
-        // Core gradient
+        // Core gradient (with flicker)
+        const coreAlpha = flicker ? 0.95 * flicker.core : 0.95;
         const gradient = this.ctx.createRadialGradient(x, y, 0, x, y, coreRadius);
-        gradient.addColorStop(0, `rgba(${vary(colors.core[0], 15)}, ${vary(colors.core[1], 15)}, ${vary(colors.core[2], 15)}, 0.95)`);
+        gradient.addColorStop(0, `rgba(${Math.min(255, vary(colors.core[0], 15) + tr)}, ${vary(colors.core[1], 15)}, ${Math.min(255, vary(colors.core[2], 15) + tb)}, ${coreAlpha})`);
         gradient.addColorStop(0.3, `rgba(${vary(colors.mid[0], 20)}, ${vary(colors.mid[1], 20)}, ${vary(colors.mid[2], 20)}, 0.85)`);
         gradient.addColorStop(0.7, `rgba(${vary(colors.outer[0], 25)}, ${vary(colors.outer[1], 25)}, ${vary(colors.outer[2], 25)}, 0.6)`);
         gradient.addColorStop(1, `rgba(${colors.outer[0]}, ${colors.outer[1]}, ${colors.outer[2]}, 0.25)`);
@@ -1043,9 +1111,10 @@ export class RenderSystem {
         this.ctx.arc(x, y, coreRadius, 0, Math.PI * 2);
         this.ctx.fill();
 
-        // Bright center spot (photosphere highlight)
+        // Bright center spot with flicker
+        const centerAlpha = flicker ? 0.6 * (0.97 + flicker.core * 0.03) : 0.6;
         const centerGlow = this.ctx.createRadialGradient(x, y, 0, x, y, coreRadius * 0.4);
-        centerGlow.addColorStop(0, `rgba(255, 255, 255, 0.6)`);
+        centerGlow.addColorStop(0, `rgba(255, 255, 255, ${centerAlpha})`);
         centerGlow.addColorStop(0.5, `rgba(${colors.core[0]}, ${colors.core[1]}, ${colors.core[2]}, 0.3)`);
         centerGlow.addColorStop(1, `rgba(${colors.core[0]}, ${colors.core[1]}, ${colors.core[2]}, 0)`);
         this.ctx.fillStyle = centerGlow;
