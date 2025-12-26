@@ -134,12 +134,22 @@ export class World {
 
   // Spectator mode state
   isSpectator: boolean = false;
-  spectateTargetId: PlayerId | null = null; // null = full map view
+  spectateTargetId: PlayerId | null = null; // null = full map view (unless spectating a well)
+  spectateWellId: number | null = null; // ID of gravity well being spectated
 
   // Set spectator mode
   setSpectatorMode(enabled: boolean, targetId: PlayerId | null = null): void {
     this.isSpectator = enabled;
     this.spectateTargetId = targetId;
+    this.spectateWellId = null; // Clear well target when mode changes
+  }
+
+  // Set spectate target to a gravity well
+  setSpectateWell(wellId: number | null): void {
+    this.spectateWellId = wellId;
+    if (wellId !== null) {
+      this.spectateTargetId = null; // Clear player target when following well
+    }
   }
 
   // Get the player being spectated (for follow mode camera)
@@ -148,9 +158,15 @@ export class World {
     return this.state?.players.get(this.spectateTargetId);
   }
 
-  // Check if in full map view mode (spectating but not following anyone)
+  // Get the gravity well being spectated (for follow mode camera)
+  getSpectateWell(): InterpolatedGravityWell | undefined {
+    if (this.spectateWellId === null) return undefined;
+    return this.arena.gravityWells.find(w => w.id === this.spectateWellId);
+  }
+
+  // Check if in full map view mode (spectating but not following anyone or any well)
   isFullMapView(): boolean {
-    return this.isSpectator && this.spectateTargetId === null;
+    return this.isSpectator && this.spectateTargetId === null && this.spectateWellId === null;
   }
 
   // Update from interpolated server state
@@ -555,6 +571,9 @@ export class World {
   reset(): void {
     this.state = null;
     this.localPlayerId = null;
+    this.isSpectator = false;
+    this.spectateTargetId = null;
+    this.spectateWellId = null;
     this.playerNames.clear();
     this.recentKills.clear();
     this.lastKillCounts.clear();

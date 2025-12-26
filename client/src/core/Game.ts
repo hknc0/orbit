@@ -68,7 +68,7 @@ export class Game {
     this.canvas.addEventListener('click', this.handleSpectatorClick.bind(this));
   }
 
-  // Handle click to follow a player in spectator mode
+  // Handle click to follow a player or gravity well in spectator mode
   private handleSpectatorClick(e: MouseEvent): void {
     try {
       // Only handle clicks in spectator mode during gameplay
@@ -87,7 +87,7 @@ export class Game {
 
       // Find the closest alive player to the click position
       let closestPlayer: { id: string; distance: number } | null = null;
-      const clickRadius = 100; // Max distance to select a player
+      const playerClickRadius = 100; // Max distance to select a player
 
       const players = this.world.getPlayers();
       for (const player of players.values()) {
@@ -102,22 +102,52 @@ export class Game {
         const playerRadius = Math.sqrt(player.mass || 100) * 2;
         const adjustedDistance = Math.max(0, distance - playerRadius);
 
-        if (adjustedDistance <= clickRadius) {
+        if (adjustedDistance <= playerClickRadius) {
           if (!closestPlayer || adjustedDistance < closestPlayer.distance) {
             closestPlayer = { id: player.id, distance: adjustedDistance };
           }
         }
       }
 
+      // Find the closest gravity well to the click position
+      let closestWell: { id: number; distance: number } | null = null;
+      const wellClickRadius = 150; // Max distance to select a gravity well
+
+      for (const well of this.world.arena.gravityWells) {
+        if (!well.position || !isFinite(well.position.x) || !isFinite(well.position.y)) continue;
+
+        const dx = well.position.x - worldPos.x;
+        const dy = well.position.y - worldPos.y;
+        const distance = Math.sqrt(dx * dx + dy * dy);
+
+        // Account for well visual size (coreRadius + glow)
+        const wellVisualRadius = well.coreRadius * 2.5;
+        const adjustedDistance = Math.max(0, distance - wellVisualRadius);
+
+        if (adjustedDistance <= wellClickRadius) {
+          if (!closestWell || adjustedDistance < closestWell.distance) {
+            closestWell = { id: well.id, distance: adjustedDistance };
+          }
+        }
+      }
+
+      // Priority: player first, then well (players are more interactive)
       if (closestPlayer) {
         // Follow this player - validate ID before sending
         if (typeof closestPlayer.id === 'string' && closestPlayer.id.length > 0) {
+          this.world.setSpectateWell(null); // Clear any well target
           this.setSpectateTarget(closestPlayer.id);
         } else {
           console.warn('Invalid player ID:', closestPlayer.id);
         }
-      } else if (this.world.spectateTargetId !== null) {
-        // Clicked on empty space while following someone - return to full view
+      } else if (closestWell) {
+        // Follow this gravity well
+        this.setSpectateTarget(null); // Clear player target (don't send to server)
+        this.world.spectateTargetId = null;
+        this.world.setSpectateWell(closestWell.id);
+      } else if (this.world.spectateTargetId !== null || this.world.spectateWellId !== null) {
+        // Clicked on empty space while following something - return to full view
+        this.world.setSpectateWell(null);
         this.setSpectateTarget(null);
       }
     } catch (err) {

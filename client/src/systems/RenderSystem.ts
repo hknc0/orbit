@@ -85,6 +85,14 @@ export class RenderSystem {
   private readonly ZOOM_TRANSITION_DURATION = 800; // ms for full transition
   private readonly ZOOM_TRANSITION_THRESHOLD = 0.2; // Delta that triggers smooth transition
 
+  // Smooth camera position transitions for large changes (spectator view switch)
+  private cameraTransitionStart: number = 0;
+  private cameraTransitionFrom: Vec2 = new Vec2();
+  private cameraTransitionTo: Vec2 = new Vec2();
+  private lastTargetCameraOffset: Vec2 = new Vec2();
+  private readonly CAMERA_TRANSITION_DURATION = 800; // ms for full transition
+  private readonly CAMERA_TRANSITION_THRESHOLD = 200; // Distance that triggers smooth transition
+
   // Track previous speeds to detect acceleration (for other players' boost flames)
   private previousSpeeds: Map<string, number> = new Map();
 
@@ -129,7 +137,8 @@ export class RenderSystem {
   private getEffectQuality(world: World): 'full' | 'reduced' | 'minimal' {
     // Full-view spectators: viewing entire arena with all entities
     // Use reduced/minimal quality regardless of zoom (arena may be small)
-    if (world.isSpectator && world.spectateTargetId === null) {
+    // Note: Following a player or well is NOT full-view mode
+    if (world.isSpectator && world.spectateTargetId === null && world.spectateWellId === null) {
       if (this.currentZoom > 0.3) return 'reduced';
       return 'minimal';
     }
@@ -317,7 +326,7 @@ export class RenderSystem {
         const arenaRadius = world.arena.outerRadius * world.arena.scale;
         const minDimension = Math.min(canvas.width, canvas.height);
         this.targetZoom = Math.max(this.SPECTATOR_ZOOM_MIN, minDimension / (arenaRadius * this.SPECTATOR_ARENA_PADDING));
-      } else {
+      } else if (world.spectateTargetId !== null) {
         // Follow mode: track the spectated player
         const spectateTarget = world.getSpectateTarget();
         if (spectateTarget && spectateTarget.position && spectateTarget.velocity) {
@@ -343,9 +352,29 @@ export class RenderSystem {
           if (!isFinite(speed)) speed = 0;
           const speedRatio = Math.min(speed / this.SPEED_FOR_MAX_ZOOM_OUT, 1);
           this.targetZoom = this.ZOOM_MAX - (this.ZOOM_MAX - this.ZOOM_MIN) * speedRatio;
-        } else if (world.spectateTargetId) {
+        } else {
           // Target not found in current state - fall back to full map view
           // This can happen briefly when target dies or leaves
+          this.targetCameraOffset.set(centerX, centerY);
+          const arenaRadius = world.arena.outerRadius * world.arena.scale;
+          const minDimension = Math.min(canvas.width, canvas.height);
+          this.targetZoom = Math.max(this.SPECTATOR_ZOOM_MIN, minDimension / (arenaRadius * this.SPECTATOR_ARENA_PADDING));
+        }
+      } else if (world.spectateWellId !== null) {
+        // Follow mode: track the spectated gravity well
+        const spectateWell = world.getSpectateWell();
+        if (spectateWell && spectateWell.position) {
+          const posX = spectateWell.position.x;
+          const posY = spectateWell.position.y;
+          if (isFinite(posX) && isFinite(posY)) {
+            this.targetCameraOffset.set(centerX - posX, centerY - posY);
+          }
+          // Static zoom for wells - zoom in to see the star in detail
+          // Larger wells get slightly more zoom out
+          const wellZoomFactor = Math.min(1, 50 / spectateWell.coreRadius);
+          this.targetZoom = this.ZOOM_MAX * wellZoomFactor;
+        } else {
+          // Well not found (destroyed?) - fall back to full map view
           this.targetCameraOffset.set(centerX, centerY);
           const arenaRadius = world.arena.outerRadius * world.arena.scale;
           const minDimension = Math.min(canvas.width, canvas.height);
@@ -386,11 +415,8 @@ export class RenderSystem {
       }
     }
 
-    // Smooth camera interpolation
-    this.cameraOffset.x +=
-      (this.targetCameraOffset.x - this.cameraOffset.x) * this.CAMERA_SMOOTHING;
-    this.cameraOffset.y +=
-      (this.targetCameraOffset.y - this.cameraOffset.y) * this.CAMERA_SMOOTHING;
+    // Smooth camera interpolation with cinematic transitions for large changes
+    this.updateCameraPosition();
 
     // Smooth zoom interpolation with cinematic transitions for large changes
     this.updateZoom();
@@ -537,6 +563,18 @@ export class RenderSystem {
         // Draw orbit zones around each well (subtle rings) - skip at minimal quality
         if (quality !== 'minimal') {
           this.renderWellZones(well.position.x, well.position.y, well.coreRadius);
+        }
+
+        // Spectator follow indicator - subtle ring around followed well
+        if (world.isSpectator && world.spectateWellId === well.id) {
+          const indicatorRadius = well.coreRadius * 2.5;
+          this.ctx.strokeStyle = 'rgba(255, 255, 255, 0.15)';
+          this.ctx.lineWidth = 1;
+          this.ctx.setLineDash([4, 8]);
+          this.ctx.beginPath();
+          this.ctx.arc(well.position.x, well.position.y, indicatorRadius, 0, Math.PI * 2);
+          this.ctx.stroke();
+          this.ctx.setLineDash([]);
         }
       }
     } else {
@@ -921,19 +959,24 @@ export class RenderSystem {
       const colors = starTypes[starType];
 
       if (quality === 'minimal') {
-        // MINIMAL: Solid core + single glow (2 passes)
-        // Simple outer glow
-        const glowRadius = coreRadius * 1.4;
-        const outerGlow = this.ctx.createRadialGradient(x, y, coreRadius * 0.8, x, y, glowRadius);
-        outerGlow.addColorStop(0, `rgba(${colors.glow[0]}, ${colors.glow[1]}, ${colors.glow[2]}, 0.3)`);
+        // MINIMAL: Star-like appearance visible when zoomed out (2 passes)
+        // Larger glow so it's visible at small screen sizes
+        const glowRadius = coreRadius * 2.5;
+        const outerGlow = this.ctx.createRadialGradient(x, y, coreRadius * 0.3, x, y, glowRadius);
+        outerGlow.addColorStop(0, `rgba(${colors.glow[0]}, ${colors.glow[1]}, ${colors.glow[2]}, 0.5)`);
+        outerGlow.addColorStop(0.4, `rgba(${colors.glow[0]}, ${colors.glow[1]}, ${colors.glow[2]}, 0.2)`);
         outerGlow.addColorStop(1, `rgba(${colors.glow[0]}, ${colors.glow[1]}, ${colors.glow[2]}, 0)`);
         this.ctx.fillStyle = outerGlow;
         this.ctx.beginPath();
         this.ctx.arc(x, y, glowRadius, 0, Math.PI * 2);
         this.ctx.fill();
 
-        // Solid core
-        this.ctx.fillStyle = `rgba(${colors.core[0]}, ${colors.core[1]}, ${colors.core[2]}, 0.9)`;
+        // Core with bright white-hot center (star-like gradient)
+        const coreGrad = this.ctx.createRadialGradient(x, y, 0, x, y, coreRadius);
+        coreGrad.addColorStop(0, 'rgba(255, 255, 255, 1)'); // White-hot center
+        coreGrad.addColorStop(0.25, `rgba(${colors.core[0]}, ${colors.core[1]}, ${colors.core[2]}, 0.95)`);
+        coreGrad.addColorStop(1, `rgba(${colors.outer[0]}, ${colors.outer[1]}, ${colors.outer[2]}, 0.6)`);
+        this.ctx.fillStyle = coreGrad;
         this.ctx.beginPath();
         this.ctx.arc(x, y, coreRadius, 0, Math.PI * 2);
         this.ctx.fill();
@@ -1434,6 +1477,54 @@ export class RenderSystem {
   }
 
   // Update shake (called each frame)
+
+  // Smooth camera position with cinematic transitions for large changes (e.g., spectator view switch)
+  private updateCameraPosition(): void {
+    const now = performance.now();
+    const dx = this.targetCameraOffset.x - this.lastTargetCameraOffset.x;
+    const dy = this.targetCameraOffset.y - this.lastTargetCameraOffset.y;
+    const targetDelta = Math.sqrt(dx * dx + dy * dy);
+
+    // Detect significant target change - start a new transition
+    if (targetDelta > this.CAMERA_TRANSITION_THRESHOLD) {
+      this.cameraTransitionStart = now;
+      this.cameraTransitionFrom.copy(this.cameraOffset);
+      this.cameraTransitionTo.copy(this.targetCameraOffset);
+      this.lastTargetCameraOffset.copy(this.targetCameraOffset);
+    } else if (targetDelta > 5) {
+      // Small target changes - update the transition target smoothly
+      this.cameraTransitionTo.copy(this.targetCameraOffset);
+      this.lastTargetCameraOffset.copy(this.targetCameraOffset);
+    }
+
+    // Check if we're in a major transition
+    if (this.cameraTransitionStart > 0) {
+      const elapsed = now - this.cameraTransitionStart;
+      const duration = this.CAMERA_TRANSITION_DURATION;
+
+      if (elapsed < duration) {
+        // Time-based animation with ease-in-out cubic
+        const progress = elapsed / duration;
+        const eased = progress < 0.5
+          ? 4 * progress * progress * progress
+          : 1 - Math.pow(-2 * progress + 2, 3) / 2;
+
+        this.cameraOffset.x = this.cameraTransitionFrom.x +
+          (this.cameraTransitionTo.x - this.cameraTransitionFrom.x) * eased;
+        this.cameraOffset.y = this.cameraTransitionFrom.y +
+          (this.cameraTransitionTo.y - this.cameraTransitionFrom.y) * eased;
+      } else {
+        // Transition complete
+        this.cameraOffset.copy(this.cameraTransitionTo);
+        this.cameraTransitionStart = 0;
+      }
+    } else {
+      // Normal exponential smoothing for small/continuous changes (player following)
+      this.cameraOffset.x += (this.targetCameraOffset.x - this.cameraOffset.x) * this.CAMERA_SMOOTHING;
+      this.cameraOffset.y += (this.targetCameraOffset.y - this.cameraOffset.y) * this.CAMERA_SMOOTHING;
+    }
+  }
+
   // Smooth zoom with cinematic transitions for large changes (e.g., spectator follow mode)
   private updateZoom(): void {
     const now = performance.now();
@@ -2213,13 +2304,23 @@ export class RenderSystem {
         this.ctx.fillStyle = '#64748b';
         this.ctx.font = '10px Inter, system-ui, sans-serif';
         this.ctx.fillText('Click empty space to return to full view', specPanelX + specPanelW / 2, specPanelY + 32);
+      } else if (world.spectateWellId !== null) {
+        // Following a gravity well
+        const well = world.getSpectateWell();
+        const isCentral = well && well.id === 0;
+        const wellName = isCentral ? 'Black Hole' : `Star #${world.spectateWellId}`;
+        this.ctx.fillStyle = '#fbbf24'; // Amber for stars
+        this.ctx.fillText(`⭐ VIEWING: ${wellName}`, specPanelX + specPanelW / 2, specPanelY + 17);
+        this.ctx.fillStyle = '#64748b';
+        this.ctx.font = '10px Inter, system-ui, sans-serif';
+        this.ctx.fillText('Click empty space to return to full view', specPanelX + specPanelW / 2, specPanelY + 32);
       } else {
         // Full map view
         this.ctx.fillStyle = '#a78bfa';
         this.ctx.fillText('👁 SPECTATOR MODE', specPanelX + specPanelW / 2, specPanelY + 17);
         this.ctx.fillStyle = '#64748b';
         this.ctx.font = '10px Inter, system-ui, sans-serif';
-        this.ctx.fillText('Click on a player to follow them', specPanelX + specPanelW / 2, specPanelY + 32);
+        this.ctx.fillText('Click a player or star to follow', specPanelX + specPanelW / 2, specPanelY + 32);
       }
     }
 
@@ -2933,6 +3034,10 @@ export class RenderSystem {
     this.zoomTransitionFrom = this.ZOOM_MAX;
     this.zoomTransitionTo = this.ZOOM_MAX;
     this.lastTargetZoom = this.ZOOM_MAX;
+    this.cameraTransitionStart = 0;
+    this.cameraTransitionFrom.set(0, 0);
+    this.cameraTransitionTo.set(0, 0);
+    this.lastTargetCameraOffset.set(0, 0);
     this.previousSpeeds.clear();
     this.playerTrails.clear();
     this.lastTrailPositions.clear();
