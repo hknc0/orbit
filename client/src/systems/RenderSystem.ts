@@ -115,6 +115,17 @@ export class RenderSystem {
     this.ctx = ctx;
   }
 
+  // Effect quality levels based on zoom for spectator optimization
+  // Reduces rendering cost when zoomed out (effects too small to see)
+  private getEffectQuality(): 'full' | 'reduced' | 'minimal' {
+    // Full effects when zoom > 0.4 (normal player view or close spectator follow)
+    if (this.currentZoom > 0.4) return 'full';
+    // Reduced effects when zoom > 0.2 (medium zoom out)
+    if (this.currentZoom > 0.2) return 'reduced';
+    // Minimal effects when very zoomed out (full map view)
+    return 'minimal';
+  }
+
   // Performance: Get cached RGB values, parse only once per color
   private getRGB(color: string): { r: number; g: number; b: number } {
     let rgb = this.colorCache.get(color);
@@ -195,8 +206,13 @@ export class RenderSystem {
   }
 
   private renderPlayerTrails(world: World): void {
+    // Skip trails entirely when very zoomed out (sub-pixel rendering)
+    const quality = this.getEffectQuality();
+    if (quality === 'minimal') return;
+
     const now = Date.now();
     const ctx = this.ctx;
+    const renderGlow = quality === 'full';
 
     for (const [playerId, trail] of this.playerTrails) {
       if (trail.length < 2) continue;
@@ -252,11 +268,13 @@ export class RenderSystem {
         // Trail size grows from start to end of trail
         const trailRadius = pointRadius * (MOTION_FX.TRAIL_START_RADIUS_RATIO + indexRatio * (MOTION_FX.TRAIL_END_RADIUS_RATIO - MOTION_FX.TRAIL_START_RADIUS_RATIO));
 
-        // Outer glow (subtle, larger) - use globalAlpha instead of colorWithAlpha
-        ctx.globalAlpha = alpha * 0.3;
-        ctx.beginPath();
-        ctx.arc(point.x, point.y, trailRadius * 1.4, 0, Math.PI * 2);
-        ctx.fill();
+        // Outer glow (subtle, larger) - skip when reduced quality
+        if (renderGlow) {
+          ctx.globalAlpha = alpha * 0.3;
+          ctx.beginPath();
+          ctx.arc(point.x, point.y, trailRadius * 1.4, 0, Math.PI * 2);
+          ctx.fill();
+        }
 
         // Core trail point - use globalAlpha (fillStyle already set)
         ctx.globalAlpha = alpha;
@@ -288,12 +306,26 @@ export class RenderSystem {
         // Follow mode: track the spectated player
         const spectateTarget = world.getSpectateTarget();
         if (spectateTarget && spectateTarget.position && spectateTarget.velocity) {
-          this.targetCameraOffset.set(
-            centerX - spectateTarget.position.x,
-            centerY - spectateTarget.position.y
-          );
-          // Smooth zoom based on target's speed
-          const speed = spectateTarget.velocity.length?.() ?? 0;
+          // Validate position before using
+          const posX = spectateTarget.position.x;
+          const posY = spectateTarget.position.y;
+          if (isFinite(posX) && isFinite(posY)) {
+            this.targetCameraOffset.set(centerX - posX, centerY - posY);
+          }
+          // Smooth zoom based on target's speed - safely get velocity length
+          let speed = 0;
+          try {
+            // velocity might not be a Vec2 instance, handle gracefully
+            if (typeof spectateTarget.velocity.length === 'function') {
+              speed = spectateTarget.velocity.length() ?? 0;
+            } else if (spectateTarget.velocity.x !== undefined && spectateTarget.velocity.y !== undefined) {
+              // Fallback for plain object
+              speed = Math.sqrt(spectateTarget.velocity.x ** 2 + spectateTarget.velocity.y ** 2);
+            }
+          } catch {
+            speed = 0;
+          }
+          if (!isFinite(speed)) speed = 0;
           const speedRatio = Math.min(speed / this.SPEED_FOR_MAX_ZOOM_OUT, 1);
           this.targetZoom = this.ZOOM_MAX - (this.ZOOM_MAX - this.ZOOM_MIN) * speedRatio;
         } else if (world.spectateTargetId) {
@@ -875,6 +907,10 @@ export class RenderSystem {
 
   // Render boost flames separately (rendered first, behind trails)
   private renderBoostFlames(world: World, localPlayerBoosting: boolean): void {
+    // Skip flames entirely when very zoomed out (sub-pixel rendering)
+    const quality = this.getEffectQuality();
+    if (quality === 'minimal') return;
+
     const players = world.getPlayers();
 
     // Clean up stale speed tracking (players who left) - runs every ~60 frames
@@ -906,7 +942,7 @@ export class RenderSystem {
       this.previousSpeeds.set(player.id, speed);
 
       if (showFlame) {
-        this.renderBoostFlame(player.position, player.velocity, radius);
+        this.renderBoostFlame(player.position, player.velocity, radius, quality);
       }
     }
   }
@@ -915,6 +951,7 @@ export class RenderSystem {
   private renderPlayerBodies(world: World): void {
     const players = world.getPlayers();
     const now = Date.now();
+    const quality = this.getEffectQuality();
 
     for (const player of players.values()) {
       if (!player.alive) continue;
@@ -923,19 +960,21 @@ export class RenderSystem {
       const color = world.getPlayerColor(player.colorIndex);
       const isLocal = player.id === world.localPlayerId;
 
-      // Birth effect - expanding rings when player spawns
+      // Birth effect - expanding rings when player spawns (skip at minimal quality)
       // bornTime > 0 means show animation, 0 means skip (entered AOI, not actually spawned)
-      if (player.bornTime > 0) {
+      if (quality !== 'minimal' && player.bornTime > 0) {
         const birthAge = now - player.bornTime;
         if (birthAge < this.PLAYER_BIRTH_DURATION) {
-          this.renderPlayerBirthEffect(player.position, radius, color, birthAge / this.PLAYER_BIRTH_DURATION);
+          this.renderPlayerBirthEffect(player.position, radius, color, birthAge / this.PLAYER_BIRTH_DURATION, quality);
         }
       }
 
-      // Kill effect - golden pulsing glow when player gets a kill
-      const killProgress = world.getKillEffectProgress(player.id);
-      if (killProgress > 0) {
-        this.renderKillEffect(player.position, radius, killProgress);
+      // Kill effect - golden pulsing glow when player gets a kill (skip at minimal quality)
+      if (quality !== 'minimal') {
+        const killProgress = world.getKillEffectProgress(player.id);
+        if (killProgress > 0) {
+          this.renderKillEffect(player.position, radius, killProgress);
+        }
       }
 
       // Spawn protection indicator
@@ -963,12 +1002,14 @@ export class RenderSystem {
       this.ctx.arc(player.position.x, player.position.y, radius, 0, Math.PI * 2);
       this.ctx.stroke();
 
-      // Outer glow ring
-      this.ctx.strokeStyle = this.colorWithAlpha(color, 0.4);
-      this.ctx.lineWidth = 2;
-      this.ctx.beginPath();
-      this.ctx.arc(player.position.x, player.position.y, radius + 4, 0, Math.PI * 2);
-      this.ctx.stroke();
+      // Outer glow ring (skip at minimal quality)
+      if (quality !== 'minimal') {
+        this.ctx.strokeStyle = this.colorWithAlpha(color, 0.4);
+        this.ctx.lineWidth = 2;
+        this.ctx.beginPath();
+        this.ctx.arc(player.position.x, player.position.y, radius + 4, 0, Math.PI * 2);
+        this.ctx.stroke();
+      }
 
       // Direction indicator
       const dirX = Math.cos(player.rotation);
@@ -983,27 +1024,29 @@ export class RenderSystem {
       );
       this.ctx.stroke();
 
-      // Player name with human/bot hint
-      const nameY = player.position.y - radius - 10;
-      const playerName = world.getPlayerName(player.id);
+      // Player name with human/bot hint (skip at minimal quality - text too small)
+      if (quality !== 'minimal') {
+        const nameY = player.position.y - radius - 10;
+        const playerName = world.getPlayerName(player.id);
 
-      // Bot names are dimmed, humans are bright white with cyan dot
-      this.ctx.textAlign = 'center';
-      this.ctx.font = player.isBot ? '11px Inter, system-ui, sans-serif' : '12px Inter, system-ui, sans-serif';
+        // Bot names are dimmed, humans are bright white with cyan dot
+        this.ctx.textAlign = 'center';
+        this.ctx.font = player.isBot ? '11px Inter, system-ui, sans-serif' : '12px Inter, system-ui, sans-serif';
 
-      if (player.isBot) {
-        this.ctx.fillStyle = '#64748b';
-        this.ctx.fillText(playerName, player.position.x, nameY);
-      } else if (!isLocal) {
-        // Other human player: cyan dot + name
-        this.ctx.fillStyle = '#22d3ee';
-        this.ctx.fillText('•', player.position.x - this.ctx.measureText(playerName).width / 2 - 8, nameY);
-        this.ctx.fillStyle = '#ffffff';
-        this.ctx.fillText(playerName, player.position.x, nameY);
-      } else {
-        // Local player: just white name
-        this.ctx.fillStyle = '#ffffff';
-        this.ctx.fillText(playerName, player.position.x, nameY);
+        if (player.isBot) {
+          this.ctx.fillStyle = '#64748b';
+          this.ctx.fillText(playerName, player.position.x, nameY);
+        } else if (!isLocal) {
+          // Other human player: cyan dot + name
+          this.ctx.fillStyle = '#22d3ee';
+          this.ctx.fillText('•', player.position.x - this.ctx.measureText(playerName).width / 2 - 8, nameY);
+          this.ctx.fillStyle = '#ffffff';
+          this.ctx.fillText(playerName, player.position.x, nameY);
+        } else {
+          // Local player: just white name
+          this.ctx.fillStyle = '#ffffff';
+          this.ctx.fillText(playerName, player.position.x, nameY);
+        }
       }
     }
   }
@@ -1036,7 +1079,7 @@ export class RenderSystem {
   }
 
   // Player birth effect - expanding rings with player color
-  private renderPlayerBirthEffect(position: Vec2, radius: number, color: string, progress: number): void {
+  private renderPlayerBirthEffect(position: Vec2, radius: number, color: string, progress: number, quality: 'full' | 'reduced' | 'minimal' = 'full'): void {
     // Ease-out cubic for smooth animation
     const eased = 1 - Math.pow(1 - progress, 3);
     const fadeOut = 1 - eased;
@@ -1080,7 +1123,9 @@ export class RenderSystem {
       this.ctx.stroke();
     }
 
-    // Particle burst effect - use pre-computed sin/cos and globalAlpha
+    // Particle burst effect - use pre-computed sin/cos and globalAlpha (skip when reduced quality)
+    if (quality !== 'full') return; // Skip particles at reduced quality
+
     const particleDist = radius * (0.8 + eased * 2);
     const particleSize = (3 + radius * 0.05) * fadeOut;
 
@@ -1104,6 +1149,7 @@ export class RenderSystem {
     if (effects.length === 0) return;
 
     const ctx = this.ctx;
+    const quality = this.getEffectQuality();
 
     for (const effect of effects) {
       const { position, color, radius } = effect;
@@ -1143,6 +1189,12 @@ export class RenderSystem {
       ctx.arc(position.x, position.y, ringRadius, 0, Math.PI * 2);
       ctx.stroke();
 
+      // Skip particles at minimal quality (just show ring)
+      if (quality === 'minimal') {
+        ctx.globalAlpha = 1;
+        continue;
+      }
+
       // Particle color (white-hot → player color)
       const particleHeat = progress * 0.3;
       const pr = Math.round(rgb.r + (255 - rgb.r) * particleHeat);
@@ -1168,21 +1220,23 @@ export class RenderSystem {
       }
       ctx.stroke();
 
-      // === Secondary debris (4 smaller, faster, further) ===
-      ctx.lineWidth = Math.max(2, 3.5 * progress * scale);
-      ctx.globalAlpha = easeIn * 0.3;
-      ctx.beginPath();
+      // === Secondary debris (4 smaller, faster, further) - skip at reduced quality ===
+      if (quality === 'full') {
+        ctx.lineWidth = Math.max(2, 3.5 * progress * scale);
+        ctx.globalAlpha = easeIn * 0.3;
+        ctx.beginPath();
 
-      for (let i = 0; i < 4; i++) {
-        const { cos, sin } = RenderSystem.PARTICLE_ANGLES[i * 2 + 1];
-        const dist = radius * 0.6 + easeOut * radius * 2.8;
-        const px = position.x + cos * dist;
-        const py = position.y + sin * dist;
-        const stretch = 4 * progress * scale;
-        ctx.moveTo(px - cos * stretch, py - sin * stretch);
-        ctx.lineTo(px, py);
+        for (let i = 0; i < 4; i++) {
+          const { cos, sin } = RenderSystem.PARTICLE_ANGLES[i * 2 + 1];
+          const dist = radius * 0.6 + easeOut * radius * 2.8;
+          const px = position.x + cos * dist;
+          const py = position.y + sin * dist;
+          const stretch = 4 * progress * scale;
+          ctx.moveTo(px - cos * stretch, py - sin * stretch);
+          ctx.lineTo(px, py);
+        }
+        ctx.stroke();
       }
-      ctx.stroke();
 
       ctx.lineCap = 'butt';
 
@@ -1217,6 +1271,10 @@ export class RenderSystem {
   }
 
   private renderCollisionEffects(world: World): void {
+    // Skip collision effects entirely when very zoomed out
+    const quality = this.getEffectQuality();
+    if (quality === 'minimal') return;
+
     const effects = world.getCollisionEffects();
 
     for (const effect of effects) {
@@ -1255,19 +1313,21 @@ export class RenderSystem {
       ctx.arc(position.x, position.y, ringRadius, 0, Math.PI * 2);
       ctx.stroke();
 
-      // 3. Particles (6 particles, no shadow blur for performance)
-      const particleCount = 6;
-      for (let i = 0; i < particleCount; i++) {
-        const angle = (i / particleCount) * Math.PI * 2;
-        const dist = (1 - progress) * 40 * intensity;
-        const px = position.x + Math.cos(angle) * dist;
-        const py = position.y + Math.sin(angle) * dist;
-        const size = Math.max(0.5, 2 + progress * 3);
+      // 3. Particles (6 particles, no shadow blur for performance) - skip at reduced quality
+      if (quality === 'full') {
+        const particleCount = 6;
+        for (let i = 0; i < particleCount; i++) {
+          const angle = (i / particleCount) * Math.PI * 2;
+          const dist = (1 - progress) * 40 * intensity;
+          const px = position.x + Math.cos(angle) * dist;
+          const py = position.y + Math.sin(angle) * dist;
+          const size = Math.max(0.5, 2 + progress * 3);
 
-        ctx.fillStyle = this.colorWithAlpha(color, baseAlpha * 0.6);
-        ctx.beginPath();
-        ctx.arc(px, py, size, 0, Math.PI * 2);
-        ctx.fill();
+          ctx.fillStyle = this.colorWithAlpha(color, baseAlpha * 0.6);
+          ctx.beginPath();
+          ctx.arc(px, py, size, 0, Math.PI * 2);
+          ctx.fill();
+        }
       }
     }
   }
@@ -1389,7 +1449,7 @@ export class RenderSystem {
     }
   }
 
-  private renderBoostFlame(position: Vec2, velocity: Vec2, radius: number): void {
+  private renderBoostFlame(position: Vec2, velocity: Vec2, radius: number, quality: 'full' | 'reduced' | 'minimal' = 'full'): void {
     const speed = velocity.length();
     if (speed < MOTION_FX.FLAME_MIN_SPEED) return;
 
@@ -1458,8 +1518,8 @@ export class RenderSystem {
     ctx.closePath();
     ctx.fill();
 
-    // === SPARKS: Size-scaled particles at higher speeds ===
-    if (speed > MOTION_FX.FLAME_SPARK_THRESHOLD) {
+    // === SPARKS: Size-scaled particles at higher speeds (skip when reduced quality) ===
+    if (quality === 'full' && speed > MOTION_FX.FLAME_SPARK_THRESHOLD) {
       const sparkCount = Math.min(4, 1 + Math.floor((speed - MOTION_FX.FLAME_SPARK_THRESHOLD) / MOTION_FX.FLAME_SPARK_COUNT_SCALE));
       // Spark size scales with player radius
       const baseSparkSize = Math.max(1.5, radius * 0.08);
@@ -2634,8 +2694,10 @@ export class RenderSystem {
     // 1. Screen -> centered coords
     // 2. Undo zoom
     // 3. Undo camera offset
-    const worldX = (screenX - centerX) / this.currentZoom + centerX - this.cameraOffset.x;
-    const worldY = (screenY - centerY) / this.currentZoom + centerY - this.cameraOffset.y;
+    // Safeguard: prevent division by zero/invalid zoom
+    const zoom = this.currentZoom > 0.001 ? this.currentZoom : 0.1;
+    const worldX = (screenX - centerX) / zoom + centerX - this.cameraOffset.x;
+    const worldY = (screenY - centerY) / zoom + centerY - this.cameraOffset.y;
 
     return new Vec2(worldX, worldY);
   }

@@ -102,7 +102,7 @@ export class Game {
         const playerRadius = Math.sqrt(player.mass || 100) * 2;
         const adjustedDistance = Math.max(0, distance - playerRadius);
 
-        if (adjustedDistance < clickRadius) {
+        if (adjustedDistance <= clickRadius) {
           if (!closestPlayer || adjustedDistance < closestPlayer.distance) {
             closestPlayer = { id: player.id, distance: adjustedDistance };
           }
@@ -110,8 +110,12 @@ export class Game {
       }
 
       if (closestPlayer) {
-        // Follow this player
-        this.setSpectateTarget(closestPlayer.id);
+        // Follow this player - validate ID before sending
+        if (typeof closestPlayer.id === 'string' && closestPlayer.id.length > 0) {
+          this.setSpectateTarget(closestPlayer.id);
+        } else {
+          console.warn('Invalid player ID:', closestPlayer.id);
+        }
       } else if (this.world.spectateTargetId !== null) {
         // Clicked on empty space while following someone - return to full view
         this.setSpectateTarget(null);
