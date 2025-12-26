@@ -479,6 +479,20 @@ export class Game {
           } else {
             this.renderSystem.triggerShake(event.intensity);
           }
+        } else if (this.world.isSpectator) {
+          // Spectator mode: shake when spectate target is involved in collision
+          const spectateTarget = this.world.getSpectateTarget();
+          if (
+            spectateTarget &&
+            (event.playerA === this.world.spectateTargetId ||
+              event.playerB === this.world.spectateTargetId)
+          ) {
+            const dir = {
+              x: spectateTarget.position.x - event.position.x,
+              y: spectateTarget.position.y - event.position.y,
+            };
+            this.renderSystem.triggerShake(event.intensity, dir);
+          }
         }
         break;
       }
@@ -493,11 +507,29 @@ export class Game {
         // Add expanding wave effect
         this.world.addGravityWaveEffect(event.position, event.strength, event.wellId);
 
-        // Trigger screen shake based on distance to local player
+        // Get viewer position for shake calculation
+        let viewerPos: { x: number; y: number } | null = null;
+
         const localPlayer = this.world.getLocalPlayer();
         if (localPlayer && localPlayer.alive) {
-          const dx = localPlayer.position.x - event.position.x;
-          const dy = localPlayer.position.y - event.position.y;
+          // Regular player mode
+          viewerPos = localPlayer.position;
+        } else if (this.world.isSpectator) {
+          // Spectator mode: use spectate target position
+          const spectateTarget = this.world.getSpectateTarget();
+          if (spectateTarget) {
+            viewerPos = spectateTarget.position;
+          } else {
+            // Full map view or following a well: use arena center
+            const spectateWell = this.world.getSpectateWell();
+            viewerPos = spectateWell?.position ?? { x: 0, y: 0 };
+          }
+        }
+
+        // Trigger screen shake based on distance to viewer
+        if (viewerPos) {
+          const dx = viewerPos.x - event.position.x;
+          const dy = viewerPos.y - event.position.y;
           const dist = Math.sqrt(dx * dx + dy * dy);
 
           // Scale maxDist with arena size (base 1500 at scale 1.0)
