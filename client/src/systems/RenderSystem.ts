@@ -447,19 +447,27 @@ export class RenderSystem {
           centerY - localPlayer.position.y
         );
 
-        // Snap camera on first frame or respawn (avoid jump)
+        // Calculate dynamic zoom based on speed
+        const speed = localPlayer.velocity.length();
+        const speedRatio = Math.min(speed / this.SPEED_FOR_MAX_ZOOM_OUT, 1);
+        this.targetZoom = this.ZOOM_MAX - (this.ZOOM_MAX - this.ZOOM_MIN) * speedRatio;
+
+        // Snap camera AND zoom on first frame or respawn (avoid animated transition)
+        // This prevents the "shake" effect when transitioning from spectator to player
         if (!this.cameraInitialized) {
           this.cameraOffset.copy(this.targetCameraOffset);
+          this.lastTargetCameraOffset.copy(this.targetCameraOffset);
+          // Snap zoom instantly - don't animate from spectator zoom (0.1) to player zoom (1.0)
+          this.currentZoom = this.targetZoom;
+          this.lastTargetZoom = this.targetZoom;
+          // Cancel any in-progress transitions
+          this.cameraTransitionStart = 0;
+          this.zoomTransitionStart = 0;
           this.cameraInitialized = true;
           if (this.gameStartTime === 0) {
             this.gameStartTime = Date.now();
           }
         }
-
-        // Calculate dynamic zoom based on speed
-        const speed = localPlayer.velocity.length();
-        const speedRatio = Math.min(speed / this.SPEED_FOR_MAX_ZOOM_OUT, 1);
-        this.targetZoom = this.ZOOM_MAX - (this.ZOOM_MAX - this.ZOOM_MIN) * speedRatio;
       } else {
         // Player dead or not found - reset camera for next spawn
         // but DON'T change targetZoom - keep current zoom until player appears
