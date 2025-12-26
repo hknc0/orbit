@@ -6,7 +6,7 @@ Comprehensive catalog of all performance optimizations in Orbit Royale.
 
 ## Server (Rust)
 
-### Memory
+### Memory & Allocation
 
 | Technique | How it works |
 |-----------|--------------|
@@ -15,6 +15,9 @@ Comprehensive catalog of all performance optimizations in Orbit Royale.
 | **BitVec for booleans** | A `Vec<bool>` uses 1 byte per bool. BitVec packs 8 bools into 1 byte. For 100K bots: 100KB → 12.5KB. |
 | **Swap-remove deletion** | To remove index 3 from `[A,B,C,D,E]`: swap D↔E, then pop. Result: `[A,B,E,D]`. O(1) vs O(n) shifting. |
 | **Dense index mapping** | Map `PlayerId (UUID)` → `u32 (0,1,2...)`. Access bot data via `array[dense_index]` instead of HashMap lookup. |
+| **Thread-local buffers** | Reuse `Vec` via `thread_local!` + `RefCell`. Clear and reuse instead of allocating per-call. Used in: density grid, notable players, AOI filtering, collision pairs. |
+| **SmallVec inline storage** | `SmallVec<[T; N]>` stores up to N items on stack, spills to heap only when exceeded. Used for inputs (4 inline) and top player IDs (8 inline). |
+| **Buffer pool scaling** | `BufferPool::for_connections(n)` scales pool size (32-512) based on expected connections. Reduces allocation fallback rate. |
 
 ### Network
 
@@ -23,9 +26,10 @@ Comprehensive catalog of all performance optimizations in Orbit Royale.
 | **AOI filtering** | Only send entities near the player. 1000 bots across map but only 50 nearby? Send 50. Bandwidth scales with density, not total count. |
 | **Max entity cap** | Hard limit (100) prevents worst-case: player at center of 500-bot swarm would otherwise get massive packets. |
 | **Velocity lookahead** | If player moves right at 200u/s, expand AOI rightward by 400 units (2s). Entities appear before player reaches them, not after. |
-| **Density grid** | Instead of sending 1000 bot positions for minimap, divide arena into 16×16 cells and send count per cell (256 bytes total). |
-| **Notable players** | High-mass players are visible on radar. Sort by mass, take top 15. Others must be nearby to appear. |
+| **Density grid** | Instead of sending 1000 bot positions for minimap, divide arena into 16×16 cells and send count per cell (256 bytes total). Uses thread-local buffers. |
+| **Notable players** | High-mass players are visible on radar. Sort by mass, take top 15. Uses thread-local buffer for sorting. |
 | **Bincode** | Binary format: `f32` = 4 bytes. JSON `"123.456"` = 7+ bytes plus quotes/commas. 60% smaller overall. |
+| **Spectator snapshot caching** | Pre-compute AOI snapshots for bots with spectator followers. Deduplicate via `HashSet`, share via `Arc`. O(M) instead of O(N×M). |
 
 ### Concurrency
 
@@ -33,8 +37,9 @@ Comprehensive catalog of all performance optimizations in Orbit Royale.
 |-----------|--------------|
 | **Crossbeam channels** | MPSC = Multi-Producer Single-Consumer. Many connection threads send inputs; one game loop receives. No locks—uses atomic operations internally. |
 | **Parking lot RwLock** | Std RwLock has syscall overhead. Parking_lot spins briefly before sleeping, avoiding kernel transitions for short waits. |
-| **Rayon par_iter** | `players.par_iter_mut()` splits work across CPU cores automatically. 8 cores = ~8x throughput for independent updates. |
+| **Rayon par_iter** | `players.par_iter_mut()` splits work across CPU cores automatically. 8 cores = ~8x throughput for independent updates. Used for gravity, physics, AI. |
 | **Hashbrown** | Google's SwissTable algorithm. Better cache utilization than std HashMap through SIMD-accelerated probing. |
+| **FxHashMap** | `rustc_hash::FxHashMap` for faster hashing with small integer keys. Used for gravity well lookups and input buffering. |
 
 ### Spatial
 
@@ -45,12 +50,13 @@ Comprehensive catalog of all performance optimizations in Orbit Royale.
 | **Pre-computed offsets** | Neighbor cells: `[(-1,-1), (-1,0), ..., (1,1)]`. Static array—no allocation, no computation per query. |
 | **Zone grid** | Larger cells (500u) storing aggregate data: total bots, average velocity, threat level. AI checks zone stats instead of individual bots. |
 | **Well spatial grid** | Gravity wells have large influence (1000+ units). Separate grid with bigger cells prevents checking distant wells. |
+| **Collision pair iterator** | Thread-local buffer + `for_each_potential_collision()` callback for zero-allocation iteration. |
 
 ### Algorithms
 
 | Technique | How it works |
 |-----------|--------------|
-| **Distance squared** | `sqrt(dx² + dy²) < r` becomes `dx² + dy² < r²`. Square root costs ~20 cycles; squaring costs ~1. Same result. |
+| **Distance squared** | `sqrt(dx² + dy²) < r` becomes `dx² + dy² < r²`. Square root costs ~20 cycles; squaring costs ~1. Same result. Used in AOI with pre-computed `effective_extended_radius_sq`. |
 | **Early exit** | Found 100 entities? Stop searching. First collision found? Stop checking pairs. Don't do work you'll throw away. |
 | **Input coalescing** | 3 inputs arrive in one tick. Thrust/aim: use latest (player's current intention). Fire-release: OR together (don't miss the tap). |
 | **Behavioral batching** | Process all "orbit" bots together, then all "chase" bots. Same code path = instruction cache stays hot, branch predictor learns pattern. |
@@ -73,13 +79,14 @@ Comprehensive catalog of all performance optimizations in Orbit Royale.
 | **Well cache** | Bot orbiting well #3. Cache well #3's ID for 0.5s instead of finding nearest well every tick (O(n) search). |
 | **Zone data cache** | Aggregate stats (bot count, total mass) computed once at cycle start, reused by all zone queries that cycle. |
 | **Cold path separation** | Bot personality (aggression, preferred distance) never changes. Store in separate array—hot loop never touches it, keeping cache clean. |
+| **Well position cache** | `WellPositionCache` uses SoA layout (separate Vec for x, y, mass, min_dist_sq). Built once per tick, shared across all gravity calculations. |
 
 ### Low-level
 
 | Technique | How it works |
 |-----------|--------------|
 | **#[inline]** | Hint to compiler: copy function body into caller. Eliminates call overhead for tiny hot functions like `vec2.length()`. |
-| **Inverse multiply** | See Spatial section. `x / 64` → `x * 0.015625`. Division is slow. |
+| **Inverse multiply** | `x / 64` → `x * 0.015625`. Division is slow. |
 | **Epsilon checks** | Two objects at same position: `distance = 0`, `normalize = divide by 0` = NaN/crash. Add tiny epsilon: `if dist > 0.001`. |
 | **Exponential drag** | `vel *= 0.998` every tick. Alternative: `vel -= vel * drag * dt` requires multiply AND subtract AND depends on dt. |
 | **Velocity clamping** | Physics bugs or cheats could create vel=999999. Clamp to max prevents entities escaping arena or breaking spatial grid. |
@@ -147,7 +154,7 @@ Comprehensive catalog of all performance optimizations in Orbit Royale.
 | **Angle wrapping** | Rotation 350° → 10°: naive lerp goes 350→180→10 (wrong way). Wrap difference to [-180°, 180°] first: 350° + 20° = 10°. |
 | **Cubic easing** | `t³` starts slow, ends fast (ease-in). `1-(1-t)³` starts fast, ends slow (ease-out). More natural than linear. |
 
-### Input
+### Input & State
 
 | Technique | How it works |
 |-----------|--------------|
@@ -155,11 +162,6 @@ Comprehensive catalog of all performance optimizations in Orbit Royale.
 | **State caching** | On keydown: set `isBoostHeld = true`. On keyup: set false. Reading input = read bool. No need to query keyboard state each frame. |
 | **Input latching** | Eject button released between ticks. Without latch: tick reads `released = false` (too late). Latch: set flag, clear after tick reads it. |
 | **Focus reset** | Tab away while holding W: keyup never fires. On blur: reset all held keys to false. Prevents stuck movement on return. |
-
-### State
-
-| Technique | How it works |
-|-----------|--------------|
 | **Snapshot buffer limit** | Interpolation needs 2+ snapshots. Keep 32 max. Older ones useless—just memory. Ring buffer style. |
 | **Destroyed tracking** | Well destroyed, but old snapshot (network delay) still has it. Track destroyed IDs; filter them from interpolation. |
 | **Birth time tracking** | New player: play spawn animation. Player enters AOI (was always alive, just far): no animation. Track first-seen time to distinguish. |
@@ -222,139 +224,66 @@ Lock-free channel: Atomic compare-and-swap. No waiting, no context switch. Both 
 | BitVec | 1 byte/bool | 1 bit/bool | 8x memory |
 | Quality tiers | Full effects always | Adaptive quality | 3x fewer draws |
 | Unreliable input | TCP retransmit | Fire-and-forget | Lower latency |
+| Thread-local buffers | Alloc per call | Reuse buffer | 15-25% tick time |
+| FxHashMap | std HashMap | Faster hash | 5-10% lookup |
 
 ---
 
-## Potential Optimizations
+## Future Optimizations
 
-Comprehensive analysis of optimization opportunities. Items marked with ✅ have been implemented.
+Opportunities not yet implemented. Profile before implementing.
 
----
-
-### Server (Rust) - High Priority
-
-| Technique | How it works | Location | Expected Impact | Status |
-|-----------|--------------|----------|-----------------|--------|
-| **Density grid pooling** | Uses thread-local `Vec<f32>` buffers. Pool and reuse with `.clear()` instead of allocating. | `net/protocol.rs:259-326` | Eliminate ~256 × broadcasts allocations/tick | ✅ |
-| **Spectator snapshot caching** | Pre-compute AOI snapshots for bots with spectator followers. Deduplicate targets via `HashSet`, share via `Arc<Vec<u8>>`. | `net/game_session.rs` | O(M) instead of O(N×M) for N spectators, M bots | ✅ |
-| **Notable players incremental sort** | Thread-local `Vec<NotablePlayer>` buffer avoids per-call allocation. Buffer is cleared and reused. | `net/protocol.rs:304-321` | Avoid O(n log n) sort per snapshot | ✅ |
-| **AOI iterator chain** | Thread-local buffers with `SmallVec<[PlayerId; 8]>` for top players. Index-based iteration avoids borrow conflicts. | `net/aoi.rs:135-150` | O(1) allocations instead of O(n) | ✅ |
-| **Collision pair iterator** | Thread-local buffer + `for_each_potential_collision()` callback for zero-alloc iteration. | `game/spatial.rs:120-237` | O(1) vs O(n²) worst-case allocation | ✅ |
-| **Gravity parallelization** | All gravity update functions use `par_iter_mut()` via rayon for multi-core processing. | `game/systems/gravity.rs` | 4-8x faster on multi-core | ✅ Pre-existing |
-
-### Server (Rust) - Medium Priority
-
-| Technique | How it works | Location | Expected Impact | Status |
-|-----------|--------------|----------|-----------------|--------|
-| **AOI length_sq()** | Pre-compute `effective_extended_radius_sq`, use `length_sq()` for all distance comparisons. | `net/aoi.rs` | ~40 instructions per entity removed | ✅ |
-| **Zone-batched gravity** | Each entity queries well grid separately. Batch entities by zone, compute influences once per zone. | `game/systems/gravity.rs` | 70% fewer grid lookups | Skipped (already well-optimized with cache+parallel) |
-| **String interning** | Player names cloned for every AOI snapshot. Use interned string pool for common names. | `net/protocol.rs` | ~50 bytes × players × clients saved | Skipped (small benefit for complexity) |
-| **Input Vec pooling** | Uses `SmallVec<[PlayerInput; 4]>` + `FxHashMap` for inline storage of typical input counts. | `game/game_loop.rs` | Fewer per-player allocations | ✅ |
-| **FxHasher for small maps** | Uses `rustc_hash::FxHashMap` for gravity well ID lookups and input buffering. | `gravity.rs`, `game_loop.rs` | ~5-10% faster iteration | ✅ |
-| **Buffer pool scaling** | `BufferPool::for_connections(100)` scales pool size (32-512) based on expected connections. | `net/game_session.rs` | Reduce allocation fallback rate | ✅ |
-
-### Server (Rust) - SIMD Opportunities
-
-| Technique | How it works | Location | Expected Impact |
-|-----------|--------------|----------|-----------------|
-| **Batch position updates** | Use `packed_simd` or `std::simd` to update 4 positions simultaneously. Load 4× (x,y,vx,vy), compute, store. | `game/systems/physics.rs` | 2-4x physics throughput |
-| **SIMD velocity normalization** | Normalize batches of velocity vectors using SIMD instructions. | `util/vec2.rs` | 4x faster for bulk normalize |
-| **Gravity force SIMD** | Calculate gravity from 4 wells simultaneously per entity. | `game/systems/gravity.rs` | 2-4x gravity computation |
-
-### Server (Rust) - Low-Level
-
-| Technique | How it works | Location | Expected Impact |
-|-----------|--------------|----------|-----------------|
-| **Conditional logging** | `tracing::debug!` formats strings even when disabled. | `game/game_loop.rs:224` | N/A - tracing crate is already zero-cost when disabled |
-| **Index-based GameState** | HashMap<PlayerId, Player> scatters memory. Use `Vec<Option<Player>>` with dense indices. | `game/state.rs` | Better cache locality for physics |
-| **Generational arena** | `projectiles.retain()` scans all projectiles. Use generational arena for O(1) removal. | `game/state.rs` | O(removed) instead of O(total) |
-| **Streaming protocol** | Entire snapshot encoded to buffer. Stream with variable-length encoding. | `net/protocol.rs` | ~30% bandwidth reduction |
-
----
-
-### Client (TypeScript) - High Priority
-
-| Technique | How it works | Location | Expected Impact |
-|-----------|--------------|----------|-----------------|
-| **Well Map caching** | `new Map(wells.map(...))` every frame in `renderChargingWells()`. Cache when wells unchanged. | `RenderSystem.ts:1752` | 1 Map allocation/frame → 0 |
-| **Canvas state batching** | `fillStyle`/`strokeStyle` set per entity. Group entities by color, set style once per group. | `RenderSystem.ts` | 50-80% fewer state changes |
-| **Vec2 object pooling** | 50-200 Vec2 created per frame via `vec2Lerp()`. Pool and reuse via `get()`/`release()`. | `Vec2.ts`, `StateSync.ts` | 90% fewer allocations |
-| **Quality level caching** | `getEffectQuality()` called per effect (10-30x/frame). Cache once at frame start. | `RenderSystem.ts:366` | 10-30 redundant calls → 1 |
-| **Trail circular buffer** | `.shift()` to remove old points is O(n). Use ring buffer with head pointer for O(1). | `RenderSystem.ts:245` | O(1) vs O(n) per trail |
-
-### Client (TypeScript) - Medium Priority
-
-| Technique | How it works | Location | Expected Impact |
-|-----------|--------------|----------|-----------------|
-| **Gradient caching** | Creates canvas gradients every frame for gravity wells. Cache when center/radius unchanged. | `RenderSystem.ts:732-1130` | ~5% faster well rendering |
-| **BinaryWriter pooling** | New BinaryWriter/Reader per encode/decode. Pool and reuse instances. | `Codec.ts` | 10-20% network handling |
-| **Batch save/restore** | 15+ `ctx.save()`/`restore()` per frame. Restructure to minimize state stack operations. | `RenderSystem.ts` | Reduce context overhead |
-| **setLineDash wrapper** | Called repeatedly to reset dash pattern. Create wrapper that tracks current state. | `RenderSystem.ts:552,629` | Avoid redundant calls |
-| **Pre-compute globalAlpha** | Set multiple times in trail loop. Set once per quality level, vary via composite ops. | `RenderSystem.ts:349-363` | Fewer state changes |
-
-### Client (TypeScript) - Future Considerations
-
-| Technique | How it works | When to use | Expected Impact |
-|-----------|--------------|-------------|-----------------|
-| **OffscreenCanvas** | Move complex gravity well rendering to OffscreenCanvas, composite result. | When targeting 60+ FPS | Parallel rendering |
-| **Web Workers** | Offload interpolation or physics prediction to worker thread. | If profiling shows interpolation bottleneck | Main thread stays responsive |
-| **WebGL renderer** | Replace Canvas 2D with WebGL for batched draw calls. | If entity count exceeds 500 visible | 3-10x draw throughput |
-| **Instanced rendering** | Draw all same-type entities in single WebGL draw call with instance attributes. | With WebGL renderer | Single draw for 100s of entities |
-| **TypedArray state** | Store player positions in Float32Array for SIMD-like operations. | For 1000+ players visible | Better memory layout |
-
----
-
-### Network Protocol Enhancements
+### Server - SIMD
 
 | Technique | How it works | Expected Impact |
 |-----------|--------------|-----------------|
-| **Bit packing** | Use 2 bits for 3 options instead of 32. Pack boolean flags into single byte. | 20-30% smaller packets |
-| **ZigZag encoding** | Delta values can be negative. ZigZag maps small magnitudes to small unsigned values. | Better delta compression |
-| **Position quantization** | Send 16-bit fixed-point instead of 32-bit float when full precision unnecessary. | 50% position data reduction |
-| **Velocity prediction** | Don't send velocity if linear prediction matches within threshold. | 30-50% fewer velocity updates |
-| **Interest management tiers** | Nearby = full update, medium = position-only, far = existence-only. | Bandwidth scales with distance |
-| **Snapshot interpolation hints** | Server marks which entities moved significantly vs. stationary. | Client skips unchanged lerps |
+| **Batch position updates** | Use `std::simd` to update 4 positions simultaneously. | 2-4x physics throughput |
+| **SIMD velocity normalization** | Normalize batches of velocity vectors using SIMD. | 4x faster bulk normalize |
+| **Gravity force SIMD** | Calculate gravity from 4 wells simultaneously per entity. | 2-4x gravity computation |
+
+### Server - Data Structures
+
+| Technique | How it works | Expected Impact |
+|-----------|--------------|-----------------|
+| **Index-based GameState** | Replace `HashMap<PlayerId, Player>` with `Vec<Option<Player>>` + dense indices. | Better cache locality |
+| **Generational arena** | Use generational arena for projectiles/debris for O(1) removal. | O(removed) vs O(total) |
+
+### Client - Rendering
+
+| Technique | How it works | Expected Impact |
+|-----------|--------------|-----------------|
+| **Well Map caching** | Cache Map when wells unchanged instead of rebuilding every frame. | 1 alloc/frame → 0 |
+| **Canvas state batching** | Group entities by color, set fillStyle once per group. | 50-80% fewer state changes |
+| **Vec2 object pooling** | Pool and reuse Vec2 objects instead of creating new ones. | 90% fewer allocations |
+| **Trail circular buffer** | Replace `.shift()` (O(n)) with ring buffer (O(1)). | O(1) vs O(n) per trail |
+
+### Client - Advanced
+
+| Technique | When to use | Expected Impact |
+|-----------|-------------|-----------------|
+| **OffscreenCanvas** | When targeting 60+ FPS with complex effects | Parallel rendering |
+| **Web Workers** | If interpolation is a bottleneck | Main thread stays responsive |
+| **WebGL renderer** | If entity count exceeds 500 visible | 3-10x draw throughput |
+
+### Network Protocol
+
+| Technique | How it works | Expected Impact |
+|-----------|--------------|-----------------|
+| **Bit packing** | Pack boolean flags into single byte. | 20-30% smaller packets |
+| **Position quantization** | 16-bit fixed-point instead of 32-bit float. | 50% position data reduction |
+| **Velocity prediction** | Skip velocity if linear prediction matches. | 30-50% fewer velocity updates |
+| **Interest tiers** | Nearby = full, medium = position-only, far = existence-only. | Bandwidth scales with distance |
 
 ---
 
-### Memory Patterns
-
-| Pattern | Description | Applies to |
-|---------|-------------|------------|
-| **Object pooling** | Pre-allocate fixed pool, acquire/release instead of new/GC. | Effects, particles, Vec2, network buffers |
-| **Ring buffers** | Fixed-size array with head/tail pointers. No shifting, no allocation. | Trails, snapshots, tick history |
-| **Arena allocators** | Bump-allocate during frame, reset entire arena at frame end. | Per-tick temporary allocations |
-| **SmallVec/TinyVec** | Store small collections inline (stack), spill to heap only when exceeded. | Input queues, neighbor lists |
-| **Flyweight pattern** | Share immutable data (colors, names) via references instead of copies. | Player templates, asset data |
-
----
-
-### Profiling Recommendations
-
-Before implementing any optimization, profile to confirm the bottleneck:
+## Profiling Tools
 
 | Tool | Platform | Use for |
 |------|----------|---------|
-| `cargo flamegraph` | Rust | CPU hotspots, call graph visualization |
+| `cargo flamegraph` | Rust | CPU hotspots, call graph |
 | `perf` + `hotspot` | Rust/Linux | Low-level CPU analysis |
-| `tracy` | Rust | Frame-by-frame profiling with zones |
-| Chrome DevTools Performance | TypeScript | Frame timing, GC pauses, call tree |
-| Chrome DevTools Memory | TypeScript | Allocation tracking, heap snapshots |
-| `about:tracing` | Chrome | Low-level browser internals |
+| `tracy` | Rust | Frame-by-frame profiling |
+| Chrome DevTools Performance | TypeScript | Frame timing, GC pauses |
+| Chrome DevTools Memory | TypeScript | Allocation tracking |
 
-**Rule:** Measure twice, optimize once. The biggest wins often come from algorithmic changes, not micro-optimizations.
-
----
-
-### Impact Estimation Summary
-
-| Category | Item Count | Estimated Total Impact |
-|----------|------------|------------------------|
-| Server hot path allocations | 6 | 15-25% tick time reduction |
-| Server parallelization | 2 | 20-40% on multi-core |
-| Server SIMD | 3 | 10-20% physics/gravity |
-| Client allocations | 5 | 30-50% fewer GC pauses |
-| Client canvas state | 4 | 15-25% render time |
-| Network protocol | 6 | 30-50% bandwidth reduction |
-
-**Combined potential:** 25-40% server performance improvement, 20-35% client performance improvement, 30-50% bandwidth reduction.
+**Rule:** Measure twice, optimize once.
