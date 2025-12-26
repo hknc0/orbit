@@ -700,7 +700,7 @@ impl Default for ArenaScalingConfig {
             supermassive_core_mult: 2.5,
             // Golden angle distribution
             max_wells: 20,                // Hard cap for performance and gameplay
-            center_exclusion_ratio: 0.15, // Wells stay 15%+ from center
+            center_exclusion_ratio: 0.25, // Wells stay 25%+ from center (safe from supermassive)
         }
     }
 }

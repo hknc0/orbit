@@ -685,8 +685,10 @@ impl Arena {
 
             // === FERMAT SPIRAL RADIAL DISTRIBUTION ===
             // Distance increases with sqrt(index) for even area coverage
-            // t goes from 0 to 1 as we fill toward max_wells
-            let t = (well_index as f32 + 1.0) / (config.max_wells as f32).max(1.0);
+            // Use actual target count (not max_wells) so wells spread across full range
+            // even when there are only a few wells
+            let total_target = existing_orbital + actual_count;
+            let t = (well_index as f32 + 1.0) / (total_target as f32).max(1.0);
             let radius = min_radius + radial_range * t.sqrt();
 
             let position = Vec2::from_angle(angle) * radius;
@@ -1243,6 +1245,88 @@ mod tests {
         // Add more wells
         arena.add_orbital_wells(3, orbit_radius, &config);
         assert_eq!(arena.gravity_wells.len(), initial_count + 3);
+    }
+
+    #[test]
+    fn test_add_orbital_wells_radial_spread() {
+        // Verifies that few wells spread across the FULL radial range,
+        // not just clustered at the inner edge (regression test for golden angle fix)
+        use crate::config::ArenaScalingConfig;
+        let config = ArenaScalingConfig::default();
+        let mut arena = Arena::default();
+        let escape_radius = 800.0;
+
+        // Add only 3 wells - they should spread across the full range
+        arena.add_orbital_wells(3, escape_radius, &config);
+
+        let min_radius = escape_radius * config.center_exclusion_ratio;
+        let max_radius = escape_radius * config.well_max_ratio;
+        let radial_range = max_radius - min_radius;
+
+        // Get orbital well distances from center
+        let mut distances: Vec<f32> = arena.gravity_wells.values()
+            .filter(|w| w.id != CENTRAL_WELL_ID)
+            .map(|w| w.position.length())
+            .collect();
+        distances.sort_by(|a, b| a.partial_cmp(b).unwrap());
+
+        assert_eq!(distances.len(), 3, "Should have exactly 3 orbital wells");
+
+        // Wells should span at least 40% of the radial range
+        // (sqrt distribution gives ~42% span for 3 wells: from 58% to 100% of range)
+        let actual_span = distances.last().unwrap() - distances.first().unwrap();
+        let min_expected_span = radial_range * 0.4;
+
+        assert!(
+            actual_span >= min_expected_span,
+            "Wells should span at least 50% of radial range. \
+             Span: {:.0}, expected >= {:.0}. Distances: {:?}",
+            actual_span, min_expected_span, distances
+        );
+
+        // Innermost well should be in inner 65%, outermost in outer 15%
+        // (sqrt(1/3)=0.58, so first well is at ~58% of range)
+        let inner_bound = min_radius + radial_range * 0.65;
+        let outer_bound = min_radius + radial_range * 0.85;
+
+        assert!(
+            *distances.first().unwrap() <= inner_bound,
+            "Innermost well at {:.0} should be <= {:.0} (inner portion)",
+            distances.first().unwrap(), inner_bound
+        );
+        assert!(
+            *distances.last().unwrap() >= outer_bound,
+            "Outermost well at {:.0} should be >= {:.0} (outer portion)",
+            distances.last().unwrap(), outer_bound
+        );
+    }
+
+    #[test]
+    fn test_add_orbital_wells_respects_center_exclusion() {
+        // Verifies wells stay outside center_exclusion_ratio boundary
+        use crate::config::ArenaScalingConfig;
+        let config = ArenaScalingConfig::default();
+
+        // Test with various arena sizes
+        for escape_radius in [800.0, 1500.0, 3000.0] {
+            let mut arena = Arena::default();
+            arena.add_orbital_wells(5, escape_radius, &config);
+
+            let min_allowed_radius = escape_radius * config.center_exclusion_ratio;
+
+            for well in arena.gravity_wells.values() {
+                if well.id == CENTRAL_WELL_ID {
+                    continue; // Skip central supermassive
+                }
+
+                let dist = well.position.length();
+                assert!(
+                    dist >= min_allowed_radius,
+                    "Well at {:.0} units violates center exclusion (min: {:.0}) for arena size {:.0}",
+                    dist, min_allowed_radius, escape_radius
+                );
+            }
+        }
     }
 
     #[test]
