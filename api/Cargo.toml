@@ -51,6 +51,8 @@ parking_lot = "0.12"
 hashbrown = { version = "0.15", features = ["serde", "rayon"] }
 crossbeam-channel = "0.5"
 bitvec = "1.0"
+rustc-hash = "2.1"  # FxHasher - faster hash for small keys (used in gravity calculations)
+smallvec = "1.13"   # SmallVec - inline storage for small collections (input buffering)
 
 # TLS (required by wtransport)
 rcgen = "0.14"

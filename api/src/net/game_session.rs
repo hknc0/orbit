@@ -15,8 +15,30 @@ use tokio::sync::{mpsc, RwLock};
 use tokio::time::{interval, Instant};
 use tracing::{debug, info, warn};
 
+// ============================================================================
+// Buffer Pool Constants
+// ============================================================================
+
+/// Default buffer capacity in bytes (4KB covers most snapshot sizes)
+const BUFFER_POOL_CAPACITY: usize = 4096;
+
+/// Maximum buffer capacity to retain (prevents memory bloat from large messages)
+const BUFFER_POOL_MAX_RETAIN: usize = 65536;
+
+/// Minimum pool size regardless of expected connections
+const BUFFER_POOL_MIN_SIZE: usize = 32;
+
+/// Maximum pool size to prevent memory waste
+const BUFFER_POOL_MAX_SIZE: usize = 512;
+
+/// Buffers per expected concurrent connection
+/// Each connection may need multiple buffers for concurrent encoding
+const BUFFERS_PER_CONNECTION: usize = 2;
+
 /// Buffer pool for encoding - avoids allocations in hot path
 /// Uses a simple channel-based pool with pre-allocated buffers
+///
+/// OPTIMIZATION: Pool size scales based on expected connection count
 pub struct BufferPool {
     sender: mpsc::UnboundedSender<Vec<u8>>,
     receiver: std::sync::Mutex<mpsc::UnboundedReceiver<Vec<u8>>>,
@@ -38,30 +60,41 @@ impl BufferPool {
         }
     }
 
+    /// Create a buffer pool sized for expected connection count
+    /// OPTIMIZATION: Scales pool size to match server capacity
+    pub fn for_connections(expected_connections: usize) -> Self {
+        let count = (expected_connections * BUFFERS_PER_CONNECTION)
+            .max(BUFFER_POOL_MIN_SIZE)
+            .min(BUFFER_POOL_MAX_SIZE);
+        Self::new(count, BUFFER_POOL_CAPACITY)
+    }
+
     /// Get a buffer from the pool (or allocate new if empty)
     pub fn get(&self) -> Vec<u8> {
         self.receiver
             .lock()
             .ok()
             .and_then(|mut rx| rx.try_recv().ok())
-            .unwrap_or_else(|| Vec::with_capacity(4096))
+            .unwrap_or_else(|| Vec::with_capacity(BUFFER_POOL_CAPACITY))
     }
 
     /// Return a buffer to the pool for reuse
     pub fn put(&self, mut buf: Vec<u8>) {
         buf.clear();
-        // Only keep buffers under 64KB to avoid memory bloat
-        if buf.capacity() <= 65536 {
+        // Only keep buffers under max to avoid memory bloat
+        if buf.capacity() <= BUFFER_POOL_MAX_RETAIN {
             let _ = self.sender.send(buf);
         }
     }
 }
 
 /// Global buffer pool for encoding (lazy initialized)
+/// OPTIMIZATION: Sized for 100 concurrent connections (200 buffers)
 static ENCODE_POOL: std::sync::OnceLock<BufferPool> = std::sync::OnceLock::new();
 
 fn get_encode_pool() -> &'static BufferPool {
-    ENCODE_POOL.get_or_init(|| BufferPool::new(64, 4096))
+    // Default to 100 expected connections = 200 buffers (clamped to 32-512 range)
+    ENCODE_POOL.get_or_init(|| BufferPool::for_connections(100))
 }
 
 /// Encode a message using a pooled buffer
@@ -1356,6 +1389,39 @@ pub async fn broadcast_filtered_snapshots(session: &GameSession, tick: u64) {
     // Spectators following a player get the exact same bytes (zero extra encoding)
     let mut player_snapshot_cache: HashMap<PlayerId, Arc<Vec<u8>>> = HashMap::new();
 
+    // OPTIMIZATION: Pre-compute bot snapshots for spectators following bots
+    // Collect unique bot targets first, then compute snapshots once per bot
+    let bot_targets: std::collections::HashSet<PlayerId> = session.players.values()
+        .filter(|c| c.is_spectator)
+        .filter_map(|c| c.spectate_target)
+        .filter(|target_id| {
+            // It's a bot if there's no connection for this player ID
+            !session.players.contains_key(target_id)
+        })
+        .collect();
+
+    // Pre-compute AOI snapshots for bots with spectator followers
+    let mut bot_snapshot_cache: HashMap<PlayerId, Arc<Vec<u8>>> = HashMap::with_capacity(bot_targets.len());
+    for &bot_id in &bot_targets {
+        if let Some(bot) = session.game_loop.state().get_player(bot_id) {
+            let filtered = session.aoi_manager.filter_for_player(
+                bot_id,
+                bot.position,
+                bot.velocity,
+                &full_snapshot,
+            );
+            let message = ServerMessage::Snapshot(filtered);
+            match encode_pooled(&message) {
+                Ok(encoded) => {
+                    bot_snapshot_cache.insert(bot_id, Arc::new(encoded));
+                }
+                Err(e) => {
+                    warn!("Failed to encode bot snapshot for {}: {}", bot_id, e);
+                }
+            }
+        }
+    }
+
     // Rate limit: spectators get updates at reduced rate (every Nth tick)
     let spectator_tick = tick % SPECTATOR_TICK_DIVISOR == 0;
 
@@ -1442,28 +1508,10 @@ pub async fn broadcast_filtered_snapshots(session: &GameSession, tick: u64) {
                 if let Some(cached) = player_snapshot_cache.get(&target_id) {
                     // Human player - use their cached AOI-filtered snapshot (O(1))
                     (**cached).clone()
-                } else if let Some(target_player) = session.game_loop.state().get_player(target_id) {
-                    // Bot or entity not in cache - generate AOI-filtered view for their position
-                    // This ensures spectators following bots see the same AOI as a player at that position
-                    //
-                    // TODO(perf): Cache bot snapshots when multiple spectators follow the same bot.
-                    // Currently each spectator following the same bot triggers a separate AOI filter
-                    // and encode. For N spectators following M bots, this is O(N×M) instead of O(M).
-                    // Solution: Pre-compute AOI snapshots for all bots with followers, then share via Arc.
-                    let filtered = session.aoi_manager.filter_for_player(
-                        target_id,
-                        target_player.position,
-                        target_player.velocity,
-                        &full_snapshot,
-                    );
-                    let message = ServerMessage::Snapshot(filtered);
-                    match encode_pooled(&message) {
-                        Ok(encoded) => encoded,
-                        Err(e) => {
-                            warn!("Failed to encode bot-follow snapshot: {}", e);
-                            continue;
-                        }
-                    }
+                } else if let Some(cached) = bot_snapshot_cache.get(&target_id) {
+                    // Bot with cached snapshot - reuse pre-computed AOI snapshot (O(1))
+                    // This optimization ensures N spectators following same bot = O(1) not O(N)
+                    (**cached).clone()
                 } else if let Some(ref full) = full_snapshot_bytes {
                     // Target doesn't exist (disconnected/dead) - fall back to full view (rate-limited)
                     if !spectator_tick {
@@ -2068,6 +2116,95 @@ mod spectator_tests {
         // Verify the tick divisor is set to a reasonable value
         assert_eq!(super::SPECTATOR_TICK_DIVISOR, 2,
             "SPECTATOR_TICK_DIVISOR should be 2 (50% rate for full-view spectators)");
+    }
+
+    #[test]
+    fn test_bot_snapshot_caching_logic() {
+        // Test the logic for identifying bot targets that need cached snapshots
+        // Bot targets are players without connections (i.e., not in the players HashMap)
+
+        use std::collections::{HashSet, HashMap};
+
+        struct MockConnection {
+            is_spectator: bool,
+            spectate_target: Option<u32>,
+        }
+
+        // Simulate the optimization logic from broadcast_filtered_snapshots
+        fn collect_bot_targets(
+            connections: &HashMap<u32, MockConnection>,
+        ) -> HashSet<u32> {
+            connections.values()
+                .filter(|c| c.is_spectator)
+                .filter_map(|c| c.spectate_target)
+                .filter(|target_id| {
+                    // It's a bot if there's no connection for this player ID
+                    !connections.contains_key(target_id)
+                })
+                .collect()
+        }
+
+        // Scenario: 2 spectators following the same bot (ID 100), 1 following a human (ID 1)
+        let mut connections = HashMap::new();
+        // Human player with connection
+        connections.insert(1, MockConnection { is_spectator: false, spectate_target: None });
+        // Spectator following human (player 1)
+        connections.insert(2, MockConnection { is_spectator: true, spectate_target: Some(1) });
+        // Spectator following bot (bot 100)
+        connections.insert(3, MockConnection { is_spectator: true, spectate_target: Some(100) });
+        // Another spectator following same bot (bot 100)
+        connections.insert(4, MockConnection { is_spectator: true, spectate_target: Some(100) });
+        // Spectator following different bot (bot 200)
+        connections.insert(5, MockConnection { is_spectator: true, spectate_target: Some(200) });
+
+        let bot_targets = collect_bot_targets(&connections);
+
+        // Should identify bots 100 and 200 (they don't have connections)
+        assert!(bot_targets.contains(&100), "Bot 100 should be identified as a target");
+        assert!(bot_targets.contains(&200), "Bot 200 should be identified as a target");
+        assert_eq!(bot_targets.len(), 2, "Should find exactly 2 unique bot targets");
+
+        // Human player 1 should NOT be in bot_targets (they have a connection)
+        assert!(!bot_targets.contains(&1), "Human player 1 should not be in bot_targets");
+
+        // The optimization ensures:
+        // - Bot 100's snapshot is computed ONCE even though 2 spectators follow it
+        // - Bot 200's snapshot is computed ONCE
+        // - Human player 1's snapshot is reused from player_snapshot_cache
+        // Total: O(M) bot snapshot computations instead of O(N*M) where N=spectators, M=bots
+    }
+
+    #[test]
+    fn test_bot_snapshot_cache_deduplication() {
+        // Verify that multiple spectators following the same bot only trigger one cache entry
+        use std::collections::HashSet;
+
+        struct MockSpectator {
+            spectate_target: Option<u32>,
+        }
+
+        let spectators = vec![
+            MockSpectator { spectate_target: Some(100) }, // Bot 100
+            MockSpectator { spectate_target: Some(100) }, // Same bot
+            MockSpectator { spectate_target: Some(100) }, // Same bot again
+            MockSpectator { spectate_target: Some(200) }, // Different bot
+        ];
+
+        // Player IDs that have connections (simulate real players)
+        let player_connections: HashSet<u32> = HashSet::new(); // Empty = all targets are bots
+
+        let bot_targets: HashSet<u32> = spectators.iter()
+            .filter_map(|s| s.spectate_target)
+            .filter(|id| !player_connections.contains(id))
+            .collect();
+
+        // Even though 3 spectators follow bot 100, it should only appear once
+        assert_eq!(bot_targets.len(), 2, "Should deduplicate to 2 unique bots");
+        assert!(bot_targets.contains(&100));
+        assert!(bot_targets.contains(&200));
+
+        // The cache would contain only 2 entries, not 4
+        // This saves 2 redundant AOI filter + encode operations
     }
 }
 

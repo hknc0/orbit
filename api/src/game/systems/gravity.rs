@@ -8,6 +8,7 @@
 #![allow(dead_code)] // Physics utilities for orbital calculations
 
 use rayon::prelude::*;
+use rustc_hash::FxHashMap;
 
 use crate::config::{GravityConfig, GravityRangeMode};
 use crate::game::constants::physics::{CENTRAL_MASS, G};
@@ -111,6 +112,7 @@ pub fn update_central_with_config(state: &mut GameState, config: &GravityConfig,
 
 /// Calculate gravity acceleration from nearby wells using spatial grid + cache
 /// Returns (gx, gy) acceleration components
+/// OPTIMIZATION: Uses FxHashMap for faster well ID lookups
 #[inline(always)]
 fn calculate_gravity_limited(
     px: f32,
@@ -118,7 +120,7 @@ fn calculate_gravity_limited(
     position: Vec2,
     well_grid: &crate::game::spatial::WellSpatialGrid,
     cache: &WellPositionCache,
-    id_to_index: &std::collections::HashMap<WellId, usize>,
+    id_to_index: &FxHashMap<WellId, usize>,
     influence_radius_sq: f32,
 ) -> (f32, f32) {
     let mut gx = 0.0f32;
@@ -157,8 +159,9 @@ fn update_central_limited(state: &mut GameState, config: &GravityConfig, dt: f32
 
     // Build cache once per tick - struct-of-arrays for cache locality
     // Also build ID-to-index map for O(1) lookups from spatial grid queries
+    // OPTIMIZATION: Use FxHashMap for faster lookup with small integer keys
     let cache = WellPositionCache::from_wells(state.arena.gravity_wells.values());
-    let id_to_index: std::collections::HashMap<WellId, usize> = cache
+    let id_to_index: FxHashMap<WellId, usize> = cache
         .ids
         .iter()
         .enumerate()

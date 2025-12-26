@@ -7,6 +7,14 @@
 
 use crate::util::vec2::Vec2;
 use hashbrown::HashMap;
+use std::cell::RefCell;
+
+// Thread-local reusable buffer for collision pair queries
+thread_local! {
+    /// Reusable buffer for collision pairs to avoid per-frame allocations
+    static COLLISION_PAIRS_BUFFER: RefCell<Vec<(SpatialEntity, SpatialEntity)>> =
+        RefCell::new(Vec::with_capacity(1024));
+}
 
 // ============================================================================
 // Entity Spatial Grid Constants
@@ -111,16 +119,82 @@ impl SpatialGrid {
 
     /// Query entities and return pairs to check for collision
     /// This avoids checking the same pair twice
+    ///
+    /// OPTIMIZATION: Uses thread-local buffer to avoid per-frame allocations.
+    /// The returned Vec is cloned from the reusable buffer.
     pub fn get_potential_collisions(&self) -> Vec<(SpatialEntity, SpatialEntity)> {
-        let mut pairs = Vec::new();
+        COLLISION_PAIRS_BUFFER.with(|buffer_cell| {
+            let mut pairs = buffer_cell.borrow_mut();
+            pairs.clear();
 
+            // For each cell, check entities within the cell and with right/bottom neighbors
+            // This ensures each pair is only checked once
+            for (&(cx, cy), entities) in &self.cells {
+                // Check pairs within the same cell
+                for i in 0..entities.len() {
+                    for j in (i + 1)..entities.len() {
+                        pairs.push((entities[i], entities[j]));
+                    }
+                }
+
+                // Check with right neighbor
+                if let Some(right_cell) = self.cells.get(&(cx + 1, cy)) {
+                    for entity in entities {
+                        for other in right_cell {
+                            pairs.push((*entity, *other));
+                        }
+                    }
+                }
+
+                // Check with bottom neighbor
+                if let Some(bottom_cell) = self.cells.get(&(cx, cy + 1)) {
+                    for entity in entities {
+                        for other in bottom_cell {
+                            pairs.push((*entity, *other));
+                        }
+                    }
+                }
+
+                // Check with bottom-right neighbor
+                if let Some(br_cell) = self.cells.get(&(cx + 1, cy + 1)) {
+                    for entity in entities {
+                        for other in br_cell {
+                            pairs.push((*entity, *other));
+                        }
+                    }
+                }
+
+                // Check with bottom-left neighbor
+                if let Some(bl_cell) = self.cells.get(&(cx - 1, cy + 1)) {
+                    for entity in entities {
+                        for other in bl_cell {
+                            pairs.push((*entity, *other));
+                        }
+                    }
+                }
+            }
+
+            // Clone is required since we return from thread-local borrow
+            pairs.clone()
+        })
+    }
+
+    /// Process each potential collision pair with a callback function
+    /// This is more efficient than get_potential_collisions() when you don't
+    /// need to store all pairs, as it avoids cloning the buffer.
+    ///
+    /// OPTIMIZATION: Zero-allocation iteration over collision pairs
+    #[inline]
+    pub fn for_each_potential_collision<F>(&self, mut callback: F)
+    where
+        F: FnMut(SpatialEntity, SpatialEntity),
+    {
         // For each cell, check entities within the cell and with right/bottom neighbors
-        // This ensures each pair is only checked once
         for (&(cx, cy), entities) in &self.cells {
             // Check pairs within the same cell
             for i in 0..entities.len() {
                 for j in (i + 1)..entities.len() {
-                    pairs.push((entities[i], entities[j]));
+                    callback(entities[i], entities[j]);
                 }
             }
 
@@ -128,7 +202,7 @@ impl SpatialGrid {
             if let Some(right_cell) = self.cells.get(&(cx + 1, cy)) {
                 for entity in entities {
                     for other in right_cell {
-                        pairs.push((*entity, *other));
+                        callback(*entity, *other);
                     }
                 }
             }
@@ -137,7 +211,7 @@ impl SpatialGrid {
             if let Some(bottom_cell) = self.cells.get(&(cx, cy + 1)) {
                 for entity in entities {
                     for other in bottom_cell {
-                        pairs.push((*entity, *other));
+                        callback(*entity, *other);
                     }
                 }
             }
@@ -146,7 +220,7 @@ impl SpatialGrid {
             if let Some(br_cell) = self.cells.get(&(cx + 1, cy + 1)) {
                 for entity in entities {
                     for other in br_cell {
-                        pairs.push((*entity, *other));
+                        callback(*entity, *other);
                     }
                 }
             }
@@ -155,13 +229,11 @@ impl SpatialGrid {
             if let Some(bl_cell) = self.cells.get(&(cx - 1, cy + 1)) {
                 for entity in entities {
                     for other in bl_cell {
-                        pairs.push((*entity, *other));
+                        callback(*entity, *other);
                     }
                 }
             }
         }
-
-        pairs
     }
 
     /// Get statistics about the grid
@@ -418,6 +490,59 @@ mod tests {
 
         let pairs = grid.get_potential_collisions();
         assert_eq!(pairs.len(), 1);
+    }
+
+    #[test]
+    fn test_for_each_potential_collision() {
+        let mut grid = SpatialGrid::new(64.0);
+
+        // Two entities in same cell
+        let id1 = uuid::Uuid::new_v4();
+        let id2 = uuid::Uuid::new_v4();
+        grid.insert(create_player_entity(id1, 100.0, 100.0, 10.0));
+        grid.insert(create_player_entity(id2, 110.0, 100.0, 10.0));
+
+        // Third entity in neighboring cell
+        let id3 = uuid::Uuid::new_v4();
+        grid.insert(create_player_entity(id3, 165.0, 100.0, 10.0));
+
+        // Count pairs using callback
+        let mut pair_count = 0;
+        grid.for_each_potential_collision(|_a, _b| {
+            pair_count += 1;
+        });
+
+        // Should have: (1,2) in same cell + (1,3) and (2,3) from neighbor
+        assert_eq!(pair_count, 3, "Should find 3 pairs");
+
+        // Verify it produces same results as get_potential_collisions
+        let pairs = grid.get_potential_collisions();
+        assert_eq!(pairs.len(), pair_count, "for_each and get should produce same count");
+    }
+
+    #[test]
+    fn test_collision_buffer_reuse() {
+        // Verify that the thread-local buffer is properly reused
+        let mut grid = SpatialGrid::new(64.0);
+
+        // First call
+        for i in 0..10 {
+            let id = uuid::Uuid::new_v4();
+            grid.insert(create_player_entity(id, 100.0 + i as f32 * 5.0, 100.0, 10.0));
+        }
+        let pairs1 = grid.get_potential_collisions();
+
+        // Clear and add different entities
+        grid.clear();
+        for i in 0..5 {
+            let id = uuid::Uuid::new_v4();
+            grid.insert(create_player_entity(id, 100.0 + i as f32 * 5.0, 100.0, 10.0));
+        }
+        let pairs2 = grid.get_potential_collisions();
+
+        // Verify correct counts (n*(n-1)/2 pairs for n entities in same cell)
+        assert_eq!(pairs1.len(), 45, "10 entities = 45 pairs");
+        assert_eq!(pairs2.len(), 10, "5 entities = 10 pairs");
     }
 
     #[test]

@@ -1,7 +1,18 @@
 use serde::{Deserialize, Serialize};
+use std::cell::RefCell;
 
 use crate::game::state::{GameState, MatchPhase, PlayerId, WellId};
 use crate::util::vec2::Vec2;
+
+// Thread-local reusable buffers to avoid per-snapshot allocations
+thread_local! {
+    /// Reusable f32 buffer for density grid calculation (256 elements for 16x16 grid)
+    static DENSITY_GRID_BUFFER: RefCell<Vec<f32>> = RefCell::new(Vec::with_capacity(DENSITY_GRID_SIZE * DENSITY_GRID_SIZE));
+    /// Reusable u8 buffer for final density grid output
+    static DENSITY_GRID_OUTPUT: RefCell<Vec<u8>> = RefCell::new(Vec::with_capacity(DENSITY_GRID_SIZE * DENSITY_GRID_SIZE));
+    /// Reusable buffer for notable players sorting (avoids per-snapshot allocation)
+    static NOTABLE_PLAYERS_BUFFER: RefCell<Vec<NotablePlayer>> = RefCell::new(Vec::with_capacity(MAX_NOTABLE_PLAYERS * 2));
+}
 
 /// Messages from client to server
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -245,79 +256,110 @@ impl GameSnapshot {
 
     /// Calculate mass density grid (16x16) for minimap heatmap
     /// Includes: player mass + gravity well influence (1/r falloff)
+    ///
+    /// OPTIMIZATION: Uses thread-local buffers to avoid per-snapshot allocations
     fn calculate_density_grid(state: &GameState) -> Vec<u8> {
-        let mut grid = vec![0.0f32; DENSITY_GRID_SIZE * DENSITY_GRID_SIZE];
-        let arena_radius = state.arena.current_safe_radius();
-        let cell_size = (arena_radius * 2.0) / DENSITY_GRID_SIZE as f32;
-        let inv_cell_size = 1.0 / cell_size; // Multiply instead of divide
+        DENSITY_GRID_BUFFER.with(|buffer_cell| {
+            DENSITY_GRID_OUTPUT.with(|output_cell| {
+                let mut grid = buffer_cell.borrow_mut();
+                let mut output = output_cell.borrow_mut();
+                let grid_size = DENSITY_GRID_SIZE * DENSITY_GRID_SIZE;
 
-        // 1. Add player MASS to cells (O(players) - fast)
-        for player in state.players.values() {
-            if !player.alive {
-                continue;
-            }
+                // Reuse buffer: clear and resize instead of allocating
+                grid.clear();
+                grid.resize(grid_size, 0.0f32);
 
-            let gx = ((player.position.x + arena_radius) * inv_cell_size) as usize;
-            let gy = ((player.position.y + arena_radius) * inv_cell_size) as usize;
+                let arena_radius = state.arena.current_safe_radius();
+                let cell_size = (arena_radius * 2.0) / DENSITY_GRID_SIZE as f32;
+                let inv_cell_size = 1.0 / cell_size; // Multiply instead of divide
 
-            if gx < DENSITY_GRID_SIZE && gy < DENSITY_GRID_SIZE {
-                grid[gy * DENSITY_GRID_SIZE + gx] += player.mass;
-            }
-        }
+                // 1. Add player MASS to cells (O(players) - fast)
+                for player in state.players.values() {
+                    if !player.alive {
+                        continue;
+                    }
 
-        // 2. Add gravity well influence (O(cells × wells) = ~4000 ops)
-        for gy in 0..DENSITY_GRID_SIZE {
-            let cell_y = (gy as f32 + 0.5) * cell_size - arena_radius;
-            for gx in 0..DENSITY_GRID_SIZE {
-                let cell_x = (gx as f32 + 0.5) * cell_size - arena_radius;
-                let idx = gy * DENSITY_GRID_SIZE + gx;
+                    let gx = ((player.position.x + arena_radius) * inv_cell_size) as usize;
+                    let gy = ((player.position.y + arena_radius) * inv_cell_size) as usize;
 
-                for well in state.arena.gravity_wells.values() {
-                    let dx = well.position.x - cell_x;
-                    let dy = well.position.y - cell_y;
-                    let dist_sq = dx * dx + dy * dy;
-                    let min_dist = well.core_radius * 2.0;
-                    let min_dist_sq = min_dist * min_dist;
-
-                    // 1/r falloff matching physics, clamped at core
-                    let influence = if dist_sq < min_dist_sq {
-                        well.mass / min_dist
-                    } else {
-                        well.mass / dist_sq.sqrt()
-                    };
-
-                    grid[idx] += influence;
+                    if gx < DENSITY_GRID_SIZE && gy < DENSITY_GRID_SIZE {
+                        grid[gy * DENSITY_GRID_SIZE + gx] += player.mass;
+                    }
                 }
-            }
-        }
 
-        // 3. Normalize to u8 (0-255)
-        let max_density = grid.iter().cloned().fold(0.0f32, f32::max).max(1.0);
-        let scale = 255.0 / max_density;
+                // 2. Add gravity well influence (O(cells × wells) = ~4000 ops)
+                for gy in 0..DENSITY_GRID_SIZE {
+                    let cell_y = (gy as f32 + 0.5) * cell_size - arena_radius;
+                    for gx in 0..DENSITY_GRID_SIZE {
+                        let cell_x = (gx as f32 + 0.5) * cell_size - arena_radius;
+                        let idx = gy * DENSITY_GRID_SIZE + gx;
 
-        grid.iter()
-            .map(|&d| (d * scale).min(255.0) as u8)
-            .collect()
+                        for well in state.arena.gravity_wells.values() {
+                            let dx = well.position.x - cell_x;
+                            let dy = well.position.y - cell_y;
+                            let dist_sq = dx * dx + dy * dy;
+                            let min_dist = well.core_radius * 2.0;
+                            let min_dist_sq = min_dist * min_dist;
+
+                            // 1/r falloff matching physics, clamped at core
+                            let influence = if dist_sq < min_dist_sq {
+                                well.mass / min_dist
+                            } else {
+                                well.mass / dist_sq.sqrt()
+                            };
+
+                            grid[idx] += influence;
+                        }
+                    }
+                }
+
+                // 3. Normalize to u8 (0-255)
+                let max_density = grid.iter().cloned().fold(0.0f32, f32::max).max(1.0);
+                let scale = 255.0 / max_density;
+
+                // Reuse output buffer: clear and fill
+                output.clear();
+                output.extend(grid.iter().map(|&d| (d * scale).min(255.0) as u8));
+
+                // Clone the output (required since we return from thread-local borrow)
+                output.clone()
+            })
+        })
     }
 
     /// Calculate notable players (high mass) for minimap radar
+    ///
+    /// OPTIMIZATION: Uses thread-local buffer to avoid per-snapshot allocations
     fn calculate_notable_players(state: &GameState) -> Vec<NotablePlayer> {
-        let mut notable: Vec<_> = state
-            .players
-            .values()
-            .filter(|p| p.alive && p.mass >= NOTABLE_MASS_THRESHOLD)
-            .map(|p| NotablePlayer {
-                id: p.id,
-                position: p.position,
-                mass: p.mass,
-                color_index: p.color_index,
-            })
-            .collect();
+        NOTABLE_PLAYERS_BUFFER.with(|buffer_cell| {
+            let mut notable = buffer_cell.borrow_mut();
+            notable.clear();
 
-        // Sort by mass descending and take top N
-        notable.sort_by(|a, b| b.mass.partial_cmp(&a.mass).unwrap_or(std::cmp::Ordering::Equal));
-        notable.truncate(MAX_NOTABLE_PLAYERS);
-        notable
+            // Collect eligible players into reusable buffer
+            notable.extend(
+                state
+                    .players
+                    .values()
+                    .filter(|p| p.alive && p.mass >= NOTABLE_MASS_THRESHOLD)
+                    .map(|p| NotablePlayer {
+                        id: p.id,
+                        position: p.position,
+                        mass: p.mass,
+                        color_index: p.color_index,
+                    }),
+            );
+
+            // Sort by mass descending and take top N
+            notable.sort_by(|a, b| {
+                b.mass
+                    .partial_cmp(&a.mass)
+                    .unwrap_or(std::cmp::Ordering::Equal)
+            });
+            notable.truncate(MAX_NOTABLE_PLAYERS);
+
+            // Clone the result (required since we return from thread-local borrow)
+            notable.clone()
+        })
     }
 }
 
@@ -753,6 +795,122 @@ mod tests {
         let garbage = vec![0xFF, 0xFE, 0xFD];
         let result: Result<ClientMessage, _> = decode(&garbage);
         assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_density_grid_pooling() {
+        // Test that density grid calculation works correctly with pooled buffers
+        // and produces consistent results across multiple calls
+        use crate::game::state::GameState;
+
+        let state = GameState::new();
+
+        // First calculation
+        let grid1 = GameSnapshot::calculate_density_grid(&state);
+        assert_eq!(grid1.len(), DENSITY_GRID_SIZE * DENSITY_GRID_SIZE);
+
+        // Second calculation (should reuse buffers and produce same result)
+        let grid2 = GameSnapshot::calculate_density_grid(&state);
+        assert_eq!(grid2.len(), DENSITY_GRID_SIZE * DENSITY_GRID_SIZE);
+
+        // Results should be identical for the same state
+        assert_eq!(grid1, grid2, "Pooled buffers should produce consistent results");
+
+        // Verify non-zero values (gravity wells should produce density)
+        let non_zero = grid1.iter().filter(|&&v| v > 0).count();
+        assert!(non_zero > 0, "Density grid should have non-zero values from gravity wells");
+    }
+
+    #[test]
+    fn test_density_grid_pooling_multiple_calls() {
+        // Stress test: verify pooling works correctly across many calls
+        use crate::game::state::GameState;
+
+        let state = GameState::new();
+
+        // Call many times to ensure buffer reuse works correctly
+        for i in 0..100 {
+            let grid = GameSnapshot::calculate_density_grid(&state);
+            assert_eq!(
+                grid.len(),
+                DENSITY_GRID_SIZE * DENSITY_GRID_SIZE,
+                "Grid size wrong on iteration {}",
+                i
+            );
+        }
+    }
+
+    #[test]
+    fn test_notable_players_pooling() {
+        // Test that notable players calculation works correctly with pooled buffers
+        use crate::game::state::GameState;
+
+        let mut state = GameState::new();
+
+        // Add some players with varying mass
+        for i in 0..20 {
+            let player_id = Uuid::new_v4();
+            let mut player =
+                crate::game::state::Player::new(player_id, format!("Player{}", i), false, i as u8);
+            player.mass = 50.0 + (i as f32 * 10.0); // Mass ranges from 50 to 240
+            player.alive = true;
+            state.players.insert(player_id, player);
+        }
+
+        // First calculation
+        let notable1 = GameSnapshot::calculate_notable_players(&state);
+
+        // Should have at most MAX_NOTABLE_PLAYERS
+        assert!(notable1.len() <= MAX_NOTABLE_PLAYERS);
+
+        // Should be sorted by mass descending
+        for i in 1..notable1.len() {
+            assert!(
+                notable1[i - 1].mass >= notable1[i].mass,
+                "Notable players should be sorted by mass descending"
+            );
+        }
+
+        // Second calculation should produce same result (buffer reuse)
+        let notable2 = GameSnapshot::calculate_notable_players(&state);
+        assert_eq!(notable1.len(), notable2.len());
+
+        // Only players above threshold should be included
+        for player in &notable1 {
+            assert!(
+                player.mass >= NOTABLE_MASS_THRESHOLD,
+                "Player mass {} should be >= threshold {}",
+                player.mass,
+                NOTABLE_MASS_THRESHOLD
+            );
+        }
+    }
+
+    #[test]
+    fn test_notable_players_pooling_multiple_calls() {
+        // Stress test: verify pooling works correctly across many calls
+        use crate::game::state::GameState;
+
+        let mut state = GameState::new();
+
+        // Add a high-mass player
+        let player_id = Uuid::new_v4();
+        let mut player =
+            crate::game::state::Player::new(player_id, "HighMass".to_string(), false, 0);
+        player.mass = 200.0;
+        player.alive = true;
+        state.players.insert(player_id, player);
+
+        // Call many times to ensure buffer reuse works correctly
+        for i in 0..100 {
+            let notable = GameSnapshot::calculate_notable_players(&state);
+            assert_eq!(
+                notable.len(),
+                1,
+                "Should have exactly 1 notable player on iteration {}",
+                i
+            );
+        }
     }
 }
 
