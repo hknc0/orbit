@@ -461,9 +461,11 @@ export class RenderSystem {
         const speedRatio = Math.min(speed / this.SPEED_FOR_MAX_ZOOM_OUT, 1);
         this.targetZoom = this.ZOOM_MAX - (this.ZOOM_MAX - this.ZOOM_MIN) * speedRatio;
       } else {
-        // Player dead or not found - reset for next spawn
+        // Player dead or not found - reset camera for next spawn
+        // but DON'T change targetZoom - keep current zoom until player appears
+        // This prevents premature zoom transition that causes stuttering
+        // when transitioning from spectator to player mode
         this.cameraInitialized = false;
-        this.targetZoom = this.ZOOM_MAX;
       }
     }
 
