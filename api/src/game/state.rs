@@ -293,9 +293,19 @@ pub struct Arena {
     /// Next well ID to assign (monotonically increasing)
     #[serde(default = "default_next_well_id")]
     pub next_well_id: WellId,
+    /// Base angular offset for golden angle well distribution.
+    /// Initialized once at arena creation, reused for all well additions
+    /// to maintain consistent golden angle spacing across batches.
+    #[serde(default = "default_well_base_offset")]
+    pub well_base_offset: f32,
 }
 
 fn default_next_well_id() -> WellId { 1 }
+
+fn default_well_base_offset() -> f32 {
+    use rand::Rng;
+    rand::thread_rng().gen_range(0.0..std::f32::consts::TAU)
+}
 
 fn default_scale() -> f32 { 1.0 }
 
@@ -325,6 +335,7 @@ impl Default for Arena {
             well_grid,
             shrink_delay_ticks: 0,
             next_well_id: 1, // Central well uses ID 0
+            well_base_offset: default_well_base_offset(),
         }
     }
 }
@@ -409,6 +420,158 @@ impl Arena {
     /// Get number of orbital wells (excluding central)
     pub fn orbital_well_count(&self) -> usize {
         self.gravity_wells.len().saturating_sub(1)
+    }
+
+    /// Calculate minimum well spacing dynamically based on arena size and well count.
+    /// Uses formula: sqrt(arena_area / total_wells) * factor
+    /// This ensures spacing scales naturally as arena grows/shrinks.
+    fn calculate_min_well_spacing(&self, escape_radius: f32, total_wells: usize) -> f32 {
+        let arena_area = std::f32::consts::PI * escape_radius * escape_radius;
+        let area_per_well = arena_area / (total_wells.max(1) as f32);
+        let ideal_spacing = area_per_well.sqrt();
+        // Scale factor 0.4: balances between too tight (0.3) and too spread (0.5)
+        ideal_spacing * 0.4
+    }
+
+    /// Find optimal radial positions for new wells that fill gaps in existing distribution.
+    /// Returns a Vec of radii where new wells should be placed.
+    fn find_gap_radii(&self, count: usize, min_radius: f32, max_radius: f32) -> Vec<f32> {
+        if count == 0 {
+            return Vec::new();
+        }
+
+        // Get sorted list of existing well radii (excluding central well at origin)
+        let mut existing_radii: Vec<f32> = self.gravity_wells.values()
+            .filter(|w| w.id != CENTRAL_WELL_ID)
+            .map(|w| w.position.length())
+            .collect();
+        existing_radii.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+
+        // If no existing wells, use Fermat spiral distribution for even spacing
+        if existing_radii.is_empty() {
+            let radial_range = max_radius - min_radius;
+            return (0..count)
+                .map(|i| {
+                    let t = (i as f32 + 1.0) / (count as f32);
+                    min_radius + radial_range * t.sqrt()
+                })
+                .collect();
+        }
+
+        // Add boundaries as implicit "walls" to ensure edge gaps are considered
+        let mut boundaries = vec![min_radius];
+        boundaries.extend(existing_radii.iter().cloned());
+        boundaries.push(max_radius);
+
+        // Find gaps and their sizes
+        let mut gaps: Vec<(f32, f32)> = Vec::new(); // (gap_center, gap_size)
+        for i in 0..boundaries.len() - 1 {
+            let gap_start = boundaries[i];
+            let gap_end = boundaries[i + 1];
+            let gap_size = gap_end - gap_start;
+            if gap_size > 0.0 {
+                let gap_center = (gap_start + gap_end) / 2.0;
+                gaps.push((gap_center, gap_size));
+            }
+        }
+
+        // Sort gaps by size (largest first)
+        gaps.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
+
+        // Return centers of the largest gaps as positions for new wells
+        let mut result = Vec::with_capacity(count);
+        for (gap_center, _gap_size) in gaps.iter().take(count) {
+            result.push(*gap_center);
+        }
+
+        // If we still need more positions, use fallback
+        let radial_range = max_radius - min_radius;
+        while result.len() < count {
+            let fallback_t = (result.len() as f32 + 1.0) / (count as f32 + 1.0);
+            let fallback_radius = min_radius + radial_range * fallback_t;
+            result.push(fallback_radius);
+        }
+
+        result
+    }
+
+    /// Check if a position is valid for placing a new well.
+    /// Returns true if position has sufficient distance from all existing wells.
+    fn is_valid_well_position(&self, position: Vec2, min_spacing: f32) -> bool {
+        for well in self.gravity_wells.values() {
+            if well.id == CENTRAL_WELL_ID {
+                continue; // Central well handled via center_exclusion_ratio
+            }
+            let distance = (well.position - position).length();
+            if distance < min_spacing {
+                return false;
+            }
+        }
+        true
+    }
+
+    /// Try to find a valid position near the target, adjusting if needed.
+    /// Returns Some(position) if valid position found, None if impossible.
+    fn find_valid_well_position(
+        &self,
+        target_radius: f32,
+        target_angle: f32,
+        min_spacing: f32,
+        min_radius: f32,
+        max_radius: f32,
+    ) -> Option<Vec2> {
+        // Try original position first
+        let original = Vec2::from_angle(target_angle) * target_radius;
+        if self.is_valid_well_position(original, min_spacing) {
+            return Some(original);
+        }
+
+        // Try small angular adjustments (up to +/-30 degrees)
+        const ANGLE_STEPS: usize = 6;
+        const MAX_ANGLE_OFFSET: f32 = 0.52; // ~30 degrees
+
+        for step in 1..=ANGLE_STEPS {
+            let offset = (step as f32 / ANGLE_STEPS as f32) * MAX_ANGLE_OFFSET;
+
+            // Try positive offset
+            let pos_plus = Vec2::from_angle(target_angle + offset) * target_radius;
+            if self.is_valid_well_position(pos_plus, min_spacing) {
+                return Some(pos_plus);
+            }
+
+            // Try negative offset
+            let pos_minus = Vec2::from_angle(target_angle - offset) * target_radius;
+            if self.is_valid_well_position(pos_minus, min_spacing) {
+                return Some(pos_minus);
+            }
+        }
+
+        // Try radial adjustments if angular didn't work
+        const RADIAL_STEPS: usize = 4;
+        let radial_range = max_radius - min_radius;
+
+        for step in 1..=RADIAL_STEPS {
+            let offset = (step as f32 / RADIAL_STEPS as f32) * (radial_range * 0.1);
+
+            // Try larger radius
+            if target_radius + offset <= max_radius {
+                let pos = Vec2::from_angle(target_angle) * (target_radius + offset);
+                if self.is_valid_well_position(pos, min_spacing) {
+                    return Some(pos);
+                }
+            }
+
+            // Try smaller radius
+            if target_radius - offset >= min_radius {
+                let pos = Vec2::from_angle(target_angle) * (target_radius - offset);
+                if self.is_valid_well_position(pos, min_spacing) {
+                    return Some(pos);
+                }
+            }
+        }
+
+        // Could not find valid position
+        None
     }
 
     /// DEPRECATED: Use `scale_for_simulation()` instead for area-based well scaling.
@@ -619,8 +782,13 @@ impl Arena {
     /// Add orbital wells using golden angle distribution for optimal spacing.
     ///
     /// The golden angle (137.5°) ensures each new well is placed at maximum angular
-    /// distance from existing wells. Combined with Fermat's spiral radial distribution,
-    /// this creates a natural, visually pleasing galaxy pattern (like sunflower seeds).
+    /// distance from existing wells. Combined with gap-filling radial distribution,
+    /// this creates a natural, visually pleasing galaxy pattern.
+    ///
+    /// Key features:
+    /// - Uses persistent `well_base_offset` for consistent golden angle pattern across batches
+    /// - Gap-filling radial distribution places new wells in largest radial gaps
+    /// - Dynamic minimum spacing based on arena size and well count
     pub fn add_orbital_wells(&mut self, count: usize, escape_radius: f32, config: &ArenaScalingConfig) {
         use crate::game::constants::physics::CENTRAL_MASS;
         use rand::Rng;
@@ -644,28 +812,47 @@ impl Arena {
         // Define radial bounds using center_exclusion_ratio
         let min_radius = escape_radius * config.center_exclusion_ratio;
         let max_radius = escape_radius * config.well_max_ratio;
-        let radial_range = max_radius - min_radius;
 
-        // Random angular offset for variety (so galaxy doesn't always start same way)
-        let base_offset = rng.gen_range(0.0..std::f32::consts::TAU);
+        // Use persistent base_offset for consistent golden angle pattern across batches
+        // (FIX: Previously regenerated each call, breaking incremental distribution)
+        let base_offset = self.well_base_offset;
 
-        for i in 0..actual_count {
+        // Calculate total wells for spacing calculation
+        let total_wells = existing_orbital + actual_count;
+
+        // Dynamic minimum spacing based on arena size and well count
+        let min_spacing = self.calculate_min_well_spacing(escape_radius, total_wells);
+
+        // Find optimal radii that fill gaps in existing distribution
+        // (FIX: Previously used Fermat spiral that didn't account for existing wells)
+        let new_radii = self.find_gap_radii(actual_count, min_radius, max_radius);
+
+        for (i, target_radius) in new_radii.iter().enumerate() {
             let well_index = existing_orbital + i;
 
             // === GOLDEN ANGLE DISTRIBUTION ===
-            // Each well placed at golden_angle × index from base offset
+            // Each well placed at golden_angle × index from persistent base offset
             // This maximizes angular separation naturally
-            let angle = base_offset + (well_index as f32) * GOLDEN_ANGLE;
+            let target_angle = base_offset + (well_index as f32) * GOLDEN_ANGLE;
 
-            // === FERMAT SPIRAL RADIAL DISTRIBUTION ===
-            // Distance increases with sqrt(index) for even area coverage
-            // Use actual target count (not max_wells) so wells spread across full range
-            // even when there are only a few wells
-            let total_target = existing_orbital + actual_count;
-            let t = (well_index as f32 + 1.0) / (total_target as f32).max(1.0);
-            let radius = min_radius + radial_range * t.sqrt();
-
-            let position = Vec2::from_angle(angle) * radius;
+            // Find valid position with minimum spacing check
+            // (FIX: Previously had no spacing validation)
+            let position = match self.find_valid_well_position(
+                *target_radius,
+                target_angle,
+                min_spacing,
+                min_radius,
+                max_radius,
+            ) {
+                Some(pos) => pos,
+                None => {
+                    tracing::warn!(
+                        "Could not find valid position for well {} at target radius {:.0}, skipping",
+                        well_index, target_radius
+                    );
+                    continue;
+                }
+            };
 
             // Random well size for variety
             let size_mult = size_multipliers[rng.gen_range(0..size_multipliers.len())];
@@ -1535,6 +1722,197 @@ mod tests {
                     dist >= min_expected && dist <= max_expected,
                     "Well at {:?} (dist {:.0}) should be in range [{:.0}, {:.0}] based on TARGET radius {:.0}, not current {:.0}",
                     well.position, dist, min_expected, max_expected, target_escape, after_one_escape
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn test_well_base_offset_consistency() {
+        // Verify that well_base_offset stays constant across multiple add_orbital_wells() calls
+        use crate::config::ArenaScalingConfig;
+        let config = ArenaScalingConfig::default();
+        let mut arena = Arena::default();
+
+        let original_offset = arena.well_base_offset;
+
+        // Add wells in multiple batches
+        arena.add_orbital_wells(2, 1000.0, &config);
+        assert!(
+            (arena.well_base_offset - original_offset).abs() < f32::EPSILON,
+            "Offset should not change after adding wells"
+        );
+
+        arena.add_orbital_wells(2, 1500.0, &config);
+        assert!(
+            (arena.well_base_offset - original_offset).abs() < f32::EPSILON,
+            "Offset should remain constant across batches"
+        );
+
+        arena.add_orbital_wells(3, 2000.0, &config);
+        assert!(
+            (arena.well_base_offset - original_offset).abs() < f32::EPSILON,
+            "Offset should persist across all additions"
+        );
+    }
+
+    #[test]
+    fn test_incremental_well_distribution_quality() {
+        // Add wells in multiple batches and verify ALL wells maintain minimum spacing
+        use crate::config::ArenaScalingConfig;
+        let config = ArenaScalingConfig::default();
+        let mut arena = Arena::default();
+        let escape_radius = 2000.0;
+
+        // Simulate incremental arena growth
+        arena.add_orbital_wells(2, escape_radius, &config);
+        arena.add_orbital_wells(2, escape_radius, &config);
+        arena.add_orbital_wells(3, escape_radius, &config);
+
+        let wells: Vec<_> = arena.gravity_wells.values()
+            .filter(|w| w.id != CENTRAL_WELL_ID)
+            .collect();
+
+        // Calculate expected minimum spacing
+        let total_wells = wells.len();
+        let arena_area = std::f32::consts::PI * escape_radius * escape_radius;
+        let expected_min_spacing = (arena_area / (total_wells as f32)).sqrt() * 0.4 * 0.8; // 80% tolerance
+
+        // Verify all pairs maintain spacing
+        for i in 0..wells.len() {
+            for j in (i + 1)..wells.len() {
+                let dist = (wells[i].position - wells[j].position).length();
+                assert!(
+                    dist >= expected_min_spacing,
+                    "Wells {} and {} too close: {:.0} < {:.0}",
+                    wells[i].id, wells[j].id, dist, expected_min_spacing
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn test_gap_filling_distribution() {
+        // Add wells in batches and verify new wells fill radial gaps
+        use crate::config::ArenaScalingConfig;
+        let config = ArenaScalingConfig::default();
+        let mut arena = Arena::default();
+        let escape_radius = 2000.0;
+
+        let min_r = escape_radius * config.center_exclusion_ratio;
+        let max_r = escape_radius * config.well_max_ratio;
+
+        // Add initial wells
+        arena.add_orbital_wells(3, escape_radius, &config);
+
+        // Add more wells
+        arena.add_orbital_wells(2, escape_radius, &config);
+
+        // Get all radii sorted
+        let mut all_radii: Vec<f32> = arena.gravity_wells.values()
+            .filter(|w| w.id != CENTRAL_WELL_ID)
+            .map(|w| w.position.length())
+            .collect();
+        all_radii.sort_by(|a, b| a.partial_cmp(b).unwrap());
+
+        // Verify radii are reasonably spread across the range
+        let radial_span = all_radii.last().unwrap() - all_radii.first().unwrap();
+        let expected_min_span = (max_r - min_r) * 0.4; // At least 40% of range
+
+        assert!(
+            radial_span >= expected_min_span,
+            "Wells should span at least 40% of radial range. Span: {:.0}, expected >= {:.0}",
+            radial_span, expected_min_span
+        );
+
+        // Calculate minimum gap between adjacent radii (should be reasonable)
+        let min_gap = all_radii.windows(2)
+            .map(|w| w[1] - w[0])
+            .fold(f32::MAX, f32::min);
+
+        // With 5 wells across ~1200 unit range, min gap should be at least 50 units
+        assert!(
+            min_gap >= 50.0,
+            "Radial gaps should not be too small. Min gap: {:.0}, expected >= 50",
+            min_gap
+        );
+    }
+
+    #[test]
+    fn test_dynamic_well_spacing() {
+        // Test that spacing scales dynamically with arena size and well count
+        let arena = Arena::default();
+
+        // Small arena with few wells
+        let small_spacing = arena.calculate_min_well_spacing(800.0, 3);
+        // sqrt(PI * 800^2 / 3) * 0.4 ≈ 327
+
+        // Larger arena with more wells
+        let large_spacing = arena.calculate_min_well_spacing(3000.0, 10);
+        // sqrt(PI * 3000^2 / 10) * 0.4 ≈ 672
+
+        // Spacing should scale with arena size
+        assert!(
+            large_spacing > small_spacing,
+            "Larger arena should have larger spacing: {} > {}",
+            large_spacing, small_spacing
+        );
+
+        // Verify rough expected values
+        assert!(
+            small_spacing > 200.0 && small_spacing < 500.0,
+            "Small arena spacing should be ~327: got {}",
+            small_spacing
+        );
+        assert!(
+            large_spacing > 500.0 && large_spacing < 900.0,
+            "Large arena spacing should be ~672: got {}",
+            large_spacing
+        );
+    }
+
+    #[test]
+    fn test_incremental_adds_maintain_spacing_across_batches() {
+        // Updated version of test_add_orbital_wells_spacing that verifies
+        // spacing is maintained ACROSS incremental batches (not just within single batch)
+        use crate::config::ArenaScalingConfig;
+        let config = ArenaScalingConfig::default();
+        let mut arena = Arena::default();
+        let orbit_radius = 2000.0;
+
+        // Add wells in separate batches (simulating arena growth over time)
+        arena.add_orbital_wells(2, orbit_radius, &config);
+        let count_after_first = arena.orbital_well_count();
+
+        arena.add_orbital_wells(3, orbit_radius, &config);
+        let count_after_second = arena.orbital_well_count();
+
+        arena.add_orbital_wells(2, orbit_radius, &config);
+        let final_count = arena.orbital_well_count();
+
+        // Verify wells were added across batches
+        assert_eq!(count_after_first, 2, "First batch should add 2 wells");
+        assert_eq!(count_after_second, 5, "Second batch should add 3 more");
+        assert_eq!(final_count, 7, "Third batch should add 2 more");
+
+        // All wells across ALL batches should be reasonably spaced
+        let wells: Vec<_> = arena.gravity_wells.values()
+            .filter(|w| w.id != CENTRAL_WELL_ID)
+            .collect();
+
+        // Calculate dynamic spacing expectation
+        let arena_area = std::f32::consts::PI * orbit_radius * orbit_radius;
+        let dynamic_spacing = (arena_area / (wells.len() as f32)).sqrt() * 0.4;
+        let min_acceptable = dynamic_spacing * 0.7; // 70% of calculated minimum
+
+        for i in 0..wells.len() {
+            for j in (i + 1)..wells.len() {
+                let dist = (wells[i].position - wells[j].position).length();
+                assert!(
+                    dist >= min_acceptable,
+                    "Wells {} (batch unknown) and {} too close: {:.0} < {:.0}. \
+                     This could indicate broken incremental distribution.",
+                    wells[i].id, wells[j].id, dist, min_acceptable
                 );
             }
         }
