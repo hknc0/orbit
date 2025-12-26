@@ -213,6 +213,10 @@ export function encodeClientMessage(msg: ClientMessage): Uint8Array {
       writer.writeU32(6);
       writer.writeU8(msg.colorIndex);
       break;
+    case 'ViewportInfo':
+      writer.writeU32(7);
+      writer.writeF32(msg.zoom);
+      break;
   }
 
   return writer.getBytes();

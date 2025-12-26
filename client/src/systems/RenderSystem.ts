@@ -3046,4 +3046,9 @@ export class RenderSystem {
     this.scaleHistory = [];
     this.scaleDirection = 'stable';
   }
+
+  /** Get current zoom level (for viewport info reporting to server) */
+  getCurrentZoom(): number {
+    return this.currentZoom;
+  }
 }

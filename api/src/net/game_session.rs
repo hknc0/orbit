@@ -208,6 +208,9 @@ pub struct PlayerConnection {
     pub spectate_target: Option<PlayerId>,
     /// Last time this connection sent any message (for idle detection)
     pub last_activity: Instant,
+    /// Current viewport zoom level for filtering (1.0 = normal, 0.1 = zoomed out)
+    /// Used to skip sending entities that would be too small to see at current zoom
+    pub viewport_zoom: f32,
 }
 
 /// Shared game session that manages the game loop and player connections
@@ -436,6 +439,7 @@ impl GameSession {
                 is_spectator: false,
                 spectate_target: None,
                 last_activity: Instant::now(),
+                viewport_zoom: 1.0, // Default to normal zoom
             },
         );
 
@@ -475,6 +479,7 @@ impl GameSession {
                 is_spectator: true,
                 spectate_target: None, // Full view by default
                 last_activity: Instant::now(),
+                viewport_zoom: 0.1, // Spectators start zoomed out
             },
         );
 
@@ -489,6 +494,15 @@ impl GameSession {
                 conn.last_activity = Instant::now(); // Activity on target change
                 info!("Spectator {} now following {:?}", spectator_id, target);
             }
+        }
+    }
+
+    /// Set viewport zoom level for a connection (for entity filtering)
+    pub fn set_viewport_zoom(&mut self, player_id: PlayerId, zoom: f32) {
+        if let Some(conn) = self.players.get_mut(&player_id) {
+            // Clamp zoom to valid range
+            conn.viewport_zoom = zoom.clamp(0.05, 1.0);
+            conn.last_activity = Instant::now();
         }
     }
 
@@ -1312,12 +1326,20 @@ pub async fn broadcast_filtered_snapshots(session: &GameSession, tick: u64) {
     // (bots don't have connections, so won't be in player_snapshot_cache)
     let has_spectators = session.players.values().any(|c| c.is_spectator);
 
+    // Find minimum zoom among full-view spectators for conservative filtering
+    // Lower zoom = more zoomed out = filter more aggressively
+    let min_spectator_zoom = session.players.values()
+        .filter(|c| c.is_spectator && c.spectate_target.is_none())
+        .map(|c| c.viewport_zoom)
+        .fold(1.0f32, f32::min);
+
     // OPTIMIZATION: Pre-encode full snapshot ONCE for spectators
     // This saves ~2ms per spectator by encoding only once and sharing via Arc
     // Always create if there are ANY spectators (needed as fallback for bot targets)
     let full_snapshot_bytes: Option<Arc<Vec<u8>>> = if has_spectators {
-        // Create a spectator-optimized snapshot (filter tiny debris/projectiles)
-        let spectator_snapshot = create_spectator_snapshot(&full_snapshot);
+        // Create a spectator-optimized snapshot using minimum zoom for filtering
+        // This conservatively filters based on the most zoomed-out spectator
+        let spectator_snapshot = create_spectator_snapshot(&full_snapshot, min_spectator_zoom);
         let message = ServerMessage::Snapshot(spectator_snapshot);
         match encode_pooled(&message) {
             Ok(encoded) => Some(Arc::new(encoded)),
@@ -1474,10 +1496,45 @@ pub async fn broadcast_filtered_snapshots(session: &GameSession, tick: u64) {
     }
 }
 
+/// Minimum screen pixels for entity to be visible (below this, skip sending)
+const MIN_VISIBLE_SCREEN_PIXELS: f32 = 2.0;
+
+/// Radius scale factor (must match client MASS.RADIUS_SCALE)
+const RADIUS_SCALE: f32 = 2.0;
+
+/// Calculate minimum mass visible at a given zoom level
+/// Formula: screen_radius = sqrt(mass) * RADIUS_SCALE * zoom
+/// We want screen_radius >= MIN_VISIBLE_SCREEN_PIXELS
+/// So: sqrt(mass) >= MIN_VISIBLE_SCREEN_PIXELS / (RADIUS_SCALE * zoom)
+/// mass >= (MIN_VISIBLE_SCREEN_PIXELS / (RADIUS_SCALE * zoom))^2
+fn min_visible_mass(zoom: f32) -> f32 {
+    let min_world_radius = MIN_VISIBLE_SCREEN_PIXELS / (RADIUS_SCALE * zoom.max(0.05));
+    min_world_radius * min_world_radius
+}
+
 /// Create a filtered snapshot for spectators (reduce bandwidth)
-/// Filters out tiny debris/projectiles that aren't visible at full-map zoom
-/// Uses module-level SPECTATOR_* constants for configuration
-fn create_spectator_snapshot(full: &GameSnapshot) -> GameSnapshot {
+/// Filters out entities that would be too small to see at the given zoom level
+/// Uses viewport_zoom to dynamically determine what's visible
+fn create_spectator_snapshot(full: &GameSnapshot, zoom: f32) -> GameSnapshot {
+    // Calculate minimum visible mass based on zoom
+    // At zoom 0.1: min_mass = 100 (only large entities visible)
+    // At zoom 0.5: min_mass = 4 (most entities visible)
+    // At zoom 1.0: min_mass = 1 (everything visible)
+    let min_mass = min_visible_mass(zoom);
+
+    // Use whichever is more restrictive: zoom-based or fixed constant
+    let effective_projectile_min = min_mass.max(SPECTATOR_MIN_PROJECTILE_MASS);
+
+    // For debris, use size-based filtering at low zoom, mass-based at higher zoom
+    // Small debris: ~5 mass, Medium: ~15 mass, Large: ~30 mass
+    let min_debris_size = if min_mass > 20.0 {
+        2 // Large only at very low zoom
+    } else if min_mass > 8.0 {
+        1 // Medium and Large
+    } else {
+        SPECTATOR_MIN_DEBRIS_SIZE // Use default
+    };
+
     GameSnapshot {
         tick: full.tick,
         match_phase: full.match_phase.clone(),
@@ -1485,12 +1542,12 @@ fn create_spectator_snapshot(full: &GameSnapshot) -> GameSnapshot {
         countdown: full.countdown,
         players: full.players.clone(), // ALL players always visible
         projectiles: full.projectiles.iter()
-            .filter(|p| p.mass > SPECTATOR_MIN_PROJECTILE_MASS)
+            .filter(|p| p.mass > effective_projectile_min)
             .take(SPECTATOR_MAX_PROJECTILES)
             .cloned()
             .collect(),
         debris: full.debris.iter()
-            .filter(|d| d.size >= SPECTATOR_MIN_DEBRIS_SIZE)
+            .filter(|d| d.size >= min_debris_size)
             .take(SPECTATOR_MAX_DEBRIS)
             .cloned()
             .collect(),
@@ -1677,7 +1734,8 @@ mod spectator_tests {
             ai_status: None,
         };
 
-        let spectator_snap = create_spectator_snapshot(&full);
+        // Use moderate zoom (0.5) for basic filtering behavior
+        let spectator_snap = create_spectator_snapshot(&full, 0.5);
 
         // Projectiles: only mass > 10 kept
         assert_eq!(spectator_snap.projectiles.len(), 1);
@@ -1737,11 +1795,90 @@ mod spectator_tests {
             ai_status: None,
         };
 
-        let spectator_snap = create_spectator_snapshot(&full);
+        // Use high zoom (1.0) so all entities pass mass filter
+        let spectator_snap = create_spectator_snapshot(&full, 1.0);
 
         // Should respect limits (100 projectiles, 50 debris)
         assert_eq!(spectator_snap.projectiles.len(), 100);
         assert_eq!(spectator_snap.debris.len(), 50);
+    }
+
+    #[test]
+    fn test_viewport_aware_filtering() {
+        // Test that zoom level affects filtering thresholds
+        let full = GameSnapshot {
+            tick: 100,
+            match_phase: crate::game::state::MatchPhase::Playing,
+            match_time: 60.0,
+            countdown: 0.0,
+            players: vec![],
+            projectiles: vec![
+                crate::net::protocol::ProjectileSnapshot {
+                    id: 1,
+                    owner_id: uuid::Uuid::nil(),
+                    position: crate::util::vec2::Vec2::ZERO,
+                    velocity: crate::util::vec2::Vec2::ZERO,
+                    mass: 50.0,  // Medium mass
+                },
+                crate::net::protocol::ProjectileSnapshot {
+                    id: 2,
+                    owner_id: uuid::Uuid::nil(),
+                    position: crate::util::vec2::Vec2::ZERO,
+                    velocity: crate::util::vec2::Vec2::ZERO,
+                    mass: 150.0, // Large mass
+                },
+            ],
+            debris: vec![
+                crate::net::protocol::DebrisSnapshot { id: 1, position: crate::util::vec2::Vec2::ZERO, size: 0 },
+                crate::net::protocol::DebrisSnapshot { id: 2, position: crate::util::vec2::Vec2::ZERO, size: 1 },
+                crate::net::protocol::DebrisSnapshot { id: 3, position: crate::util::vec2::Vec2::ZERO, size: 2 },
+            ],
+            arena_collapse_phase: 0,
+            arena_safe_radius: 1000.0,
+            arena_scale: 1.0,
+            gravity_wells: vec![],
+            total_players: 0,
+            total_alive: 0,
+            density_grid: vec![],
+            notable_players: vec![],
+            echo_client_time: 0,
+            ai_status: None,
+        };
+
+        // At zoom 0.1 (very zoomed out), min_visible_mass = 100
+        // Only projectile with mass 150 should pass
+        let snap_zoomed_out = create_spectator_snapshot(&full, 0.1);
+        assert_eq!(snap_zoomed_out.projectiles.len(), 1, "At zoom 0.1, only mass > 100 should pass");
+        assert_eq!(snap_zoomed_out.projectiles[0].id, 2);
+        assert_eq!(snap_zoomed_out.debris.len(), 1, "At zoom 0.1, only large debris should pass");
+
+        // At zoom 0.5 (moderate), min_visible_mass = 4, but fixed threshold is 10
+        // Both projectiles should pass (50 and 150 > 10)
+        let snap_moderate = create_spectator_snapshot(&full, 0.5);
+        assert_eq!(snap_moderate.projectiles.len(), 2, "At zoom 0.5, both projectiles should pass");
+        assert_eq!(snap_moderate.debris.len(), 2, "At zoom 0.5, medium and large debris should pass");
+
+        // At zoom 1.0 (normal), min_visible_mass = 1
+        // All entities should pass their respective thresholds
+        let snap_normal = create_spectator_snapshot(&full, 1.0);
+        assert_eq!(snap_normal.projectiles.len(), 2, "At zoom 1.0, both projectiles should pass");
+        assert_eq!(snap_normal.debris.len(), 2, "At zoom 1.0, medium and large debris should pass");
+    }
+
+    #[test]
+    fn test_min_visible_mass_calculation() {
+        // Verify the min_visible_mass formula
+        // At zoom 0.1: min_mass = (2 / (2 * 0.1))^2 = 100
+        let mass_01 = min_visible_mass(0.1);
+        assert!((mass_01 - 100.0).abs() < 0.1, "At zoom 0.1, min_mass should be ~100");
+
+        // At zoom 0.5: min_mass = (2 / (2 * 0.5))^2 = 4
+        let mass_05 = min_visible_mass(0.5);
+        assert!((mass_05 - 4.0).abs() < 0.1, "At zoom 0.5, min_mass should be ~4");
+
+        // At zoom 1.0: min_mass = (2 / (2 * 1.0))^2 = 1
+        let mass_10 = min_visible_mass(1.0);
+        assert!((mass_10 - 1.0).abs() < 0.1, "At zoom 1.0, min_mass should be ~1");
     }
 
     #[test]

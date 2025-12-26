@@ -25,6 +25,12 @@ pub enum ClientMessage {
     SpectateTarget { target_id: Option<PlayerId> },
     /// Spectator: request to convert to player
     SwitchToPlayer { color_index: u8 },
+    /// Viewport info for zoom-aware entity filtering
+    /// Allows server to skip sending entities too small to see
+    ViewportInfo {
+        /// Current zoom level (0.1 = zoomed out, 1.0 = normal)
+        zoom: f32,
+    },
 }
 
 /// Messages from server to client
@@ -542,6 +548,19 @@ mod tests {
             ClientMessage::JoinRequest { player_name, is_spectator, .. } => {
                 assert_eq!(player_name, "Spectator");
                 assert!(is_spectator);
+            }
+            _ => panic!("Wrong message type"),
+        }
+    }
+
+    #[test]
+    fn test_client_message_viewport_info() {
+        let msg = ClientMessage::ViewportInfo { zoom: 0.15 };
+        let encoded = encode(&msg).unwrap();
+        let decoded: ClientMessage = decode(&encoded).unwrap();
+        match decoded {
+            ClientMessage::ViewportInfo { zoom } => {
+                assert!((zoom - 0.15).abs() < 0.001);
             }
             _ => panic!("Wrong message type"),
         }

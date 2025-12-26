@@ -38,6 +38,10 @@ export class Game {
   // Spectator heartbeat interval (keeps spectators alive, prevents idle kick)
   private spectatorHeartbeatInterval: number | null = null;
 
+  // Viewport info for server-side entity filtering
+  private lastReportedZoom: number = 1.0;
+  private readonly VIEWPORT_REPORT_THRESHOLD = 0.05; // Report when zoom changes by 5%
+
   // Server URL (set via setServer, secure default to localhost)
   private serverUrl: string = 'https://localhost:4433';
   private certHash?: string;
@@ -239,6 +243,21 @@ export class Game {
     }
   }
 
+  // Report viewport zoom to server for entity filtering optimization
+  // Server uses this to skip sending entities too small to see at current zoom
+  private reportViewportIfChanged(): void {
+    const currentZoom = this.renderSystem.getCurrentZoom();
+    const delta = Math.abs(currentZoom - this.lastReportedZoom);
+
+    if (delta > this.VIEWPORT_REPORT_THRESHOLD) {
+      this.transport.sendReliable({
+        type: 'ViewportInfo',
+        zoom: currentZoom,
+      });
+      this.lastReportedZoom = currentZoom;
+    }
+  }
+
   // Main game loop
   private loop(currentTime: number): void {
     try {
@@ -258,6 +277,9 @@ export class Game {
 
       // Render
       this.render();
+
+      // Report viewport changes to server for entity filtering
+      this.reportViewportIfChanged();
 
       // Continue loop
       if (this.phase !== 'menu' && this.phase !== 'disconnected') {

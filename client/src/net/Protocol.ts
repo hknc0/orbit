@@ -17,7 +17,8 @@ export type ClientMessage =
   | { type: 'Ping'; timestamp: number }
   | { type: 'SnapshotAck'; tick: number }
   | { type: 'SpectateTarget'; targetId: PlayerId | null }
-  | { type: 'SwitchToPlayer'; colorIndex: number };
+  | { type: 'SwitchToPlayer'; colorIndex: number }
+  | { type: 'ViewportInfo'; zoom: number };
 
 // Server -> Client messages
 export type ServerMessage =

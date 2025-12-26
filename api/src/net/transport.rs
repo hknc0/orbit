@@ -486,6 +486,14 @@ async fn handle_connection(
                                             }
                                         }
                                     }
+
+                                    ClientMessage::ViewportInfo { zoom } => {
+                                        // Client reporting current zoom level for entity filtering
+                                        if let Some(pid) = *player_id.read().await {
+                                            let mut session = game_session.write().await;
+                                            session.set_viewport_zoom(pid, zoom);
+                                        }
+                                    }
                                 }
                             }
 
