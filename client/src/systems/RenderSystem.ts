@@ -988,6 +988,18 @@ export class RenderSystem {
         this.ctx.setLineDash([]);
       }
 
+      // Spectator follow indicator - subtle ring around followed player
+      const isSpectateTarget = world.isSpectator && world.spectateTargetId === player.id;
+      if (isSpectateTarget) {
+        this.ctx.strokeStyle = 'rgba(34, 211, 238, 0.5)';
+        this.ctx.lineWidth = 1.5;
+        this.ctx.setLineDash([4, 4]);
+        this.ctx.beginPath();
+        this.ctx.arc(player.position.x, player.position.y, radius + 8, 0, Math.PI * 2);
+        this.ctx.stroke();
+        this.ctx.setLineDash([]);
+      }
+
       // Player body - semi-transparent fill with solid outline (same style for all)
       // Semi-transparent fill
       this.ctx.fillStyle = this.colorWithAlpha(color, 0.15);
