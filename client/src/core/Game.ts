@@ -13,6 +13,7 @@ export interface GameEvents {
   onPhaseChange: (phase: GamePhase) => void;
   onKillFeed: (killerName: string, victimName: string) => void;
   onConnectionError: (error: string) => void;
+  onSpectatorModeChange?: (isSpectator: boolean) => void;
 }
 
 export class Game {
@@ -388,6 +389,8 @@ export class Game {
         } else {
           this.stopSpectatorHeartbeat();
         }
+        // Notify UI of spectator mode change
+        this.events.onSpectatorModeChange?.(message.isSpectator);
         break;
     }
   }
@@ -401,6 +404,9 @@ export class Game {
     if (isSpectator) {
       this.startSpectatorHeartbeat();
     }
+
+    // Notify UI of initial spectator mode
+    this.events.onSpectatorModeChange?.(isSpectator);
 
     // Start game loop but stay in connecting phase until first snapshot arrives
     // This prevents flicker from showing game before player data is ready

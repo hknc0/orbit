@@ -1,6 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { InputSystem } from './InputSystem';
-import { Vec2 } from '@/utils/Vec2';
 import { EJECT } from '@/utils/Constants';
 
 // Mock World with local player

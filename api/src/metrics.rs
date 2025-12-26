@@ -102,6 +102,31 @@ pub struct Metrics {
     pub bot_ai_lod_scale: AtomicU64,           // LOD scale factor (x100, e.g., 100 = 1.0x)
     pub bot_ai_health_status: AtomicU64,       // Health status (0=Excellent, 4=Catastrophic)
 
+    // Spectator metrics
+    pub spectators_total: AtomicU64,              // Active spectator count
+    pub spectators_full_view: AtomicU64,          // Watching whole map (no target)
+    pub spectators_following: AtomicU64,          // Following a player/bot
+    pub spectator_joins_total: AtomicU64,         // Counter: spectators joined
+    pub spectator_conversions_total: AtomicU64,   // Counter: became players
+    pub spectator_idle_evictions_total: AtomicU64,// Counter: kicked for inactivity
+    pub spectator_disconnects_total: AtomicU64,   // Counter: voluntary disconnects
+
+    // Tick phase timing (microseconds) - for bottleneck detection
+    pub tick_phase_physics_us: AtomicU64,      // Physics integration time
+    pub tick_phase_collision_us: AtomicU64,    // Collision detection time
+    pub tick_phase_ai_us: AtomicU64,           // Bot AI update time
+    pub tick_phase_broadcast_us: AtomicU64,    // State broadcast time
+
+    // Entity lifecycle metrics
+    pub spawn_players_total: AtomicU64,        // Player spawns (including respawns)
+    pub spawn_projectiles_total: AtomicU64,    // Projectiles created
+    pub kills_total: AtomicU64,                // Total kills
+    pub deaths_arena_total: AtomicU64,         // Deaths from arena boundary
+
+    // Network quality metrics
+    pub network_write_failures_total: AtomicU64, // Failed network writes
+    pub broadcast_latency_us: AtomicU64,         // Broadcast time in microseconds
+
     // Rolling tick times for percentile calculation (VecDeque for O(1) pop_front)
     tick_history: RwLock<VecDeque<u64>>,
 }
@@ -168,6 +193,27 @@ impl Metrics {
             bot_ai_dormant_mode: AtomicU64::new(0),
             bot_ai_lod_scale: AtomicU64::new(100), // 1.0x default
             bot_ai_health_status: AtomicU64::new(0),
+            // Spectator metrics
+            spectators_total: AtomicU64::new(0),
+            spectators_full_view: AtomicU64::new(0),
+            spectators_following: AtomicU64::new(0),
+            spectator_joins_total: AtomicU64::new(0),
+            spectator_conversions_total: AtomicU64::new(0),
+            spectator_idle_evictions_total: AtomicU64::new(0),
+            spectator_disconnects_total: AtomicU64::new(0),
+            // Tick phase timing
+            tick_phase_physics_us: AtomicU64::new(0),
+            tick_phase_collision_us: AtomicU64::new(0),
+            tick_phase_ai_us: AtomicU64::new(0),
+            tick_phase_broadcast_us: AtomicU64::new(0),
+            // Entity lifecycle
+            spawn_players_total: AtomicU64::new(0),
+            spawn_projectiles_total: AtomicU64::new(0),
+            kills_total: AtomicU64::new(0),
+            deaths_arena_total: AtomicU64::new(0),
+            // Network quality
+            network_write_failures_total: AtomicU64::new(0),
+            broadcast_latency_us: AtomicU64::new(0),
             tick_history: RwLock::new(VecDeque::with_capacity(1000)),
         }
     }
@@ -397,6 +443,48 @@ impl Metrics {
             health_name
         ));
 
+        // Spectator metrics
+        metric!("orbit_royale_spectators_total", "Active spectator count", "gauge",
+            self.spectators_total.load(Ordering::Relaxed));
+        metric!("orbit_royale_spectators_full_view", "Spectators watching whole map", "gauge",
+            self.spectators_full_view.load(Ordering::Relaxed));
+        metric!("orbit_royale_spectators_following", "Spectators following a player", "gauge",
+            self.spectators_following.load(Ordering::Relaxed));
+        metric!("orbit_royale_spectator_joins_total", "Total spectator joins", "counter",
+            self.spectator_joins_total.load(Ordering::Relaxed));
+        metric!("orbit_royale_spectator_conversions_total", "Spectators converted to players", "counter",
+            self.spectator_conversions_total.load(Ordering::Relaxed));
+        metric!("orbit_royale_spectator_idle_evictions_total", "Spectators kicked for inactivity", "counter",
+            self.spectator_idle_evictions_total.load(Ordering::Relaxed));
+        metric!("orbit_royale_spectator_disconnects_total", "Spectators voluntarily disconnected", "counter",
+            self.spectator_disconnects_total.load(Ordering::Relaxed));
+
+        // Tick phase timing metrics (for bottleneck detection)
+        metric!("orbit_royale_tick_phase_physics_microseconds", "Physics integration time", "gauge",
+            self.tick_phase_physics_us.load(Ordering::Relaxed));
+        metric!("orbit_royale_tick_phase_collision_microseconds", "Collision detection time", "gauge",
+            self.tick_phase_collision_us.load(Ordering::Relaxed));
+        metric!("orbit_royale_tick_phase_ai_microseconds", "Bot AI update time", "gauge",
+            self.tick_phase_ai_us.load(Ordering::Relaxed));
+        metric!("orbit_royale_tick_phase_broadcast_microseconds", "State broadcast time", "gauge",
+            self.tick_phase_broadcast_us.load(Ordering::Relaxed));
+
+        // Entity lifecycle metrics
+        metric!("orbit_royale_spawn_players_total", "Total player spawns", "counter",
+            self.spawn_players_total.load(Ordering::Relaxed));
+        metric!("orbit_royale_spawn_projectiles_total", "Total projectiles created", "counter",
+            self.spawn_projectiles_total.load(Ordering::Relaxed));
+        metric!("orbit_royale_kills_total", "Total kills", "counter",
+            self.kills_total.load(Ordering::Relaxed));
+        metric!("orbit_royale_deaths_arena_total", "Deaths from arena boundary", "counter",
+            self.deaths_arena_total.load(Ordering::Relaxed));
+
+        // Network quality metrics
+        metric!("orbit_royale_network_write_failures_total", "Failed network writes", "counter",
+            self.network_write_failures_total.load(Ordering::Relaxed));
+        metric!("orbit_royale_broadcast_latency_microseconds", "Broadcast time", "gauge",
+            self.broadcast_latency_us.load(Ordering::Relaxed));
+
         output
     }
 
@@ -435,6 +523,19 @@ impl Metrics {
     "match_time_seconds": {},
     "arena_scale": {},
     "uptime_seconds": {}
+  }},
+  "spectators": {{
+    "total": {},
+    "full_view": {},
+    "following": {},
+    "joins_total": {},
+    "conversions_total": {}
+  }},
+  "tick_phases": {{
+    "physics_us": {},
+    "collision_us": {},
+    "ai_us": {},
+    "broadcast_us": {}
   }}
 }}"#,
             self.total_players.load(Ordering::Relaxed),
@@ -466,6 +567,17 @@ impl Metrics {
             self.match_time_seconds.load(Ordering::Relaxed),
             self.arena_scale.load(Ordering::Relaxed) as f32 / 100.0,
             self.uptime_seconds(),
+            // Spectator metrics
+            self.spectators_total.load(Ordering::Relaxed),
+            self.spectators_full_view.load(Ordering::Relaxed),
+            self.spectators_following.load(Ordering::Relaxed),
+            self.spectator_joins_total.load(Ordering::Relaxed),
+            self.spectator_conversions_total.load(Ordering::Relaxed),
+            // Tick phase timing
+            self.tick_phase_physics_us.load(Ordering::Relaxed),
+            self.tick_phase_collision_us.load(Ordering::Relaxed),
+            self.tick_phase_ai_us.load(Ordering::Relaxed),
+            self.tick_phase_broadcast_us.load(Ordering::Relaxed),
         )
     }
 

@@ -33,12 +33,15 @@ export class Screens {
   private endScreen: HTMLElement;
   private connectingScreen: HTMLElement;
   private errorScreen: HTMLElement;
+  private spectatorHud: HTMLElement;
 
   private playerNameInput: HTMLInputElement | null = null;
   private endTitle: HTMLElement | null = null;
   private endPlacement: HTMLElement | null = null;
   private endKills: HTMLElement | null = null;
   private errorMessage: HTMLElement | null = null;
+  private spectatorColorPreview: HTMLElement | null = null;
+  private spectatorColorSlider: HTMLInputElement | null = null;
 
   private selectedColorIndex: number = 0;
 
@@ -50,6 +53,7 @@ export class Screens {
     this.endScreen = this.createEndScreen();
     this.connectingScreen = this.createConnectingScreen();
     this.errorScreen = this.createErrorScreen();
+    this.spectatorHud = this.createSpectatorHud();
   }
 
   private loadPreferences(): void {
@@ -310,6 +314,70 @@ export class Screens {
     screen.appendChild(container);
 
     return screen;
+  }
+
+  private createSpectatorHud(): HTMLElement {
+    const hud = this.createElement('div', 'spectator-hud hidden');
+    hud.id = 'spectator-hud';
+
+    // Container for join panel
+    const container = this.createElement('div', 'spectator-join-container');
+
+    // Label
+    const label = this.createElement('span', 'spectator-label', 'SPECTATING');
+
+    // Color picker (compact)
+    const colorContainer = this.createElement('div', 'spectator-color-container');
+
+    const colorPreview = this.createElement('div', 'spectator-color-preview');
+    colorPreview.style.backgroundColor = PLAYER_COLORS[this.selectedColorIndex];
+    this.spectatorColorPreview = colorPreview;
+
+    const colorSlider = document.createElement('input');
+    colorSlider.type = 'range';
+    colorSlider.min = '0';
+    colorSlider.max = String(PLAYER_COLORS.length - 1);
+    colorSlider.value = String(this.selectedColorIndex);
+    colorSlider.className = 'spectator-color-slider';
+    this.spectatorColorSlider = colorSlider;
+
+    // Create gradient background
+    const gradientStops = PLAYER_COLORS.map((c, i) => {
+      const start = (i / PLAYER_COLORS.length) * 100;
+      const end = ((i + 1) / PLAYER_COLORS.length) * 100;
+      return `${c} ${start}%, ${c} ${end}%`;
+    }).join(', ');
+    colorSlider.style.setProperty('--slider-gradient', `linear-gradient(to right, ${gradientStops})`);
+
+    colorSlider.addEventListener('input', () => {
+      const index = parseInt(colorSlider.value, 10);
+      this.selectedColorIndex = index;
+      colorPreview.style.backgroundColor = PLAYER_COLORS[index];
+      // Sync with menu slider
+      const menuSlider = this.menuScreen.querySelector('.color-slider') as HTMLInputElement;
+      const menuPreview = this.menuScreen.querySelector('.color-preview') as HTMLElement;
+      if (menuSlider) menuSlider.value = String(index);
+      if (menuPreview) menuPreview.style.backgroundColor = PLAYER_COLORS[index];
+    });
+
+    colorContainer.appendChild(colorPreview);
+    colorContainer.appendChild(colorSlider);
+
+    // Join button
+    const joinBtn = this.createElement('button', 'btn-join');
+    joinBtn.id = 'join-game-btn';
+    joinBtn.textContent = 'JOIN GAME';
+
+    // Hint text
+    const hint = this.createElement('span', 'spectator-hint', 'Click players to follow');
+
+    container.appendChild(label);
+    container.appendChild(colorContainer);
+    container.appendChild(joinBtn);
+    container.appendChild(hint);
+    hud.appendChild(container);
+
+    return hud;
   }
 
   mount(): void {
@@ -821,12 +889,129 @@ export class Screens {
         text-align: center;
         line-height: 1.6;
       }
+
+      /* Spectator HUD */
+      .spectator-hud {
+        position: fixed;
+        bottom: 20px;
+        left: 20px;
+        z-index: 50;
+        pointer-events: auto;
+      }
+
+      .spectator-hud.hidden {
+        display: none;
+      }
+
+      .spectator-join-container {
+        display: flex;
+        flex-direction: column;
+        gap: 0.75rem;
+        padding: 1rem 1.25rem;
+        background: rgba(10, 16, 32, 0.9);
+        border: 1px solid rgba(0, 255, 255, 0.2);
+        border-radius: 6px;
+        backdrop-filter: blur(8px);
+        box-shadow: 0 4px 20px rgba(0, 0, 0, 0.4);
+      }
+
+      .spectator-label {
+        font-family: 'Orbitron', sans-serif;
+        font-size: 0.65rem;
+        font-weight: 500;
+        letter-spacing: 0.2em;
+        color: rgba(0, 255, 255, 0.7);
+        text-align: center;
+      }
+
+      .spectator-color-container {
+        display: flex;
+        align-items: center;
+        gap: 0.5rem;
+      }
+
+      .spectator-color-preview {
+        width: 24px;
+        height: 24px;
+        border-radius: 50%;
+        border: 2px solid rgba(255, 255, 255, 0.3);
+        box-shadow: 0 0 10px currentColor;
+        flex-shrink: 0;
+        transition: background-color 0.15s ease;
+      }
+
+      .spectator-color-slider {
+        -webkit-appearance: none;
+        appearance: none;
+        width: 120px;
+        height: 6px;
+        background: var(--slider-gradient);
+        border-radius: 3px;
+        outline: none;
+        cursor: pointer;
+      }
+
+      .spectator-color-slider::-webkit-slider-thumb {
+        -webkit-appearance: none;
+        appearance: none;
+        width: 14px;
+        height: 14px;
+        background: #fff;
+        border-radius: 50%;
+        cursor: pointer;
+        box-shadow: 0 0 4px rgba(0, 0, 0, 0.4);
+        border: 2px solid rgba(255, 255, 255, 0.9);
+      }
+
+      .spectator-color-slider::-moz-range-thumb {
+        width: 14px;
+        height: 14px;
+        background: #fff;
+        border-radius: 50%;
+        cursor: pointer;
+        box-shadow: 0 0 4px rgba(0, 0, 0, 0.4);
+        border: 2px solid rgba(255, 255, 255, 0.9);
+      }
+
+      .btn-join {
+        padding: 0.6rem 1rem;
+        font-family: 'Orbitron', sans-serif;
+        font-size: 0.75rem;
+        font-weight: 600;
+        letter-spacing: 0.15em;
+        background: linear-gradient(180deg, rgba(74, 222, 128, 0.2) 0%, rgba(74, 222, 128, 0.1) 100%);
+        color: #4ade80;
+        border: 1px solid #4ade80;
+        border-radius: 3px;
+        cursor: pointer;
+        transition: all 0.2s ease;
+        text-shadow: 0 0 8px rgba(74, 222, 128, 0.5);
+        box-shadow: 0 0 12px rgba(74, 222, 128, 0.2);
+      }
+
+      .btn-join:hover {
+        background: linear-gradient(180deg, rgba(74, 222, 128, 0.3) 0%, rgba(74, 222, 128, 0.15) 100%);
+        box-shadow: 0 0 20px rgba(74, 222, 128, 0.35);
+        transform: translateY(-1px);
+      }
+
+      .btn-join:active {
+        transform: translateY(0);
+      }
+
+      .spectator-hint {
+        font-size: 0.6rem;
+        color: rgba(160, 180, 200, 0.5);
+        text-align: center;
+        font-style: italic;
+      }
     `;
     document.head.appendChild(style);
     document.body.appendChild(this.menuScreen);
     document.body.appendChild(this.endScreen);
     document.body.appendChild(this.connectingScreen);
     document.body.appendChild(this.errorScreen);
+    document.body.appendChild(this.spectatorHud);
   }
 
   getPlayerName(): string {
@@ -936,6 +1121,22 @@ export class Screens {
     this.endScreen.classList.add('hidden');
     this.connectingScreen.classList.add('hidden');
     this.errorScreen.classList.add('hidden');
+    this.spectatorHud.classList.add('hidden');
+  }
+
+  showSpectatorHud(): void {
+    // Sync color from menu to spectator HUD
+    if (this.spectatorColorPreview) {
+      this.spectatorColorPreview.style.backgroundColor = PLAYER_COLORS[this.selectedColorIndex];
+    }
+    if (this.spectatorColorSlider) {
+      this.spectatorColorSlider.value = String(this.selectedColorIndex);
+    }
+    this.spectatorHud.classList.remove('hidden');
+  }
+
+  hideSpectatorHud(): void {
+    this.spectatorHud.classList.add('hidden');
   }
 
   onPlay(callback: () => void): void {
@@ -970,5 +1171,13 @@ export class Screens {
   onRetry(callback: () => void): void {
     const btn = this.errorScreen.querySelector('#retry-btn');
     btn?.addEventListener('click', callback);
+  }
+
+  onJoinGame(callback: (colorIndex: number) => void): void {
+    const btn = this.spectatorHud.querySelector('#join-game-btn');
+    btn?.addEventListener('click', () => {
+      this.savePreferences();
+      callback(this.selectedColorIndex);
+    });
   }
 }

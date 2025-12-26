@@ -90,6 +90,9 @@ screens.mount();
 // Kill feed for displaying eliminations
 const killFeed: { killer: string; victim: string; time: number }[] = [];
 
+// Track spectator state for UI updates
+let isCurrentlySpectator = false;
+
 // Initialize game with event handlers
 const game = new Game(canvas, {
   onPhaseChange: (phase: GamePhase) => {
@@ -103,6 +106,10 @@ const game = new Game(canvas, {
       case 'countdown':
       case 'playing':
         screens.hideAll();
+        // Show spectator HUD if in spectator mode
+        if (isCurrentlySpectator) {
+          screens.showSpectatorHud();
+        }
         break;
       case 'ended':
         handleGameEnd();
@@ -121,6 +128,15 @@ const game = new Game(canvas, {
   },
   onConnectionError: (error: string) => {
     screens.showError(error);
+  },
+  onSpectatorModeChange: (isSpectator: boolean) => {
+    isCurrentlySpectator = isSpectator;
+    const phase = game.getPhase();
+    if (isSpectator && (phase === 'playing' || phase === 'countdown')) {
+      screens.showSpectatorHud();
+    } else {
+      screens.hideSpectatorHud();
+    }
   },
 });
 
@@ -172,6 +188,11 @@ screens.onRetry(() => {
   const playerName = screens.getPlayerName();
   const colorIndex = screens.getSelectedColor();
   game.start(playerName, colorIndex);
+});
+
+// Handle join game from spectator mode
+screens.onJoinGame((colorIndex: number) => {
+  game.switchToPlayer(colorIndex);
 });
 
 // Handle game end

@@ -1,16 +1,16 @@
 import { describe, it, expect, beforeEach, vi, afterEach } from 'vitest';
 import { World } from './World';
 import { ARENA, MASS, PLAYER_COLORS } from '@/utils/Constants';
-import type { InterpolatedState, InterpolatedPlayer, InterpolatedProjectile, InterpolatedDebris, InterpolatedGravityWell, InterpolatedNotablePlayer } from '@/net/StateSync';
-import type { MatchPhase } from '@/net/Protocol';
+import type { InterpolatedState, InterpolatedPlayer, InterpolatedGravityWell, InterpolatedNotablePlayer } from '@/net/StateSync';
+import { Vec2 } from '@/utils/Vec2';
 
 // Helper to create a mock player
 function createMockPlayer(overrides: Partial<InterpolatedPlayer> = {}): InterpolatedPlayer {
   return {
     id: overrides.id ?? 'player-1',
     name: overrides.name ?? 'TestPlayer',
-    position: overrides.position ?? { x: 100, y: 100 },
-    velocity: overrides.velocity ?? { x: 0, y: 0 },
+    position: overrides.position ?? new Vec2(100, 100),
+    velocity: overrides.velocity ?? new Vec2(0, 0),
     rotation: overrides.rotation ?? 0,
     mass: overrides.mass ?? 100,
     alive: overrides.alive ?? true,
@@ -41,7 +41,6 @@ function createMockState(overrides: Partial<InterpolatedState> = {}): Interpolat
     totalAlive: overrides.totalAlive ?? 8,
     densityGrid: overrides.densityGrid ?? [],
     notablePlayers: overrides.notablePlayers ?? [],
-    echoClientTime: overrides.echoClientTime ?? 0,
   };
 }
 
@@ -122,8 +121,8 @@ describe('World', () => {
 
     it('should update gravity wells', () => {
       const wells: InterpolatedGravityWell[] = [
-        { id: 1, position: { x: 100, y: 100 }, mass: 5000, coreRadius: 25, bornTime: 0 },
-        { id: 2, position: { x: -200, y: 300 }, mass: 3000, coreRadius: 20, bornTime: 0 },
+        { id: 1, position: new Vec2(100, 100), mass: 5000, coreRadius: 25, bornTime: 0 },
+        { id: 2, position: new Vec2(-200, 300), mass: 3000, coreRadius: 20, bornTime: 0 },
       ];
 
       const state = createMockState({ gravityWells: wells });
@@ -166,7 +165,7 @@ describe('World', () => {
       players.set('player-1', createMockPlayer({
         id: 'player-1',
         alive: true,
-        position: { x: 200, y: 300 },
+        position: new Vec2(200, 300),
         mass: 150,
         colorIndex: 5,
       }));
@@ -257,8 +256,8 @@ describe('World', () => {
 
     it('should filter out destroyed wells from snapshots', () => {
       const wells: InterpolatedGravityWell[] = [
-        { id: 1, position: { x: 100, y: 100 }, mass: 5000, coreRadius: 25, bornTime: 0 },
-        { id: 2, position: { x: -200, y: 300 }, mass: 3000, coreRadius: 20, bornTime: 0 },
+        { id: 1, position: new Vec2(100, 100), mass: 5000, coreRadius: 25, bornTime: 0 },
+        { id: 2, position: new Vec2(-200, 300), mass: 3000, coreRadius: 20, bornTime: 0 },
       ];
 
       world.updateFromState(createMockState({ gravityWells: wells }));
@@ -591,8 +590,8 @@ describe('World', () => {
   describe('removeGravityWell', () => {
     it('should remove well from arena', () => {
       const wells: InterpolatedGravityWell[] = [
-        { id: 1, position: { x: 100, y: 100 }, mass: 5000, coreRadius: 25, bornTime: 0 },
-        { id: 2, position: { x: 200, y: 200 }, mass: 3000, coreRadius: 20, bornTime: 0 },
+        { id: 1, position: new Vec2(100, 100), mass: 5000, coreRadius: 25, bornTime: 0 },
+        { id: 2, position: new Vec2(200, 200), mass: 3000, coreRadius: 20, bornTime: 0 },
       ];
       world.updateFromState(createMockState({ gravityWells: wells }));
 
@@ -618,8 +617,8 @@ describe('World', () => {
       const players = new Map<string, InterpolatedPlayer>();
       players.set('player-1', createMockPlayer({
         id: 'player-1',
-        position: { x: 100, y: 100 },
-        velocity: { x: 0, y: 0 },
+        position: new Vec2(100, 100),
+        velocity: new Vec2(0, 0),
         alive: true,
       }));
       world.updateFromState(createMockState({ players }));
@@ -639,7 +638,7 @@ describe('World', () => {
       const players = new Map<string, InterpolatedPlayer>();
       players.set('player-1', createMockPlayer({
         id: 'player-1',
-        position: { x: 100, y: 100 },
+        position: new Vec2(100, 100),
         alive: false,
       }));
       world.updateFromState(createMockState({ players }));
@@ -706,7 +705,7 @@ describe('World', () => {
 
     it('should return notable players from state', () => {
       const notablePlayers: InterpolatedNotablePlayer[] = [
-        { id: 'player-1', position: { x: 100, y: 100 }, mass: 500, colorIndex: 5 },
+        { id: 'player-1', position: new Vec2(100, 100), mass: 500, colorIndex: 5 },
       ];
       world.updateFromState(createMockState({ notablePlayers }));
 

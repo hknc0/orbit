@@ -494,6 +494,11 @@ impl GameSession {
     ) -> PlayerId {
         info!("Spectator joined: {} ({})", player_name, player_id);
 
+        // Track spectator join
+        if let Some(ref metrics) = self.metrics {
+            metrics.spectator_joins_total.fetch_add(1, Ordering::Relaxed);
+        }
+
         // Create unbounded channel for lock-free message sending
         // OPTIMIZATION: Uses Arc<Vec<u8>> to avoid cloning broadcast data
         let (sender, receiver) = mpsc::unbounded_channel::<Arc<Vec<u8>>>();
@@ -567,6 +572,12 @@ impl GameSession {
                 conn.spectate_target = None;
 
                 info!("Spectator {} converted to player", spectator_id);
+
+                // Track conversion metric
+                if let Some(ref metrics) = self.metrics {
+                    metrics.spectator_conversions_total.fetch_add(1, Ordering::Relaxed);
+                }
+
                 self.update_arena_scale();
                 return true;
             }
@@ -617,6 +628,13 @@ impl GameSession {
             self.last_client_times.remove(spectator_id);
         }
 
+        // Track idle evictions
+        if !idle_spectators.is_empty() {
+            if let Some(ref metrics) = self.metrics {
+                metrics.spectator_idle_evictions_total.fetch_add(idle_spectators.len() as u64, Ordering::Relaxed);
+            }
+        }
+
         idle_spectators
     }
 
@@ -638,6 +656,12 @@ impl GameSession {
                 info!("Evicting idle spectator {} to make room for new connection", spectator_id);
                 self.players.remove(&spectator_id);
                 self.last_client_times.remove(&spectator_id);
+
+                // Track eviction
+                if let Some(ref metrics) = self.metrics {
+                    metrics.spectator_idle_evictions_total.fetch_add(1, Ordering::Relaxed);
+                }
+
                 return true;
             }
         }
@@ -665,6 +689,10 @@ impl GameSession {
 
         if was_spectator {
             info!("Spectator left: {}", player_id);
+            // Track spectator disconnect
+            if let Some(ref metrics) = self.metrics {
+                metrics.spectator_disconnects_total.fetch_add(1, Ordering::Relaxed);
+            }
         } else {
             info!("Player left: {}", player_id);
             self.game_loop.remove_player(player_id);
@@ -960,6 +988,17 @@ impl GameSession {
                 metrics.bot_ai_lod_scale.store((adaptive.lod_scale * 100.0) as u64, Ordering::Relaxed);
                 metrics.bot_ai_health_status.store(adaptive.health_status as u64, Ordering::Relaxed);
             }
+
+            // Spectator metrics
+            let spectator_total = self.players.values().filter(|c| c.is_spectator).count() as u64;
+            let spectators_full_view = self.players.values()
+                .filter(|c| c.is_spectator && c.spectate_target.is_none())
+                .count() as u64;
+            let spectators_following = spectator_total - spectators_full_view;
+
+            metrics.spectators_total.store(spectator_total, Ordering::Relaxed);
+            metrics.spectators_full_view.store(spectators_full_view, Ordering::Relaxed);
+            metrics.spectators_following.store(spectators_following, Ordering::Relaxed);
         }
 
         // Provide tick metrics to AI manager for adaptive dormancy

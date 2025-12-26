@@ -290,9 +290,10 @@ describe('Velocity Length Optional Chaining', () => {
   });
 
   it('should return 0 for undefined velocity', () => {
-    const velocity = undefined;
-    const speed = velocity?.length?.() ?? 0;
-    expect(speed).toBe(0);
+    function getSpeed(v: Vec2 | undefined): number {
+      return v?.length?.() ?? 0;
+    }
+    expect(getSpeed(undefined)).toBe(0);
   });
 
   it('should return 0 for null velocity', () => {
@@ -487,7 +488,7 @@ describe('Full Spectator Click Flow', () => {
     // Find player - none found
     const players = new Map();
     let closestPlayer = null;
-    for (const player of players.values()) {
+    for (const _player of players.values()) {
       // Loop doesn't execute
     }
 

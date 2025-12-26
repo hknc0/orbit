@@ -20,7 +20,7 @@ services:
       - "4433:4433/udp"   # WebTransport (QUIC/UDP)
       - "9090:9090"        # Metrics endpoint
     environment:
-      - RUST_LOG=debug
+      - RUST_LOG=info
       - HOST=0.0.0.0
       - PORT=4433
       - METRICS_PORT=9090

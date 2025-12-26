@@ -1,6 +1,5 @@
-import { describe, it, expect, beforeEach, afterEach, vi, Mock } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach, vi, type Mock } from 'vitest';
 import { Game, GamePhase, GameEvents } from './Game';
-import { Vec2 } from '@/utils/Vec2';
 
 // Mock all dependencies using class syntax for proper constructor behavior
 vi.mock('./World', () => {
@@ -106,7 +105,7 @@ describe('Game', () => {
   let game: Game;
   let canvas: HTMLCanvasElement;
   let events: GameEvents;
-  let mockCtx: Record<string, Mock>;
+  let mockCtx: Record<string, string | Mock>;
 
   beforeEach(() => {
     vi.useFakeTimers();
@@ -246,7 +245,7 @@ describe('Spectator screen shake', () => {
   let game: Game;
   let canvas: HTMLCanvasElement;
   let events: GameEvents;
-  let mockCtx: Record<string, Mock>;
+  let mockCtx: Record<string, string | Mock>;
 
   beforeEach(() => {
     vi.useFakeTimers();

@@ -224,7 +224,7 @@ describe('Constants', () => {
 
     it('should have valid hex color format for all colors', () => {
       const hexColorRegex = /^#[0-9a-fA-F]{6}$/;
-      PLAYER_COLORS.forEach((color, index) => {
+      PLAYER_COLORS.forEach((color) => {
         expect(color).toMatch(hexColorRegex);
       });
     });

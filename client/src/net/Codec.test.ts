@@ -1,7 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import { encodeClientMessage, decodeServerMessage } from './Codec';
 import { Vec2 } from '@/utils/Vec2';
-import type { ClientMessage, PlayerInput, GameSnapshot, ServerMessage } from './Protocol';
+import type { ClientMessage, PlayerInput } from './Protocol';
 
 describe('Codec', () => {
   describe('BinaryWriter / BinaryReader (via encodeClientMessage)', () => {
@@ -211,11 +211,6 @@ describe('Codec', () => {
   });
 
   describe('decodeServerMessage', () => {
-    // Helper to create a minimal valid server message buffer
-    function createBuffer(data: number[]): ArrayBuffer {
-      return new Uint8Array(data).buffer;
-    }
-
     describe('JoinAccepted decoding', () => {
       it('should decode JoinAccepted message', () => {
         // Build a valid JoinAccepted binary:
@@ -924,6 +919,11 @@ class TestBinaryReader {
 }
 
 // Helper to write a full PlayerSnapshot
+// Player flag constants (must match Codec.ts)
+const PLAYER_FLAG_ALIVE = 0b0000_0001;
+const PLAYER_FLAG_SPAWN_PROTECTION = 0b0000_0010;
+const PLAYER_FLAG_IS_BOT = 0b0000_0100;
+
 function writePlayerSnapshot(writer: TestBinaryWriter, player: {
   id: string;
   name: string;
@@ -944,10 +944,13 @@ function writePlayerSnapshot(writer: TestBinaryWriter, player: {
   writer.writeVec2(player.velocity);
   writer.writeF32(player.rotation);
   writer.writeF32(player.mass);
-  writer.writeBool(player.alive);
+  // Pack flags into single byte (matches Codec.ts readPlayerSnapshot)
+  let flags = 0;
+  if (player.alive) flags |= PLAYER_FLAG_ALIVE;
+  if (player.spawnProtection) flags |= PLAYER_FLAG_SPAWN_PROTECTION;
+  if (player.isBot) flags |= PLAYER_FLAG_IS_BOT;
+  writer.writeU8(flags);
   writer.writeU32(player.kills);
   writer.writeU32(player.deaths);
-  writer.writeBool(player.spawnProtection);
-  writer.writeBool(player.isBot);
   writer.writeU8(player.colorIndex);
 }

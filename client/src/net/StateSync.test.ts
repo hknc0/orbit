@@ -1,7 +1,7 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { Vec2 } from '@/utils/Vec2';
 import { StateSync } from './StateSync';
-import { NETWORK, PHYSICS, BOOST } from '@/utils/Constants';
+import { NETWORK, PHYSICS } from '@/utils/Constants';
 import type { GameSnapshot, PlayerSnapshot, DeltaUpdate, PlayerInput, MatchPhase } from './Protocol';
 
 const { ADAPTIVE_INTERPOLATION } = NETWORK;

@@ -1236,6 +1236,279 @@
       "targets": [{ "expr": "container_memory_usage_bytes{job=\"cadvisor\", id=~\"/docker/[a-f0-9]+\"}", "legendFormat": "{{short_id}}", "refId": "A" }],
       "title": "Container Memory (docker ps for ID→name)",
       "type": "timeseries"
+    },
+
+    {
+      "collapsed": false,
+      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 60 },
+      "id": 100,
+      "panels": [],
+      "title": "Spectators",
+      "type": "row"
+    },
+    {
+      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "description": "Total number of spectators currently watching the game.",
+      "fieldConfig": { "defaults": { "color": { "mode": "thresholds" }, "thresholds": { "mode": "absolute", "steps": [{ "color": "purple", "value": null }] } } },
+      "gridPos": { "h": 4, "w": 3, "x": 0, "y": 61 },
+      "id": 101,
+      "options": { "colorMode": "value", "graphMode": "area", "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false } },
+      "targets": [{ "expr": "orbit_royale_spectators_total{job=\"orbit-royale-api\"}", "legendFormat": "Spectators", "refId": "A" }],
+      "title": "Spectators",
+      "type": "stat"
+    },
+    {
+      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "description": "Spectators watching the full map (no follow target).",
+      "fieldConfig": { "defaults": { "color": { "mode": "thresholds" }, "thresholds": { "mode": "absolute", "steps": [{ "color": "blue", "value": null }] } } },
+      "gridPos": { "h": 4, "w": 3, "x": 3, "y": 61 },
+      "id": 102,
+      "options": { "colorMode": "value", "graphMode": "area", "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false } },
+      "targets": [{ "expr": "orbit_royale_spectators_full_view{job=\"orbit-royale-api\"}", "legendFormat": "Full View", "refId": "A" }],
+      "title": "Full View",
+      "type": "stat"
+    },
+    {
+      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "description": "Spectators following a specific player.",
+      "fieldConfig": { "defaults": { "color": { "mode": "thresholds" }, "thresholds": { "mode": "absolute", "steps": [{ "color": "semi-dark-green", "value": null }] } } },
+      "gridPos": { "h": 4, "w": 3, "x": 6, "y": 61 },
+      "id": 103,
+      "options": { "colorMode": "value", "graphMode": "area", "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false } },
+      "targets": [{ "expr": "orbit_royale_spectators_following{job=\"orbit-royale-api\"}", "legendFormat": "Following", "refId": "A" }],
+      "title": "Following",
+      "type": "stat"
+    },
+    {
+      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "description": "Spectators as percentage of total connections. High ratio may indicate engagement issues.",
+      "fieldConfig": { "defaults": { "min": 0, "max": 100, "unit": "percent", "color": { "mode": "thresholds" }, "thresholds": { "mode": "absolute", "steps": [{ "color": "green", "value": null }, { "color": "yellow", "value": 30 }, { "color": "orange", "value": 50 }] } } },
+      "gridPos": { "h": 4, "w": 4, "x": 9, "y": 61 },
+      "id": 104,
+      "options": { "showThresholdLabels": false, "showThresholdMarkers": true, "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false } },
+      "targets": [{ "expr": "orbit_royale_spectators_total{job=\"orbit-royale-api\"} / (orbit_royale_connections_active{job=\"orbit-royale-api\"} + 1) * 100", "legendFormat": "Ratio", "refId": "A" }],
+      "title": "Spectator %",
+      "type": "gauge"
+    },
+    {
+      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "description": "Total spectators who converted to players.",
+      "fieldConfig": { "defaults": { "color": { "mode": "thresholds" }, "thresholds": { "mode": "absolute", "steps": [{ "color": "green", "value": null }] } } },
+      "gridPos": { "h": 4, "w": 2, "x": 13, "y": 61 },
+      "id": 105,
+      "options": { "colorMode": "value", "graphMode": "area", "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false } },
+      "targets": [{ "expr": "orbit_royale_spectator_conversions_total{job=\"orbit-royale-api\"}", "legendFormat": "Conv", "refId": "A" }],
+      "title": "Converts",
+      "type": "stat"
+    },
+    {
+      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "description": "Spectators kicked for inactivity (>5min idle).",
+      "fieldConfig": { "defaults": { "color": { "mode": "thresholds" }, "thresholds": { "mode": "absolute", "steps": [{ "color": "orange", "value": null }] } } },
+      "gridPos": { "h": 4, "w": 2, "x": 15, "y": 61 },
+      "id": 106,
+      "options": { "colorMode": "value", "graphMode": "area", "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false } },
+      "targets": [{ "expr": "orbit_royale_spectator_idle_evictions_total{job=\"orbit-royale-api\"}", "legendFormat": "Evict", "refId": "A" }],
+      "title": "Evictions",
+      "type": "stat"
+    },
+    {
+      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "description": "Spectator activity over time: total count and conversion rate.",
+      "fieldConfig": { "defaults": { "color": { "mode": "palette-classic" }, "custom": { "axisBorderShow": false, "drawStyle": "line", "fillOpacity": 20, "lineInterpolation": "smooth", "lineWidth": 2, "showPoints": "never" } } },
+      "gridPos": { "h": 4, "w": 7, "x": 17, "y": 61 },
+      "id": 107,
+      "options": { "legend": { "calcs": ["lastNotNull"], "displayMode": "list", "placement": "right", "showLegend": true }, "tooltip": { "mode": "multi", "sort": "desc" } },
+      "targets": [
+        { "expr": "orbit_royale_spectators_total{job=\"orbit-royale-api\"}", "legendFormat": "Spectators", "refId": "A" },
+        { "expr": "rate(orbit_royale_spectator_conversions_total{job=\"orbit-royale-api\"}[5m]) * 60", "legendFormat": "Conv/min", "refId": "B" }
+      ],
+      "title": "Spectator Activity",
+      "type": "timeseries"
+    },
+
+    {
+      "collapsed": false,
+      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 65 },
+      "id": 110,
+      "panels": [],
+      "title": "Performance Correlation",
+      "type": "row"
+    },
+    {
+      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "description": "Correlation between tick processing time and total players. Rising tick time with player count indicates O(n) or worse scaling.",
+      "fieldConfig": {
+        "defaults": { "custom": { "axisBorderShow": false, "drawStyle": "line", "fillOpacity": 10, "lineWidth": 2, "showPoints": "never", "axisPlacement": "auto" } },
+        "overrides": [
+          { "matcher": { "id": "byName", "options": "Players" }, "properties": [{ "id": "custom.axisPlacement", "value": "right" }, { "id": "color", "value": { "fixedColor": "blue", "mode": "fixed" } }] },
+          { "matcher": { "id": "byName", "options": "Tick Time" }, "properties": [{ "id": "unit", "value": "ms" }, { "id": "color", "value": { "fixedColor": "orange", "mode": "fixed" } }] }
+        ]
+      },
+      "gridPos": { "h": 7, "w": 12, "x": 0, "y": 66 },
+      "id": 111,
+      "options": { "legend": { "calcs": ["mean", "max"], "displayMode": "table", "placement": "bottom", "showLegend": true }, "tooltip": { "mode": "multi", "sort": "desc" } },
+      "targets": [
+        { "expr": "orbit_royale_tick_time_microseconds{job=\"orbit-royale-api\"} / 1000", "legendFormat": "Tick Time", "refId": "A" },
+        { "expr": "orbit_royale_players_total{job=\"orbit-royale-api\"}", "legendFormat": "Players", "refId": "B" }
+      ],
+      "title": "Tick Time vs Player Count",
+      "type": "timeseries"
+    },
+    {
+      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "description": "Tick budget usage correlated with entity count (players + projectiles + debris). High entity counts should correlate with higher budget usage.",
+      "fieldConfig": {
+        "defaults": { "custom": { "axisBorderShow": false, "drawStyle": "line", "fillOpacity": 10, "lineWidth": 2, "showPoints": "never", "axisPlacement": "auto" } },
+        "overrides": [
+          { "matcher": { "id": "byName", "options": "Entities" }, "properties": [{ "id": "custom.axisPlacement", "value": "right" }, { "id": "color", "value": { "fixedColor": "green", "mode": "fixed" } }] },
+          { "matcher": { "id": "byName", "options": "Budget %" }, "properties": [{ "id": "unit", "value": "percent" }, { "id": "color", "value": { "fixedColor": "yellow", "mode": "fixed" } }] }
+        ]
+      },
+      "gridPos": { "h": 7, "w": 12, "x": 12, "y": 66 },
+      "id": 112,
+      "options": { "legend": { "calcs": ["mean", "max"], "displayMode": "table", "placement": "bottom", "showLegend": true }, "tooltip": { "mode": "multi", "sort": "desc" } },
+      "targets": [
+        { "expr": "orbit_royale_budget_usage_percent{job=\"orbit-royale-api\"}", "legendFormat": "Budget %", "refId": "A" },
+        { "expr": "orbit_royale_players_total{job=\"orbit-royale-api\"} + orbit_royale_projectiles{job=\"orbit-royale-api\"} + orbit_royale_debris{job=\"orbit-royale-api\"}", "legendFormat": "Entities", "refId": "B" }
+      ],
+      "title": "Budget Usage vs Entity Count",
+      "type": "timeseries"
+    },
+
+    {
+      "collapsed": false,
+      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 73 },
+      "id": 120,
+      "panels": [],
+      "title": "Bottleneck Detection",
+      "type": "row"
+    },
+    {
+      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "description": "Normalized performance indicators (0-1 scale). All metrics trending green = optimal. Red areas indicate bottlenecks.",
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "palette-classic" },
+          "custom": { "axisBorderShow": false, "drawStyle": "line", "fillOpacity": 30, "lineWidth": 2, "showPoints": "never" },
+          "min": 0, "max": 1,
+          "thresholds": { "mode": "absolute", "steps": [{ "color": "green", "value": null }, { "color": "yellow", "value": 0.7 }, { "color": "red", "value": 0.9 }] }
+        }
+      },
+      "gridPos": { "h": 7, "w": 16, "x": 0, "y": 74 },
+      "id": 121,
+      "options": { "legend": { "calcs": ["lastNotNull"], "displayMode": "table", "placement": "right", "showLegend": true }, "tooltip": { "mode": "multi", "sort": "desc" } },
+      "targets": [
+        { "expr": "orbit_royale_budget_usage_percent{job=\"orbit-royale-api\"} / 100", "legendFormat": "CPU Budget", "refId": "A" },
+        { "expr": "orbit_royale_tick_time_microseconds{job=\"orbit-royale-api\"} / 33300", "legendFormat": "Tick Time", "refId": "B" },
+        { "expr": "1 - (orbit_royale_aoi_reduction_percent{job=\"orbit-royale-api\"} / 100)", "legendFormat": "Network Load", "refId": "C" },
+        { "expr": "orbit_royale_bot_ai_active{job=\"orbit-royale-api\"} / (orbit_royale_bot_ai_total{job=\"orbit-royale-api\"} + 1)", "legendFormat": "AI Load", "refId": "D" }
+      ],
+      "title": "Performance Indicators (normalized 0-1)",
+      "type": "timeseries"
+    },
+    {
+      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "description": "CPU saturation based on tick budget usage. Green = healthy, Yellow = high load, Red = saturated.",
+      "fieldConfig": { "defaults": { "min": 0, "max": 100, "unit": "percent", "thresholds": { "mode": "absolute", "steps": [{ "color": "green", "value": null }, { "color": "yellow", "value": 70 }, { "color": "red", "value": 90 }] } } },
+      "gridPos": { "h": 3, "w": 4, "x": 16, "y": 74 },
+      "id": 122,
+      "options": { "showThresholdLabels": false, "showThresholdMarkers": true, "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false } },
+      "targets": [{ "expr": "orbit_royale_budget_usage_percent{job=\"orbit-royale-api\"}", "legendFormat": "CPU", "refId": "A" }],
+      "title": "CPU Saturation",
+      "type": "gauge"
+    },
+    {
+      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "description": "Network saturation (inverse of AOI reduction). Green = efficient filtering, Red = high network load.",
+      "fieldConfig": { "defaults": { "min": 0, "max": 100, "unit": "percent", "thresholds": { "mode": "absolute", "steps": [{ "color": "green", "value": null }, { "color": "yellow", "value": 60 }, { "color": "red", "value": 85 }] } } },
+      "gridPos": { "h": 3, "w": 4, "x": 20, "y": 74 },
+      "id": 123,
+      "options": { "showThresholdLabels": false, "showThresholdMarkers": true, "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false } },
+      "targets": [{ "expr": "100 - orbit_royale_aoi_reduction_percent{job=\"orbit-royale-api\"}", "legendFormat": "Network", "refId": "A" }],
+      "title": "Network Saturation",
+      "type": "gauge"
+    },
+    {
+      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "description": "AI saturation (active bots / total bots). High values indicate heavy AI processing load.",
+      "fieldConfig": { "defaults": { "min": 0, "max": 100, "unit": "percent", "thresholds": { "mode": "absolute", "steps": [{ "color": "green", "value": null }, { "color": "yellow", "value": 50 }, { "color": "red", "value": 80 }] } } },
+      "gridPos": { "h": 4, "w": 4, "x": 16, "y": 77 },
+      "id": 124,
+      "options": { "showThresholdLabels": false, "showThresholdMarkers": true, "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false } },
+      "targets": [{ "expr": "(orbit_royale_bot_ai_active{job=\"orbit-royale-api\"} / (orbit_royale_bot_ai_total{job=\"orbit-royale-api\"} + 1)) * 100", "legendFormat": "AI", "refId": "A" }],
+      "title": "AI Saturation",
+      "type": "gauge"
+    },
+    {
+      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "description": "Efficiency score: available headroom per player. Higher = more efficient. Dropping values indicate scaling issues.",
+      "fieldConfig": { "defaults": { "color": { "mode": "thresholds" }, "decimals": 2, "thresholds": { "mode": "absolute", "steps": [{ "color": "red", "value": null }, { "color": "yellow", "value": 1 }, { "color": "green", "value": 2 }] } } },
+      "gridPos": { "h": 4, "w": 4, "x": 20, "y": 77 },
+      "id": 125,
+      "options": { "colorMode": "value", "graphMode": "area", "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false } },
+      "targets": [{ "expr": "(100 - orbit_royale_budget_usage_percent{job=\"orbit-royale-api\"}) / (orbit_royale_players_total{job=\"orbit-royale-api\"} + 1)", "legendFormat": "Efficiency", "refId": "A" }],
+      "title": "Efficiency Score",
+      "type": "stat"
+    },
+
+    {
+      "collapsed": false,
+      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 81 },
+      "id": 130,
+      "panels": [],
+      "title": "System Health Summary",
+      "type": "row"
+    },
+    {
+      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "description": "Composite system health score (0-100). Combines CPU budget, network efficiency, and performance status. 100 = perfect, <50 = needs attention.",
+      "fieldConfig": { "defaults": { "min": 0, "max": 100, "thresholds": { "mode": "absolute", "steps": [{ "color": "red", "value": null }, { "color": "orange", "value": 40 }, { "color": "yellow", "value": 60 }, { "color": "green", "value": 80 }] } } },
+      "gridPos": { "h": 6, "w": 6, "x": 0, "y": 82 },
+      "id": 131,
+      "options": { "showThresholdLabels": true, "showThresholdMarkers": true, "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false } },
+      "targets": [{ "expr": "100 - ((orbit_royale_budget_usage_percent{job=\"orbit-royale-api\"} * 0.4) + ((100 - orbit_royale_aoi_reduction_percent{job=\"orbit-royale-api\"}) * 0.2) + ((orbit_royale_performance_status{job=\"orbit-royale-api\"} / 4) * 100 * 0.4))", "legendFormat": "Health", "refId": "A" }],
+      "title": "System Health Score",
+      "type": "gauge"
+    },
+    {
+      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "description": "At-a-glance system status. Green = OK, Yellow = Warning, Red = Critical. Uses status codes (0-4).",
+      "fieldConfig": {
+        "defaults": {
+          "mappings": [
+            { "type": "range", "options": { "from": 0, "to": 1.99, "result": { "color": "green", "text": "OK" } } },
+            { "type": "range", "options": { "from": 2, "to": 2.99, "result": { "color": "yellow", "text": "WARN" } } },
+            { "type": "range", "options": { "from": 3, "to": 5, "result": { "color": "red", "text": "CRIT" } } }
+          ],
+          "thresholds": { "mode": "absolute", "steps": [{ "color": "green", "value": null }] }
+        }
+      },
+      "gridPos": { "h": 6, "w": 12, "x": 6, "y": 82 },
+      "id": 132,
+      "options": { "colorMode": "background", "graphMode": "none", "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false } },
+      "targets": [
+        { "expr": "orbit_royale_performance_status{job=\"orbit-royale-api\"}", "legendFormat": "Performance", "refId": "A" },
+        { "expr": "orbit_royale_bot_ai_health_status{job=\"orbit-royale-api\"}", "legendFormat": "Bot AI", "refId": "B" },
+        { "expr": "clamp_max(orbit_royale_dos_active_bans{job=\"orbit-royale-api\"} + rate(orbit_royale_dos_connections_rejected{job=\"orbit-royale-api\"}[1m]) / 10, 4)", "legendFormat": "Security", "refId": "C" },
+        { "expr": "clamp_max((100 - orbit_royale_aoi_reduction_percent{job=\"orbit-royale-api\"}) / 25, 4)", "legendFormat": "Network", "refId": "D" }
+      ],
+      "title": "Quick Status",
+      "type": "stat"
+    },
+    {
+      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "description": "Performance trends over 5 minutes. Positive = degrading, Negative = improving.",
+      "fieldConfig": { "defaults": { "color": { "mode": "thresholds" }, "unit": "percent", "thresholds": { "mode": "absolute", "steps": [{ "color": "green", "value": null }, { "color": "yellow", "value": 0 }, { "color": "red", "value": 5 }] } } },
+      "gridPos": { "h": 6, "w": 6, "x": 18, "y": 82 },
+      "id": 133,
+      "options": { "colorMode": "value", "graphMode": "area", "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false } },
+      "targets": [
+        { "expr": "delta(orbit_royale_budget_usage_percent{job=\"orbit-royale-api\"}[5m])", "legendFormat": "Budget Trend", "refId": "A" },
+        { "expr": "delta(orbit_royale_tick_time_microseconds{job=\"orbit-royale-api\"}[5m]) / 333", "legendFormat": "Tick Time Trend", "refId": "B" }
+      ],
+      "title": "Performance Trends (5m)",
+      "type": "stat"
     }
   ],
   "refresh": "2s",
