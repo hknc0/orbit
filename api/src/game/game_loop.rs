@@ -209,6 +209,7 @@ impl GameLoop {
                 &self.config.gravity_wave_config,
                 DT,
                 target_wells,
+                escape_radius,
             );
             for event in wave_events {
                 match event {
