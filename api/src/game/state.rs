@@ -7,6 +7,7 @@
 
 use hashbrown::HashMap;
 use serde::{Deserialize, Serialize};
+use smallvec::SmallVec;
 use uuid::Uuid;
 
 use crate::config::ArenaScalingConfig;
@@ -250,7 +251,8 @@ pub struct GravityWave {
     /// Age of the wave in seconds
     pub age: f32,
     /// Players already hit by this wave (to apply impulse only once)
-    pub hit_players: Vec<PlayerId>,
+    /// OPTIMIZATION: SmallVec avoids heap allocation for typical wave hits (4-16 players)
+    pub hit_players: SmallVec<[PlayerId; 16]>,
 }
 
 impl GravityWave {
@@ -260,7 +262,7 @@ impl GravityWave {
             radius: 0.0,
             strength,
             age: 0.0,
-            hit_players: Vec::new(),
+            hit_players: SmallVec::new(),
         }
     }
 }

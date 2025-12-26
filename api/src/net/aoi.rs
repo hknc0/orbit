@@ -293,6 +293,7 @@ mod tests {
     use uuid::Uuid;
 
     fn create_player_snapshot(id: Uuid, position: Vec2, kills: u32) -> PlayerSnapshot {
+        use crate::net::protocol::player_flags;
         PlayerSnapshot {
             id,
             name: format!("Player_{}", kills),
@@ -300,11 +301,9 @@ mod tests {
             velocity: Vec2::ZERO,
             rotation: 0.0,
             mass: 100.0,
-            alive: true,
+            flags: player_flags::ALIVE, // alive=true, spawn_protection=false, is_bot=false
             kills,
             deaths: 0,
-            spawn_protection: false,
-            is_bot: false,
             color_index: 0,
         }
     }

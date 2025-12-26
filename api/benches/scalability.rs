@@ -256,6 +256,79 @@ fn bench_memory_access(c: &mut Criterion) {
     group.finish();
 }
 
+// ============================================================================
+// Network/Protocol Benchmarks
+// ============================================================================
+
+fn bench_snapshot_creation(c: &mut Criterion) {
+    use orbit_royale_server::net::protocol::GameSnapshot;
+
+    let mut group = c.benchmark_group("snapshot_creation");
+
+    for &(bot_count, human_count) in &[(30, 1), (100, 10), (500, 50)] {
+        let label = format!("{}bots_{}humans", bot_count, human_count);
+        group.throughput(Throughput::Elements((bot_count + human_count) as u64));
+
+        group.bench_function(BenchmarkId::new("from_state", &label), |b| {
+            let (state, _) = create_test_state_with_bots(bot_count, human_count);
+            b.iter(|| {
+                black_box(GameSnapshot::from_game_state(black_box(&state)))
+            });
+        });
+    }
+
+    group.finish();
+}
+
+fn bench_spatial_grid(c: &mut Criterion) {
+    use orbit_royale_server::game::spatial::{SpatialGrid, SpatialEntity, SpatialEntityId, ENTITY_GRID_CELL_SIZE};
+
+    let mut group = c.benchmark_group("spatial_grid");
+
+    for &entity_count in &[100, 1000, 5000] {
+        group.throughput(Throughput::Elements(entity_count as u64));
+
+        // Benchmark insertion
+        group.bench_function(BenchmarkId::new("insert", entity_count), |b| {
+            b.iter(|| {
+                let mut grid = SpatialGrid::new(ENTITY_GRID_CELL_SIZE);
+                for i in 0..entity_count {
+                    let angle = (i as f32) * std::f32::consts::TAU / (entity_count as f32);
+                    let radius = 100.0 + (i as f32 % 500.0);
+                    let pos = Vec2::new(angle.cos() * radius, angle.sin() * radius);
+                    grid.insert(SpatialEntity {
+                        id: SpatialEntityId::Projectile(i as u64),
+                        position: pos,
+                        radius: 5.0,
+                    });
+                }
+                black_box(grid)
+            });
+        });
+
+        // Benchmark collision queries
+        group.bench_function(BenchmarkId::new("collision_pairs", entity_count), |b| {
+            let mut grid = SpatialGrid::new(ENTITY_GRID_CELL_SIZE);
+            for i in 0..entity_count {
+                let angle = (i as f32) * std::f32::consts::TAU / (entity_count as f32);
+                let radius = 100.0 + (i as f32 % 500.0);
+                let pos = Vec2::new(angle.cos() * radius, angle.sin() * radius);
+                grid.insert(SpatialEntity {
+                    id: SpatialEntityId::Projectile(i as u64),
+                    position: pos,
+                    radius: 5.0,
+                });
+            }
+
+            b.iter(|| {
+                black_box(grid.get_all_collision_pairs())
+            });
+        });
+    }
+
+    group.finish();
+}
+
 criterion_group!(
     benches,
     bench_registration,
@@ -265,6 +338,8 @@ criterion_group!(
     bench_behavior_batches,
     bench_input_generation,
     bench_memory_access,
+    bench_snapshot_creation,
+    bench_spatial_grid,
 );
 
 criterion_main!(benches);

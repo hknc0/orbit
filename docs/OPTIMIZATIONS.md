@@ -16,8 +16,9 @@ Comprehensive catalog of all performance optimizations in Orbit Royale.
 | **Swap-remove deletion** | To remove index 3 from `[A,B,C,D,E]`: swap D↔E, then pop. Result: `[A,B,E,D]`. O(1) vs O(n) shifting. |
 | **Dense index mapping** | Map `PlayerId (UUID)` → `u32 (0,1,2...)`. Access bot data via `array[dense_index]` instead of HashMap lookup. |
 | **Thread-local buffers** | Reuse `Vec` via `thread_local!` + `RefCell`. Clear and reuse instead of allocating per-call. Used in: density grid, notable players, AOI filtering, collision pairs. |
-| **SmallVec inline storage** | `SmallVec<[T; N]>` stores up to N items on stack, spills to heap only when exceeded. Used for inputs (4 inline) and top player IDs (8 inline). |
+| **SmallVec inline storage** | `SmallVec<[T; N]>` stores up to N items on stack, spills to heap only when exceeded. Used for inputs (4 inline), top player IDs (8 inline), and wave hit_players (16 inline). |
 | **Buffer pool scaling** | `BufferPool::for_connections(n)` scales pool size (32-512) based on expected connections. Reduces allocation fallback rate. |
+| **Arc<Vec<u8>> broadcasting** | Send `Arc<Vec<u8>>` through channels instead of cloning. 30 players × 2.5KB = 75KB saved per broadcast (only Arc pointer copied). |
 
 ### Network
 
@@ -30,6 +31,7 @@ Comprehensive catalog of all performance optimizations in Orbit Royale.
 | **Notable players** | High-mass players are visible on radar. Sort by mass, take top 15. Uses thread-local buffer for sorting. |
 | **Bincode** | Binary format: `f32` = 4 bytes. JSON `"123.456"` = 7+ bytes plus quotes/commas. 60% smaller overall. |
 | **Spectator snapshot caching** | Pre-compute AOI snapshots for bots with spectator followers. Deduplicate via `HashSet`, share via `Arc`. O(M) instead of O(N×M). |
+| **Bit-packed player flags** | Pack alive/spawn_protection/is_bot into single `u8`. Saves 2 bytes per player per snapshot (200+ bytes @ 100 players). |
 
 ### Concurrency
 
@@ -39,7 +41,8 @@ Comprehensive catalog of all performance optimizations in Orbit Royale.
 | **Parking lot RwLock** | Std RwLock has syscall overhead. Parking_lot spins briefly before sleeping, avoiding kernel transitions for short waits. |
 | **Rayon par_iter** | `players.par_iter_mut()` splits work across CPU cores automatically. 8 cores = ~8x throughput for independent updates. Used for gravity, physics, AI. |
 | **Hashbrown** | Google's SwissTable algorithm. Better cache utilization than std HashMap through SIMD-accelerated probing. |
-| **FxHashMap** | `rustc_hash::FxHashMap` for faster hashing with small integer keys. Used for gravity well lookups and input buffering. |
+| **FxHashMap** | `rustc_hash::FxHashMap` for faster hashing with small integer keys. Used for gravity well lookups, input buffering, and spatial grids. |
+| **Lock-free buffer pool** | `crossbeam_channel` MPMC for buffer pool (no Mutex). Lock-free get/put eliminates contention in hot encoding path. |
 
 ### Spatial
 
@@ -226,6 +229,9 @@ Lock-free channel: Atomic compare-and-swap. No waiting, no context switch. Both 
 | Unreliable input | TCP retransmit | Fire-and-forget | Lower latency |
 | Thread-local buffers | Alloc per call | Reuse buffer | 15-25% tick time |
 | FxHashMap | std HashMap | Faster hash | 5-10% lookup |
+| Arc<Vec<u8>> channels | Clone 2.5KB/player | Clone 16-byte Arc | ~250KB/sec saved |
+| Bit-packed flags | 3 bytes/player | 1 byte/player | 200+ bytes/snapshot |
+| Lock-free buffer pool | Mutex contention | Lock-free | Reduced latency |
 
 ---
 
@@ -269,10 +275,10 @@ Opportunities not yet implemented. Profile before implementing.
 
 | Technique | How it works | Expected Impact |
 |-----------|--------------|-----------------|
-| **Bit packing** | Pack boolean flags into single byte. | 20-30% smaller packets |
 | **Position quantization** | 16-bit fixed-point instead of 32-bit float. | 50% position data reduction |
 | **Velocity prediction** | Skip velocity if linear prediction matches. | 30-50% fewer velocity updates |
 | **Interest tiers** | Nearby = full, medium = position-only, far = existence-only. | Bandwidth scales with distance |
+| **Name caching** | Send names only on join, use ID-only in snapshots. | 1-2KB per snapshot saved |
 
 ---
 

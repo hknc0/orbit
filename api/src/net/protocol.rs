@@ -363,6 +363,14 @@ impl GameSnapshot {
     }
 }
 
+/// Player flags - bit-packed booleans for bandwidth efficiency
+/// OPTIMIZATION: Packs 3 bools into 1 byte (saves 2 bytes per player per snapshot)
+pub mod player_flags {
+    pub const ALIVE: u8 = 0b0000_0001;
+    pub const SPAWN_PROTECTION: u8 = 0b0000_0010;
+    pub const IS_BOT: u8 = 0b0000_0100;
+}
+
 /// Compressed player state
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PlayerSnapshot {
@@ -372,16 +380,26 @@ pub struct PlayerSnapshot {
     pub velocity: Vec2,
     pub rotation: f32,
     pub mass: f32,
-    pub alive: bool,
+    /// Bit-packed flags: bit 0 = alive, bit 1 = spawn_protection, bit 2 = is_bot
+    pub flags: u8,
     pub kills: u32,
     pub deaths: u32,
-    pub spawn_protection: bool,
-    pub is_bot: bool,
     pub color_index: u8,
 }
 
 impl PlayerSnapshot {
     pub fn from_player(player: &crate::game::state::Player) -> Self {
+        let mut flags = 0u8;
+        if player.alive {
+            flags |= player_flags::ALIVE;
+        }
+        if player.spawn_protection > 0.0 {
+            flags |= player_flags::SPAWN_PROTECTION;
+        }
+        if player.is_bot {
+            flags |= player_flags::IS_BOT;
+        }
+
         Self {
             id: player.id,
             name: player.name.clone(),
@@ -389,13 +407,29 @@ impl PlayerSnapshot {
             velocity: player.velocity,
             rotation: player.rotation,
             mass: player.mass,
-            alive: player.alive,
+            flags,
             kills: player.kills,
             deaths: player.deaths,
-            spawn_protection: player.spawn_protection > 0.0,
-            is_bot: player.is_bot,
             color_index: player.color_index,
         }
+    }
+
+    /// Check if player is alive
+    #[inline]
+    pub fn alive(&self) -> bool {
+        self.flags & player_flags::ALIVE != 0
+    }
+
+    /// Check if player has spawn protection
+    #[inline]
+    pub fn spawn_protection(&self) -> bool {
+        self.flags & player_flags::SPAWN_PROTECTION != 0
+    }
+
+    /// Check if player is a bot
+    #[inline]
+    pub fn is_bot(&self) -> bool {
+        self.flags & player_flags::IS_BOT != 0
     }
 }
 
@@ -684,11 +718,9 @@ mod tests {
                 velocity: Vec2::new(10.0, -5.0),
                 rotation: 1.5,
                 mass: 150.0,
-                alive: true,
+                flags: player_flags::ALIVE, // alive=true, spawn_protection=false, is_bot=false
                 kills: 3,
                 deaths: 1,
-                spawn_protection: false,
-                is_bot: false,
                 color_index: 2,
             }],
             projectiles: vec![],
@@ -1127,11 +1159,9 @@ mod encoding_tests {
                 velocity: Vec2::new(1.0, 2.0),
                 rotation: 0.5,
                 mass: 100.0,
-                alive: true,
+                flags: player_flags::ALIVE, // alive=true, spawn_protection=false, is_bot=false
                 kills: 3,
                 deaths: 0,
-                spawn_protection: false,
-                is_bot: false,
                 color_index: 2,
             }],
             projectiles: vec![],

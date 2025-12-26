@@ -36,28 +36,26 @@ const BUFFER_POOL_MAX_SIZE: usize = 512;
 const BUFFERS_PER_CONNECTION: usize = 2;
 
 /// Buffer pool for encoding - avoids allocations in hot path
-/// Uses a simple channel-based pool with pre-allocated buffers
+/// OPTIMIZATION: Uses crossbeam lock-free MPMC channel (no mutex contention)
 ///
-/// OPTIMIZATION: Pool size scales based on expected connection count
+/// Pool size scales based on expected connection count
 pub struct BufferPool {
-    sender: mpsc::UnboundedSender<Vec<u8>>,
-    receiver: std::sync::Mutex<mpsc::UnboundedReceiver<Vec<u8>>>,
+    sender: crossbeam_channel::Sender<Vec<u8>>,
+    receiver: crossbeam_channel::Receiver<Vec<u8>>,
 }
 
 impl BufferPool {
     /// Create a new buffer pool with pre-allocated buffers
     pub fn new(count: usize, capacity: usize) -> Self {
-        let (sender, receiver) = mpsc::unbounded_channel();
+        // Unbounded channel for flexibility (lock-free MPMC)
+        let (sender, receiver) = crossbeam_channel::unbounded();
 
         // Pre-allocate buffers
         for _ in 0..count {
             let _ = sender.send(Vec::with_capacity(capacity));
         }
 
-        Self {
-            sender,
-            receiver: std::sync::Mutex::new(receiver),
-        }
+        Self { sender, receiver }
     }
 
     /// Create a buffer pool sized for expected connection count
@@ -70,15 +68,17 @@ impl BufferPool {
     }
 
     /// Get a buffer from the pool (or allocate new if empty)
+    /// OPTIMIZATION: Lock-free try_recv - no mutex contention
+    #[inline]
     pub fn get(&self) -> Vec<u8> {
         self.receiver
-            .lock()
-            .ok()
-            .and_then(|mut rx| rx.try_recv().ok())
-            .unwrap_or_else(|| Vec::with_capacity(BUFFER_POOL_CAPACITY))
+            .try_recv()
+            .unwrap_or_else(|_| Vec::with_capacity(BUFFER_POOL_CAPACITY))
     }
 
     /// Return a buffer to the pool for reuse
+    /// OPTIMIZATION: Lock-free send - no mutex contention
+    #[inline]
     pub fn put(&self, mut buf: Vec<u8>) {
         buf.clear();
         // Only keep buffers under max to avoid memory bloat
@@ -232,7 +232,9 @@ pub struct PlayerConnection {
     pub player_id: PlayerId,
     pub player_name: String,
     /// Channel sender for outgoing messages (lock-free)
-    pub sender: mpsc::UnboundedSender<Vec<u8>>,
+    /// OPTIMIZATION: Uses Arc<Vec<u8>> to avoid cloning data when broadcasting
+    /// to multiple players - only the Arc pointer is cloned (16 bytes)
+    pub sender: mpsc::UnboundedSender<Arc<Vec<u8>>>,
     /// Legacy writer for backwards compatibility during transition
     pub writer: Arc<RwLock<Option<wtransport::SendStream>>>,
     /// Whether this connection is a spectator (no game entity)
@@ -451,7 +453,8 @@ impl GameSession {
         self.game_loop.add_player(player);
 
         // Create unbounded channel for lock-free message sending
-        let (sender, receiver) = mpsc::unbounded_channel::<Vec<u8>>();
+        // OPTIMIZATION: Uses Arc<Vec<u8>> to avoid cloning broadcast data
+        let (sender, receiver) = mpsc::unbounded_channel::<Arc<Vec<u8>>>();
 
         // Spawn dedicated writer task for this connection
         // This eliminates lock contention - messages are sent via channel
@@ -492,7 +495,8 @@ impl GameSession {
         info!("Spectator joined: {} ({})", player_name, player_id);
 
         // Create unbounded channel for lock-free message sending
-        let (sender, receiver) = mpsc::unbounded_channel::<Vec<u8>>();
+        // OPTIMIZATION: Uses Arc<Vec<u8>> to avoid cloning broadcast data
+        let (sender, receiver) = mpsc::unbounded_channel::<Arc<Vec<u8>>>();
 
         // Spawn dedicated writer task for this connection
         let writer_clone = writer.clone();
@@ -1236,9 +1240,13 @@ const WRITE_BATCH_BYTES: usize = 65536;
 /// Dedicated writer task for a player connection
 /// Batches multiple messages before writing to reduce syscall overhead
 /// Reads from channel and writes to stream - eliminates lock contention
+///
+/// OPTIMIZATION: Uses Arc<Vec<u8>> to avoid cloning broadcast data.
+/// Trade-off: Buffer pool reuse is lost, but we save N-1 copies per broadcast
+/// (30 players = 29 × 2.5KB = 72.5KB saved per tick)
 async fn run_writer_task(
     player_id: PlayerId,
-    mut receiver: mpsc::UnboundedReceiver<Vec<u8>>,
+    mut receiver: mpsc::UnboundedReceiver<Arc<Vec<u8>>>,
     writer: Arc<RwLock<Option<wtransport::SendStream>>>,
 ) {
     debug!("Writer task started for player {}", player_id);
@@ -1251,11 +1259,10 @@ async fn run_writer_task(
         batch_buffer.clear();
 
         // Add first message with length prefix
+        // OPTIMIZATION: Access Arc contents directly, no clone needed
         batch_buffer.extend_from_slice(&(first_data.len() as u32).to_le_bytes());
-        batch_buffer.extend_from_slice(&first_data);
-
-        // Return buffer to pool if it was pooled
-        return_buffer(first_data);
+        batch_buffer.extend_from_slice(&*first_data);
+        // Note: Arc is dropped here, Vec freed when refcount hits 0
 
         // Try to batch more messages (non-blocking)
         let mut msg_count = 1;
@@ -1263,8 +1270,7 @@ async fn run_writer_task(
             match receiver.try_recv() {
                 Ok(data) => {
                     batch_buffer.extend_from_slice(&(data.len() as u32).to_le_bytes());
-                    batch_buffer.extend_from_slice(&data);
-                    return_buffer(data);
+                    batch_buffer.extend_from_slice(&*data);
                     msg_count += 1;
                 }
                 Err(_) => break, // No more messages waiting
@@ -1293,7 +1299,10 @@ async fn run_writer_task(
 }
 
 /// Broadcast a message to all connected players using channels (lock-free)
-/// Uses pooled buffers to minimize allocations
+///
+/// OPTIMIZATION: Wraps encoded data in Arc so each player receives a cheap
+/// Arc clone (16 bytes) instead of copying the entire message (~2.5KB).
+/// For 30 players: saves 29 × 2.5KB = 72.5KB of memory copying per broadcast.
 pub async fn broadcast_message(
     session: &GameSession,
     message: &ServerMessage,
@@ -1307,27 +1316,17 @@ pub async fn broadcast_message(
         }
     };
 
-    // Send via channels - no locks, no spawning
-    // Each channel sender clones the Arc, not the data
-    let player_count = session.players.len();
-    for (idx, (player_id, conn)) in session.players.iter().enumerate() {
-        // For all but the last player, clone the data
-        // Last player gets ownership (avoids extra clone)
-        let data = if idx < player_count - 1 {
-            encoded.clone()
-        } else {
-            encoded.clone() // Writer task will return to pool
-        };
+    // Wrap in Arc for zero-copy sharing across all players
+    let shared = Arc::new(encoded);
 
-        if let Err(e) = conn.sender.send(data) {
+    // Send via channels - no locks, no spawning
+    // Each channel sender clones the Arc pointer, not the data
+    for (player_id, conn) in session.players.iter() {
+        if let Err(e) = conn.sender.send(shared.clone()) {
             debug!("Broadcast to {}: channel closed ({})", player_id, e);
         }
     }
-
-    // Return the original buffer to pool if no players
-    if player_count == 0 {
-        return_buffer(encoded);
-    }
+    // Arc is dropped here; Vec freed when all receivers process their messages
 }
 
 /// Broadcast AOI-filtered snapshots to each player using channels (lock-free)
@@ -1470,8 +1469,8 @@ pub async fn broadcast_filtered_snapshots(session: &GameSession, tick: u64) {
                 let shared = Arc::new(encoded);
                 player_snapshot_cache.insert(player_id, shared.clone());
 
-                // Send to player - clone the inner Vec for the channel
-                if let Err(e) = conn.sender.send((*shared).clone()) {
+                // Send to player - Arc::clone is O(1), just increments refcount
+                if let Err(e) = conn.sender.send(shared.clone()) {
                     debug!("AOI broadcast to {}: channel closed ({})", player_id, e);
                 }
             }
@@ -1489,7 +1488,7 @@ pub async fn broadcast_filtered_snapshots(session: &GameSession, tick: u64) {
             continue;
         }
 
-        let bytes = match conn.spectate_target {
+        let bytes: Arc<Vec<u8>> = match conn.spectate_target {
             // FULL VIEW: Rate-limited (large snapshots)
             None => {
                 // Only send on spectator ticks to save bandwidth
@@ -1497,7 +1496,7 @@ pub async fn broadcast_filtered_snapshots(session: &GameSession, tick: u64) {
                     continue;
                 }
                 if let Some(ref full) = full_snapshot_bytes {
-                    (**full).clone()
+                    full.clone() // Arc::clone - O(1)
                 } else {
                     continue;
                 }
@@ -1507,17 +1506,17 @@ pub async fn broadcast_filtered_snapshots(session: &GameSession, tick: u64) {
             Some(target_id) => {
                 if let Some(cached) = player_snapshot_cache.get(&target_id) {
                     // Human player - use their cached AOI-filtered snapshot (O(1))
-                    (**cached).clone()
+                    cached.clone() // Arc::clone - O(1)
                 } else if let Some(cached) = bot_snapshot_cache.get(&target_id) {
                     // Bot with cached snapshot - reuse pre-computed AOI snapshot (O(1))
                     // This optimization ensures N spectators following same bot = O(1) not O(N)
-                    (**cached).clone()
+                    cached.clone() // Arc::clone - O(1)
                 } else if let Some(ref full) = full_snapshot_bytes {
                     // Target doesn't exist (disconnected/dead) - fall back to full view (rate-limited)
                     if !spectator_tick {
                         continue;
                     }
-                    (**full).clone()
+                    full.clone() // Arc::clone - O(1)
                 } else {
                     continue;
                 }

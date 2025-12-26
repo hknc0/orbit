@@ -7,7 +7,11 @@
 
 use crate::util::vec2::Vec2;
 use hashbrown::HashMap;
+use rustc_hash::FxBuildHasher;
 use std::cell::RefCell;
+
+/// OPTIMIZATION: FxHasher is faster than default hasher for small integer keys like (i32, i32)
+type FxHashMap<K, V> = HashMap<K, V, FxBuildHasher>;
 
 // Thread-local reusable buffer for collision pair queries
 thread_local! {
@@ -56,7 +60,8 @@ pub struct SpatialGrid {
     /// Inverse cell size for fast position-to-cell conversion
     inv_cell_size: f32,
     /// Map from cell key to entities in that cell
-    cells: HashMap<CellKey, Vec<SpatialEntity>>,
+    /// OPTIMIZATION: FxHashMap for faster lookups with integer keys
+    cells: FxHashMap<CellKey, Vec<SpatialEntity>>,
     /// Pre-allocated neighbor offsets for 9-cell query
     neighbor_offsets: [(i32, i32); 9],
 }
@@ -70,7 +75,7 @@ impl SpatialGrid {
         Self {
             cell_size,
             inv_cell_size: 1.0 / cell_size,
-            cells: HashMap::with_capacity(ENTITY_GRID_INITIAL_CAPACITY),
+            cells: FxHashMap::with_capacity_and_hasher(ENTITY_GRID_INITIAL_CAPACITY, FxBuildHasher),
             neighbor_offsets: [
                 (-1, -1), (0, -1), (1, -1),
                 (-1,  0), (0,  0), (1,  0),
@@ -296,7 +301,8 @@ pub struct WellSpatialGrid {
     /// Inverse cell size for fast position-to-cell conversion
     inv_cell_size: f32,
     /// Map from cell key to well IDs in that cell
-    cells: HashMap<CellKey, Vec<WellId>>,
+    /// OPTIMIZATION: FxHashMap for faster lookups with integer keys
+    cells: FxHashMap<CellKey, Vec<WellId>>,
     /// Query radius in cells (how many cells to check around a position)
     query_radius_cells: i32,
 }
@@ -314,7 +320,7 @@ impl WellSpatialGrid {
         Self {
             cell_size,
             inv_cell_size: 1.0 / cell_size,
-            cells: HashMap::with_capacity(WELL_GRID_INITIAL_CAPACITY),
+            cells: FxHashMap::with_capacity_and_hasher(WELL_GRID_INITIAL_CAPACITY, FxBuildHasher),
             query_radius_cells,
         }
     }

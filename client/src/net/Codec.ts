@@ -389,20 +389,40 @@ function readGameSnapshot(reader: BinaryReader): GameSnapshot {
   };
 }
 
+// Player flags bit positions (must match server protocol.rs)
+const PLAYER_FLAG_ALIVE = 0b0000_0001;
+const PLAYER_FLAG_SPAWN_PROTECTION = 0b0000_0010;
+const PLAYER_FLAG_IS_BOT = 0b0000_0100;
+
 function readPlayerSnapshot(reader: BinaryReader): PlayerSnapshot {
+  const id = reader.readUuid();
+  const name = reader.readString();
+  const position = reader.readVec2();
+  const velocity = reader.readVec2();
+  const rotation = reader.readF32();
+  const mass = reader.readF32();
+  // OPTIMIZATION: Bit-packed flags (saves 2 bytes per player)
+  const flags = reader.readU8();
+  const alive = (flags & PLAYER_FLAG_ALIVE) !== 0;
+  const spawnProtection = (flags & PLAYER_FLAG_SPAWN_PROTECTION) !== 0;
+  const isBot = (flags & PLAYER_FLAG_IS_BOT) !== 0;
+  const kills = reader.readU32();
+  const deaths = reader.readU32();
+  const colorIndex = reader.readU8();
+
   return {
-    id: reader.readUuid(),
-    name: reader.readString(),
-    position: reader.readVec2(),
-    velocity: reader.readVec2(),
-    rotation: reader.readF32(),
-    mass: reader.readF32(),
-    alive: reader.readBool(),
-    kills: reader.readU32(),
-    deaths: reader.readU32(),
-    spawnProtection: reader.readBool(),
-    isBot: reader.readBool(),
-    colorIndex: reader.readU8(),
+    id,
+    name,
+    position,
+    velocity,
+    rotation,
+    mass,
+    alive,
+    kills,
+    deaths,
+    spawnProtection,
+    isBot,
+    colorIndex,
   };
 }
 
