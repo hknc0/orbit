@@ -87,6 +87,14 @@ export const NETWORK = {
   INPUT_BUFFER_SIZE: 64,
   RECONNECT_ATTEMPTS: 3,
   PING_INTERVAL_MS: 1000,
+  // Adaptive interpolation for variable snapshot rates
+  // Players get 30Hz (~33ms), full-view spectators get 15Hz (~66ms)
+  ADAPTIVE_INTERPOLATION: {
+    MIN_DELAY_MS: 80,          // Min delay for fast updates (30Hz)
+    MAX_DELAY_MS: 200,         // Max delay for slow updates (15Hz)
+    SMOOTHING_FACTOR: 0.15,    // EMA smoothing for interval calculation
+    BUFFER_SNAPSHOTS: 2,       // Target snapshots in buffer for smooth playback
+  },
 } as const;
 
 // Player colors matching server (20 colors for smooth gradient selection)

@@ -2,6 +2,8 @@
 
 import { Vec2, vec2Lerp } from '@/utils/Vec2';
 import { NETWORK, PHYSICS, BOOST, massToThrustMultiplier } from '@/utils/Constants';
+
+const { ADAPTIVE_INTERPOLATION } = NETWORK;
 import type {
   GameSnapshot,
   DeltaUpdate,
@@ -99,8 +101,11 @@ export class StateSync {
   private predictedPosition: Vec2 = new Vec2();
   private predictedVelocity: Vec2 = new Vec2();
 
-  // Interpolation delay (ms behind server time)
-  private readonly interpolationDelay = NETWORK.INTERPOLATION_DELAY_MS;
+  // Adaptive interpolation delay based on snapshot arrival rate
+  // Spectators at reduced rate (15Hz) need more buffer than players (30Hz)
+  private adaptiveDelay: number = NETWORK.INTERPOLATION_DELAY_MS;
+  private lastSnapshotTime: number = 0;
+  private snapshotIntervalAvg: number = PHYSICS.DT * 1000;  // Start assuming tick rate
 
   // Destroyed gravity wells (filter from interpolated state until server confirms removal)
   private destroyedWellIds: Set<number> = new Set();
@@ -122,6 +127,11 @@ export class StateSync {
     this.localPlayerId = id;
   }
 
+  // Getter for current interpolation delay (adapts based on snapshot rate)
+  get interpolationDelay(): number {
+    return this.adaptiveDelay;
+  }
+
   // Mark a gravity well as destroyed (called when GravityWellDestroyed event received)
   markWellDestroyed(wellId: number): void {
     this.destroyedWellIds.add(wellId);
@@ -131,6 +141,27 @@ export class StateSync {
   // Apply a full snapshot from server
   applySnapshot(snapshot: GameSnapshot): void {
     const now = performance.now();
+
+    // Track snapshot arrival rate for adaptive interpolation
+    if (this.lastSnapshotTime > 0) {
+      const interval = now - this.lastSnapshotTime;
+      // Only update if interval is reasonable (10ms-500ms range)
+      if (interval > 10 && interval < 500) {
+        // Exponential moving average for smooth adaptation
+        this.snapshotIntervalAvg =
+          this.snapshotIntervalAvg * (1 - ADAPTIVE_INTERPOLATION.SMOOTHING_FACTOR) +
+          interval * ADAPTIVE_INTERPOLATION.SMOOTHING_FACTOR;
+
+        // Calculate adaptive delay: buffer enough snapshots for smooth playback
+        // delay = interval * bufferSnapshots, clamped to min/max
+        const targetDelay = this.snapshotIntervalAvg * ADAPTIVE_INTERPOLATION.BUFFER_SNAPSHOTS;
+        this.adaptiveDelay = Math.max(
+          ADAPTIVE_INTERPOLATION.MIN_DELAY_MS,
+          Math.min(ADAPTIVE_INTERPOLATION.MAX_DELAY_MS, targetDelay)
+        );
+      }
+    }
+    this.lastSnapshotTime = now;
 
     // Pre-compute well Map for O(1) lookups during interpolation
     const wellMap = new Map(snapshot.gravityWells.map(w => [w.id, w]));
@@ -648,5 +679,11 @@ export class StateSync {
     this.predictedVelocity = new Vec2();
     this.destroyedWellIds.clear();
     this.wellBornTimes.clear();
+    // Reset adaptive interpolation state
+    this.adaptiveDelay = NETWORK.INTERPOLATION_DELAY_MS;
+    this.lastSnapshotTime = 0;
+    this.snapshotIntervalAvg = PHYSICS.DT * 1000;
+    this.playerBornTimes.clear();
+    this.hasReceivedFirstSnapshot = false;
   }
 }
