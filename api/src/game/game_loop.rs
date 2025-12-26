@@ -201,7 +201,8 @@ impl GameLoop {
             let arena_area = std::f32::consts::PI * escape_radius * escape_radius;
             let config = &self.config.arena_scaling_config;
             let target_wells = ((arena_area / config.wells_per_area).ceil() as usize)
-                .max(config.min_wells);
+                .max(config.min_wells)
+                .min(config.max_wells);
 
             let wave_events = gravity::update_explosions(
                 &mut self.state,
@@ -321,8 +322,7 @@ impl GameLoop {
     ///
     /// When client sends faster than server ticks (e.g., 60fps client vs 30Hz server),
     /// multiple inputs can arrive per tick. We use the latest input for continuous
-    /// state (thrust, aim) but OR together transient flags (fire_released) to prevent
-    /// missed events.
+    /// state (thrust, aim) but handle fire/fire_released specially to support quick taps.
     fn coalesce_inputs(inputs: &[PlayerInput], max_inputs: usize) -> PlayerInput {
         // Limit inputs to prevent flooding attacks
         let inputs = if inputs.len() > max_inputs {
@@ -336,6 +336,16 @@ impl GameLoop {
 
         // OR transient flags - these are one-shot events that must not be missed
         coalesced.fire_released = inputs.iter().any(|i| i.fire_released);
+
+        // If ANY input had fire=true, we need to ensure charging starts.
+        // This handles quick taps where fire=true and fire_released=true arrive in same tick.
+        // The charging system needs to see fire=true first, then fire_released=true.
+        let any_fire = inputs.iter().any(|i| i.fire);
+        if any_fire && coalesced.fire_released {
+            // Quick tap: fire was pressed and released in same tick batch.
+            // Set fire=true so charging starts, fire_released=true so it fires immediately.
+            coalesced.fire = true;
+        }
 
         coalesced
     }
@@ -825,5 +835,28 @@ mod tests {
         // fire_released at index 5 should be discarded (only last 5 kept: indices 15-19)
         assert!(!coalesced.fire_released, "Should only consider last 5 inputs");
         assert_eq!(coalesced.sequence, 19, "Should use latest input");
+    }
+
+    #[test]
+    fn test_coalesce_inputs_quick_tap_same_tick() {
+        // Simulate quick tap: press then release in same tick batch
+        let inputs = vec![
+            PlayerInput {
+                fire: true,
+                fire_released: false,
+                ..Default::default()
+            },
+            PlayerInput {
+                fire: false,
+                fire_released: true,
+                ..Default::default()
+            },
+        ];
+
+        let coalesced = GameLoop::coalesce_inputs(&inputs, 10);
+
+        // Both fire and fire_released should be true (quick tap detection)
+        assert!(coalesced.fire, "fire should be true when any input had fire=true and fire_released=true");
+        assert!(coalesced.fire_released, "fire_released should be true");
     }
 }

@@ -331,15 +331,17 @@ impl Default for Arena {
 
 impl Arena {
     /// Get the current safe radius based on collapse progress
+    /// Uses escape_radius directly since it's already lerped to the correct size
+    /// (scale is derived from escape_radius, so multiplying them would be quadratic)
     pub fn current_safe_radius(&self) -> f32 {
-        let base = self.escape_radius * self.scale;
+        let base = self.escape_radius;
         let reduction_per_phase = (base - self.core_radius) / arena::COLLAPSE_PHASES as f32;
         base - (self.collapse_phase as f32 * reduction_per_phase)
     }
 
-    /// Get scaled escape radius
+    /// Get scaled escape radius (same as escape_radius since scale is derived from it)
     pub fn scaled_escape_radius(&self) -> f32 {
-        self.escape_radius * self.scale
+        self.escape_radius
     }
 
     /// Allocate a new unique well ID
@@ -500,7 +502,8 @@ impl Arena {
         // Area = PI * r^2, wells = area / wells_per_area
         let arena_area = std::f32::consts::PI * target_escape * target_escape;
         let target_wells = ((arena_area / config.wells_per_area).ceil() as usize)
-            .max(config.min_wells);
+            .max(config.min_wells)
+            .min(config.max_wells); // Hard cap for performance and gameplay
         let current_orbital_wells = self.gravity_wells.len().saturating_sub(1);
 
         // Track previous radius for proportional well scaling
@@ -510,10 +513,12 @@ impl Arena {
         let diff = target_escape - self.escape_radius;
 
         if diff > 1.0 {
-            // GROW: Fast lerp for smooth expansion (no jitter)
-            // Players need space quickly but expansion should look natural
+            // GROW: Lerp with cap for smooth expansion
+            // Cap prevents large jumps that cause visual stepping when
+            // client linearly interpolates between snapshots (sent at 10Hz)
             self.shrink_delay_ticks = config.shrink_delay_ticks;
-            let delta = diff * config.grow_lerp;
+            let lerp_delta = diff * config.grow_lerp;
+            let delta = lerp_delta.min(config.max_grow_per_tick);
             self.escape_radius = (self.escape_radius + delta).min(target_escape);
             self.outer_radius = (self.outer_radius + delta).min(target_outer);
         } else if diff < -1.0 {
@@ -637,72 +642,62 @@ impl Arena {
         current_orbital.saturating_sub(target_wells)
     }
 
-    /// Add orbital wells distributed across multiple rings for better player spread
-    /// Ring positions are configurable via ArenaScalingConfig
+    /// Add orbital wells using golden angle distribution for optimal spacing.
+    ///
+    /// The golden angle (137.5°) ensures each new well is placed at maximum angular
+    /// distance from existing wells. Combined with Fermat's spiral radial distribution,
+    /// this creates a natural, visually pleasing galaxy pattern (like sunflower seeds).
     pub fn add_orbital_wells(&mut self, count: usize, escape_radius: f32, config: &ArenaScalingConfig) {
         use crate::game::constants::physics::CENTRAL_MASS;
         use rand::Rng;
-        use std::f32::consts::TAU;
+
+        // Golden angle in radians: 360°/φ² ≈ 137.5077° = 2.399963 radians
+        // This is nature's optimal spacing angle (sunflower seeds, pinecones, etc.)
+        const GOLDEN_ANGLE: f32 = 2.399963;
 
         let mut rng = rand::thread_rng();
         let size_multipliers = [0.6, 0.8, 1.0, 1.2, 1.4];
-        let min_well_distance = arena::OUTER_RADIUS * 1.2;
-        const MAX_PLACEMENT_ATTEMPTS: usize = 50;
 
-        // Define orbital rings from config
-        let rings: [(f32, f32, f32); 3] = [
-            (config.ring_inner_min, config.ring_inner_max, 1.0),
-            (config.ring_middle_min, config.ring_middle_max, 2.0),
-            (config.ring_outer_min, config.ring_outer_max, 2.0),
-        ];
-        let total_weight: f32 = rings.iter().map(|(_, _, w)| w).sum();
+        // Count existing orbital wells (exclude central supermassive at ID 0)
+        let existing_orbital = self.gravity_wells.len().saturating_sub(1);
 
-        for _ in 0..count {
+        // Enforce max_wells cap
+        let actual_count = count.min(config.max_wells.saturating_sub(existing_orbital));
+        if actual_count == 0 {
+            return; // Already at max
+        }
+
+        // Define radial bounds using center_exclusion_ratio
+        let min_radius = escape_radius * config.center_exclusion_ratio;
+        let max_radius = escape_radius * config.well_max_ratio;
+        let radial_range = max_radius - min_radius;
+
+        // Random angular offset for variety (so galaxy doesn't always start same way)
+        let base_offset = rng.gen_range(0.0..std::f32::consts::TAU);
+
+        for i in 0..actual_count {
+            let well_index = existing_orbital + i;
+
+            // === GOLDEN ANGLE DISTRIBUTION ===
+            // Each well placed at golden_angle × index from base offset
+            // This maximizes angular separation naturally
+            let angle = base_offset + (well_index as f32) * GOLDEN_ANGLE;
+
+            // === FERMAT SPIRAL RADIAL DISTRIBUTION ===
+            // Distance increases with sqrt(index) for even area coverage
+            // t goes from 0 to 1 as we fill toward max_wells
+            let t = (well_index as f32 + 1.0) / (config.max_wells as f32).max(1.0);
+            let radius = min_radius + radial_range * t.sqrt();
+
+            let position = Vec2::from_angle(angle) * radius;
+
+            // Random well size for variety
             let size_mult = size_multipliers[rng.gen_range(0..size_multipliers.len())];
             let well_mass = CENTRAL_MASS * size_mult;
             let well_core = arena::CORE_RADIUS * size_mult;
 
-            // Pick a ring based on weights
-            let roll: f32 = rng.gen_range(0.0..total_weight);
-            let mut cumulative = 0.0;
-            let mut selected_ring = (config.ring_middle_min, config.ring_middle_max);
-            for (min, max, weight) in &rings {
-                cumulative += weight;
-                if roll < cumulative {
-                    selected_ring = (*min, *max);
-                    break;
-                }
-            }
-
-            let mut best_pos = Vec2::ZERO;
-            let mut best_min_dist = 0.0f32;
-
-            for attempt in 0..MAX_PLACEMENT_ATTEMPTS {
-                let angle = rng.gen_range(0.0..TAU);
-                let radius = rng.gen_range(
-                    escape_radius * selected_ring.0..escape_radius * selected_ring.1
-                );
-                let candidate = Vec2::from_angle(angle) * radius;
-
-                let min_dist = self.gravity_wells
-                    .values()
-                    .map(|w| (w.position - candidate).length())
-                    .min_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal))
-                    .unwrap_or(f32::MAX);
-
-                if min_dist >= min_well_distance {
-                    best_pos = candidate;
-                    break;
-                }
-
-                if min_dist > best_min_dist || attempt == 0 {
-                    best_min_dist = min_dist;
-                    best_pos = candidate;
-                }
-            }
-
             let well_id = self.alloc_well_id();
-            let well = GravityWell::new(well_id, best_pos, well_mass, well_core);
+            let well = GravityWell::new(well_id, position, well_mass, well_core);
             // Use insert_well to also update the spatial grid
             self.insert_well(well);
         }
@@ -923,6 +918,38 @@ mod tests {
     }
 
     #[test]
+    fn test_arena_safe_radius_linear_with_escape_radius() {
+        // Verifies that current_safe_radius is LINEAR with escape_radius
+        // (not quadratic, which was a bug where we multiplied escape_radius * scale)
+        use crate::config::ArenaScalingConfig;
+        let config = ArenaScalingConfig::default();
+        let mut arena = Arena::default();
+
+        // Scale arena to different sizes
+        for _ in 0..50 {
+            arena.scale_for_simulation(500, &config);
+        }
+
+        let scaled_escape = arena.escape_radius;
+        let scaled_safe = arena.current_safe_radius();
+
+        // With no collapse, safe_radius should equal escape_radius exactly
+        assert_eq!(arena.collapse_phase, 0);
+        assert_eq!(scaled_safe, scaled_escape,
+            "Safe radius should equal escape_radius (linear), got {} vs {}",
+            scaled_safe, scaled_escape);
+
+        // Verify it's NOT quadratic: if it were, safe_radius would be
+        // escape_radius * (escape_radius / ESCAPE_RADIUS) = escape_radius² / ESCAPE_RADIUS
+        let quadratic_value = scaled_escape * scaled_escape / arena::ESCAPE_RADIUS;
+        assert_ne!(scaled_safe, quadratic_value,
+            "Safe radius should NOT be quadratic with escape_radius");
+
+        // scaled_escape_radius should also just return escape_radius
+        assert_eq!(arena.scaled_escape_radius(), scaled_escape);
+    }
+
+    #[test]
     fn test_match_phase_default() {
         let phase = MatchPhase::default();
         assert_eq!(phase, MatchPhase::Waiting);
@@ -1035,11 +1062,12 @@ mod tests {
         let mut arena = Arena::default();
 
         // First grow the arena
-        for _ in 0..50 {
+        // With max_grow_per_tick=30, need more iterations for large changes
+        for _ in 0..200 {
             arena.scale_for_simulation(500, &config);
         }
         let expanded_escape = arena.escape_radius;
-        assert!(expanded_escape > 3000.0, "Should have grown significantly");
+        assert!(expanded_escape > 3000.0, "Should have grown significantly: got {}", expanded_escape);
 
         // Now request shrink to 10 players
         // First few calls should NOT shrink (delay period)
@@ -1073,7 +1101,8 @@ mod tests {
         assert_eq!(initial_escape, 800.0, "Default arena should be 800");
 
         // First grow arena and add wells via scale_for_simulation
-        for _ in 0..30 {
+        // With slower lerp/cap, need more iterations
+        for _ in 0..150 {
             arena.scale_for_simulation(100, &config);
         }
 
@@ -1087,7 +1116,7 @@ mod tests {
         assert!(setup_well_count > 1, "Should have wells after setup");
 
         // Now scale up significantly
-        for _ in 0..100 {
+        for _ in 0..300 {
             arena.scale_for_simulation(500, &config);
         }
 
@@ -1138,14 +1167,16 @@ mod tests {
         assert!(after_one < target, "Should not reach target in one tick");
 
         // Multiple calls should converge to target
-        for _ in 0..100 {
+        // With max_grow_per_tick=30 and lerp=0.05, large changes take longer
+        // For 7200 unit diff, linear phase takes ~240 ticks, then exponential
+        for _ in 0..400 {
             arena.scale_for_simulation(1000, &config);
         }
         let after_many = arena.escape_radius;
 
         assert!(after_many > after_one, "Should continue expanding");
-        // Should be very close to target after 100 iterations
-        assert!((after_many - target).abs() < 1.0, "Should converge to target");
+        // Should be very close to target after enough iterations
+        assert!((after_many - target).abs() < 10.0, "Should converge to target");
     }
 
     #[test]

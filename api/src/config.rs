@@ -619,6 +619,8 @@ pub struct ArenaScalingConfig {
     // Growth/Shrink behavior
     /// How fast arena grows towards target (0.01-0.1)
     pub grow_lerp: f32,
+    /// Maximum arena growth per tick in units (prevents large jumps that cause visual stepping)
+    pub max_grow_per_tick: f32,
     /// How fast arena shrinks towards target (0.001-0.05)
     pub shrink_lerp: f32,
     /// Ticks to wait before shrinking (0-300)
@@ -657,12 +659,25 @@ pub struct ArenaScalingConfig {
     // Supermassive black hole
     pub supermassive_mass_mult: f32,
     pub supermassive_core_mult: f32,
+
+    // Golden angle distribution (ultimate galaxy distribution)
+    /// Maximum gravity wells regardless of arena size (5-50)
+    pub max_wells: usize,
+    /// Minimum radius from center as fraction of escape_radius (0.10-0.30)
+    /// Wells won't spawn closer than this to the supermassive black hole
+    pub center_exclusion_ratio: f32,
 }
 
 impl Default for ArenaScalingConfig {
     fn default() -> Self {
         Self {
-            grow_lerp: 0.15,  // Fast but smooth (reaches 90% in ~0.5s at 30 TPS)
+            // Reduced from 0.15 to 0.05 for smoother visual transitions
+            // With snapshots at 10Hz, this gives ~14% change per snapshot pair
+            // vs 38.6% before, making client-side linear interpolation smoother
+            grow_lerp: 0.05,
+            // Cap maximum growth to prevent large jumps during rapid scaling
+            // At 30 units/tick, growing 1000 units takes ~33 ticks (1.1s) linearly
+            max_grow_per_tick: 30.0,
             shrink_lerp: 0.005,
             shrink_delay_ticks: 150,
             min_escape_radius: 800.0,
@@ -683,6 +698,9 @@ impl Default for ArenaScalingConfig {
             ring_outer_max: 0.90,
             supermassive_mass_mult: 3.0,
             supermassive_core_mult: 2.5,
+            // Golden angle distribution
+            max_wells: 20,                // Hard cap for performance and gameplay
+            center_exclusion_ratio: 0.15, // Wells stay 15%+ from center
         }
     }
 }
@@ -863,6 +881,26 @@ impl ArenaScalingConfig {
             if let Ok(parsed) = val.parse::<f32>() {
                 if parsed >= 1.0 && parsed <= 5.0 {
                     config.supermassive_core_mult = parsed;
+                }
+            }
+        }
+
+        // Golden angle distribution
+        if let Ok(val) = std::env::var("ARENA_MAX_WELLS") {
+            if let Ok(parsed) = val.parse::<usize>() {
+                if parsed >= 5 && parsed <= 50 {
+                    config.max_wells = parsed;
+                } else {
+                    tracing::warn!("ARENA_MAX_WELLS must be 5-50, using default");
+                }
+            }
+        }
+        if let Ok(val) = std::env::var("ARENA_CENTER_EXCLUSION") {
+            if let Ok(parsed) = val.parse::<f32>() {
+                if parsed >= 0.10 && parsed <= 0.30 {
+                    config.center_exclusion_ratio = parsed;
+                } else {
+                    tracing::warn!("ARENA_CENTER_EXCLUSION must be 0.10-0.30, using default");
                 }
             }
         }
@@ -1068,7 +1106,8 @@ mod tests {
     #[test]
     fn test_arena_scaling_config_defaults() {
         let config = ArenaScalingConfig::default();
-        assert_eq!(config.grow_lerp, 0.15);  // Fast but smooth growth
+        assert_eq!(config.grow_lerp, 0.05);  // Smooth growth (reduced for visual smoothness)
+        assert_eq!(config.max_grow_per_tick, 30.0);  // Cap to prevent large jumps
         assert_eq!(config.shrink_lerp, 0.005);
         assert_eq!(config.shrink_delay_ticks, 150);
         assert_eq!(config.min_escape_radius, 800.0);
