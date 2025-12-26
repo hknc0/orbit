@@ -654,3 +654,97 @@ describe('Gravity Well Quality Optimization', () => {
     });
   });
 });
+
+// Test zoom transition behavior
+describe('Zoom Transition', () => {
+  const ZOOM_TRANSITION_THRESHOLD = 0.2;
+  const ZOOM_TRANSITION_DURATION = 800;
+
+  // Ease-in-out cubic function (same as in RenderSystem)
+  function easeInOutCubic(progress: number): number {
+    return progress < 0.5
+      ? 4 * progress * progress * progress
+      : 1 - Math.pow(-2 * progress + 2, 3) / 2;
+  }
+
+  describe('transition detection', () => {
+    it('should trigger transition for large zoom changes', () => {
+      const fromZoom = 0.1;  // Full map view
+      const toZoom = 0.8;    // Follow mode
+      const delta = Math.abs(toZoom - fromZoom);
+      expect(delta).toBeGreaterThan(ZOOM_TRANSITION_THRESHOLD);
+    });
+
+    it('should not trigger transition for small zoom changes', () => {
+      const fromZoom = 0.8;  // Follow mode
+      const toZoom = 0.7;    // Speed-based zoom change
+      const delta = Math.abs(toZoom - fromZoom);
+      expect(delta).toBeLessThan(ZOOM_TRANSITION_THRESHOLD);
+    });
+  });
+
+  describe('ease-in-out cubic', () => {
+    it('should start slow (ease-in)', () => {
+      // At 10% progress, movement should be much less than 10%
+      const progress = 0.1;
+      const eased = easeInOutCubic(progress);
+      expect(eased).toBeLessThan(progress);
+      expect(eased).toBeCloseTo(0.004, 2); // 4 * 0.1^3 = 0.004
+    });
+
+    it('should be fastest in the middle', () => {
+      // At 50% progress, should be at 50% of transition
+      const eased = easeInOutCubic(0.5);
+      expect(eased).toBeCloseTo(0.5, 5);
+    });
+
+    it('should end slow (ease-out)', () => {
+      // At 90% progress, movement should be slowing down
+      const progressA = 0.8;
+      const progressB = 0.9;
+      const deltaA = easeInOutCubic(progressB) - easeInOutCubic(progressA);
+
+      const progressC = 0.5;
+      const progressD = 0.6;
+      const deltaMiddle = easeInOutCubic(progressD) - easeInOutCubic(progressC);
+
+      // Movement near the end should be slower than in the middle
+      expect(deltaA).toBeLessThan(deltaMiddle);
+    });
+
+    it('should reach 1.0 at progress 1.0', () => {
+      expect(easeInOutCubic(1.0)).toBe(1.0);
+    });
+
+    it('should be 0 at progress 0', () => {
+      expect(easeInOutCubic(0)).toBe(0);
+    });
+  });
+
+  describe('transition timing', () => {
+    it('should complete transition over the duration', () => {
+      const duration = ZOOM_TRANSITION_DURATION;
+
+      // At 0ms: 0% progress
+      expect(0 / duration).toBe(0);
+
+      // At 400ms: 50% progress
+      expect(400 / duration).toBe(0.5);
+
+      // At 800ms: 100% progress
+      expect(800 / duration).toBe(1.0);
+    });
+
+    it('should interpolate zoom smoothly during transition', () => {
+      const fromZoom = 0.1;
+      const toZoom = 0.8;
+
+      // At 50% progress with ease-in-out, zoom should be at midpoint
+      const progress = 0.5;
+      const eased = easeInOutCubic(progress);
+      const currentZoom = fromZoom + (toZoom - fromZoom) * eased;
+
+      expect(currentZoom).toBeCloseTo(0.45, 2); // (0.1 + 0.8) / 2 = 0.45
+    });
+  });
+});

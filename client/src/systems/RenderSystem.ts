@@ -77,6 +77,14 @@ export class RenderSystem {
   private readonly SPECTATOR_ZOOM_MIN = 0.1; // Minimum zoom for full map view
   private readonly SPECTATOR_ARENA_PADDING = 2.5; // How much arena padding for full view
 
+  // Smooth zoom transitions for large changes (spectator follow mode switch)
+  private zoomTransitionStart: number = 0;
+  private zoomTransitionFrom: number = 1.0;
+  private zoomTransitionTo: number = 1.0;
+  private lastTargetZoom: number = 1.0;
+  private readonly ZOOM_TRANSITION_DURATION = 800; // ms for full transition
+  private readonly ZOOM_TRANSITION_THRESHOLD = 0.2; // Delta that triggers smooth transition
+
   // Track previous speeds to detect acceleration (for other players' boost flames)
   private previousSpeeds: Map<string, number> = new Map();
 
@@ -384,8 +392,8 @@ export class RenderSystem {
     this.cameraOffset.y +=
       (this.targetCameraOffset.y - this.cameraOffset.y) * this.CAMERA_SMOOTHING;
 
-    // Smooth zoom interpolation
-    this.currentZoom += (this.targetZoom - this.currentZoom) * this.ZOOM_SMOOTHING;
+    // Smooth zoom interpolation with cinematic transitions for large changes
+    this.updateZoom();
 
     // Update trails for all players
     this.updatePlayerTrails(world);
@@ -1426,6 +1434,48 @@ export class RenderSystem {
   }
 
   // Update shake (called each frame)
+  // Smooth zoom with cinematic transitions for large changes (e.g., spectator follow mode)
+  private updateZoom(): void {
+    const now = performance.now();
+    const targetDelta = Math.abs(this.targetZoom - this.lastTargetZoom);
+
+    // Detect significant target change - start a new transition
+    if (targetDelta > this.ZOOM_TRANSITION_THRESHOLD) {
+      this.zoomTransitionStart = now;
+      this.zoomTransitionFrom = this.currentZoom;
+      this.zoomTransitionTo = this.targetZoom;
+      this.lastTargetZoom = this.targetZoom;
+    } else if (targetDelta > 0.01) {
+      // Small target changes - update the transition target smoothly
+      this.zoomTransitionTo = this.targetZoom;
+      this.lastTargetZoom = this.targetZoom;
+    }
+
+    // Check if we're in a major transition
+    if (this.zoomTransitionStart > 0) {
+      const elapsed = now - this.zoomTransitionStart;
+      const duration = this.ZOOM_TRANSITION_DURATION;
+
+      if (elapsed < duration) {
+        // Time-based animation with ease-in-out cubic
+        const progress = elapsed / duration;
+        const eased = progress < 0.5
+          ? 4 * progress * progress * progress
+          : 1 - Math.pow(-2 * progress + 2, 3) / 2;
+
+        this.currentZoom = this.zoomTransitionFrom +
+          (this.zoomTransitionTo - this.zoomTransitionFrom) * eased;
+      } else {
+        // Transition complete
+        this.currentZoom = this.zoomTransitionTo;
+        this.zoomTransitionStart = 0;
+      }
+    } else {
+      // Normal exponential smoothing for small/continuous changes (speed-based zoom)
+      this.currentZoom += (this.targetZoom - this.currentZoom) * this.ZOOM_SMOOTHING;
+    }
+  }
+
   private updateShake(): void {
     if (this.shakeIntensity > 0.5) {
       const angle = Math.random() * Math.PI * 2;
@@ -2879,6 +2929,10 @@ export class RenderSystem {
     this.gameStartTime = 0;
     this.currentZoom = this.ZOOM_MAX;
     this.targetZoom = this.ZOOM_MAX;
+    this.zoomTransitionStart = 0;
+    this.zoomTransitionFrom = this.ZOOM_MAX;
+    this.zoomTransitionTo = this.ZOOM_MAX;
+    this.lastTargetZoom = this.ZOOM_MAX;
     this.previousSpeeds.clear();
     this.playerTrails.clear();
     this.lastTrailPositions.clear();
