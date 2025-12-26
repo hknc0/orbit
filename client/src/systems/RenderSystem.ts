@@ -512,6 +512,7 @@ export class RenderSystem {
   private renderArena(world: World): void {
     const safeRadius = world.getArenaSafeRadius();
     const wells = world.arena.gravityWells;
+    const quality = this.getEffectQuality(world);
 
     // Universe boundary (dynamic, contains all wells)
     this.ctx.strokeStyle = 'rgba(100, 100, 150, 0.3)';
@@ -523,15 +524,19 @@ export class RenderSystem {
     // Render gravity wells (suns) - each is its own "solar system"
     if (wells.length > 0) {
       for (const well of wells) {
-        this.renderGravityWell(well.position.x, well.position.y, well.coreRadius, well.mass, well.id, well.bornTime);
+        this.renderGravityWell(well.position.x, well.position.y, well.coreRadius, well.mass, well.id, well.bornTime, quality);
 
-        // Draw orbit zones around each well (subtle rings)
-        this.renderWellZones(well.position.x, well.position.y, well.coreRadius);
+        // Draw orbit zones around each well (subtle rings) - skip at minimal quality
+        if (quality !== 'minimal') {
+          this.renderWellZones(well.position.x, well.position.y, well.coreRadius);
+        }
       }
     } else {
       // Fallback: single well at center
-      this.renderGravityWell(0, 0, world.arena.coreRadius, 1000000, 0, 0);
-      this.renderWellZones(0, 0, world.arena.coreRadius);
+      this.renderGravityWell(0, 0, world.arena.coreRadius, 1000000, 0, 0, quality);
+      if (quality !== 'minimal') {
+        this.renderWellZones(0, 0, world.arena.coreRadius);
+      }
     }
 
     // Collapse warning
@@ -570,7 +575,15 @@ export class RenderSystem {
   // Duration of birth animation in ms
   private readonly WELL_BIRTH_DURATION = 2500;
 
-  private renderGravityWell(x: number, y: number, coreRadius: number, mass: number, wellId: number, bornTime: number): void {
+  private renderGravityWell(
+    x: number,
+    y: number,
+    coreRadius: number,
+    mass: number,
+    wellId: number,
+    bornTime: number,
+    quality: 'full' | 'reduced' | 'minimal' = 'full'
+  ): void {
     // Central supermassive black hole is always id 0 and near origin
     const isCentral = wellId === 0 && Math.abs(x) < 50 && Math.abs(y) < 50;
 
@@ -582,9 +595,9 @@ export class RenderSystem {
     // Skip rendering if not yet visible (shouldn't happen, but safety check)
     if (birthProgress <= 0) return;
 
-    // Apply birth animation effects
+    // Apply birth animation effects (skip at minimal quality for performance)
     this.ctx.save();
-    if (birthProgress < 1) {
+    if (birthProgress < 1 && quality !== 'minimal') {
       // Easing function for smooth animation (ease-out cubic)
       const eased = 1 - Math.pow(1 - birthProgress, 3);
 
@@ -597,184 +610,288 @@ export class RenderSystem {
       // Fade in with slight overshoot glow
       this.ctx.globalAlpha = eased;
 
-      // Birth glow effect (expanding ring that fades)
-      const birthGlowRadius = coreRadius * (1.5 + (1 - birthProgress) * 3);
-      const birthGlow = this.ctx.createRadialGradient(x, y, coreRadius, x, y, birthGlowRadius);
-      birthGlow.addColorStop(0, `rgba(255, 255, 255, ${0.6 * (1 - birthProgress)})`);
-      birthGlow.addColorStop(0.5, `rgba(200, 220, 255, ${0.3 * (1 - birthProgress)})`);
-      birthGlow.addColorStop(1, 'rgba(100, 150, 255, 0)');
-      this.ctx.fillStyle = birthGlow;
-      this.ctx.beginPath();
-      this.ctx.arc(x, y, birthGlowRadius, 0, Math.PI * 2);
-      this.ctx.fill();
+      // Birth glow effect (expanding ring that fades) - only at full quality
+      if (quality === 'full') {
+        const birthGlowRadius = coreRadius * (1.5 + (1 - birthProgress) * 3);
+        const birthGlow = this.ctx.createRadialGradient(x, y, coreRadius, x, y, birthGlowRadius);
+        birthGlow.addColorStop(0, `rgba(255, 255, 255, ${0.6 * (1 - birthProgress)})`);
+        birthGlow.addColorStop(0.5, `rgba(200, 220, 255, ${0.3 * (1 - birthProgress)})`);
+        birthGlow.addColorStop(1, 'rgba(100, 150, 255, 0)');
+        this.ctx.fillStyle = birthGlow;
+        this.ctx.beginPath();
+        this.ctx.arc(x, y, birthGlowRadius, 0, Math.PI * 2);
+        this.ctx.fill();
+      }
+    } else if (birthProgress < 1 && quality === 'minimal') {
+      // Minimal quality: just scale, no glow
+      const eased = 1 - Math.pow(1 - birthProgress, 3);
+      this.ctx.translate(x, y);
+      this.ctx.scale(eased, eased);
+      this.ctx.translate(-x, -y);
+      this.ctx.globalAlpha = eased;
     }
 
     if (isCentral) {
       // === SUPERMASSIVE BLACK HOLE (Gargantua-inspired) ===
-      // Key visual: continuous glowing ring wrapping around black hole
-      // The accretion disk is gravitationally lensed over the TOP and BOTTOM
-
+      // Quality levels optimize rendering for zoomed-out spectators
       const ctx = this.ctx;
-      const time = performance.now() / 1000;
-
-      // Core sizes
       const eh = coreRadius; // Event horizon
-      const diskWidth = eh * 4.5; // Width of the accretion disk
 
-      // 1. Outer ambient glow - soft warm halo
-      const glowRadius = eh * 8;
-      const ambientGlow = ctx.createRadialGradient(x, y, eh, x, y, glowRadius);
-      ambientGlow.addColorStop(0, 'rgba(255, 240, 200, 0.18)');
-      ambientGlow.addColorStop(0.3, 'rgba(255, 190, 130, 0.1)');
-      ambientGlow.addColorStop(0.6, 'rgba(220, 130, 70, 0.04)');
-      ambientGlow.addColorStop(1, 'rgba(150, 80, 40, 0)');
-      ctx.fillStyle = ambientGlow;
-      ctx.beginPath();
-      ctx.arc(x, y, glowRadius, 0, Math.PI * 2);
-      ctx.fill();
+      if (quality === 'minimal') {
+        // MINIMAL: Iconic Gargantua look with simplified rendering (4 passes)
+        // Still impressive but skips expensive effects (particles, Doppler, bloom, shadows)
 
-      // 2. Gravitational lensing halo - disk light bent around the black hole
-      // NOT a tall vertical structure - just a circular glow hugging the event horizon
-      const haloOuter = eh * 1.8;
-      const haloInner = eh * 1.08;
+        const diskInner = eh * 1.02;
+        const diskOuter = eh * 3.5;
 
-      // Nearly circular halo that wraps around the black hole
-      ctx.save();
-      ctx.translate(x, y);
+        // 1. Ambient glow (warm halo around everything)
+        const ambientGlow = ctx.createRadialGradient(x, y, eh, x, y, eh * 4);
+        ambientGlow.addColorStop(0, 'rgba(255, 200, 140, 0.15)');
+        ambientGlow.addColorStop(0.5, 'rgba(255, 150, 80, 0.06)');
+        ambientGlow.addColorStop(1, 'rgba(200, 100, 50, 0)');
+        ctx.fillStyle = ambientGlow;
+        ctx.beginPath();
+        ctx.arc(x, y, eh * 4, 0, Math.PI * 2);
+        ctx.fill();
 
-      // Bright inner halo (the lensed light hugging the black hole)
-      const haloGrad = ctx.createRadialGradient(0, 0, haloInner, 0, 0, haloOuter);
-      haloGrad.addColorStop(0, 'rgba(255, 255, 250, 0.95)');
-      haloGrad.addColorStop(0.25, 'rgba(255, 250, 235, 0.8)');
-      haloGrad.addColorStop(0.5, 'rgba(255, 230, 190, 0.5)');
-      haloGrad.addColorStop(0.75, 'rgba(255, 190, 130, 0.2)');
-      haloGrad.addColorStop(1, 'rgba(220, 140, 80, 0)');
-      ctx.fillStyle = haloGrad;
-      ctx.beginPath();
-      ctx.arc(0, 0, haloOuter, 0, Math.PI * 2);
-      ctx.arc(0, 0, haloInner, 0, Math.PI * 2, true);
-      ctx.fill();
+        // 2. Accretion disk (the iconic horizontal ellipse)
+        ctx.save();
+        ctx.translate(x, y);
+        ctx.scale(1, 0.18);
+        const diskGrad = ctx.createRadialGradient(0, 0, diskInner, 0, 0, diskOuter);
+        diskGrad.addColorStop(0, 'rgba(255, 250, 230, 0.9)');
+        diskGrad.addColorStop(0.3, 'rgba(255, 200, 120, 0.6)');
+        diskGrad.addColorStop(0.7, 'rgba(255, 140, 60, 0.25)');
+        diskGrad.addColorStop(1, 'rgba(180, 80, 30, 0)');
+        ctx.fillStyle = diskGrad;
+        ctx.beginPath();
+        ctx.arc(0, 0, diskOuter, 0, Math.PI * 2);
+        ctx.arc(0, 0, diskInner, 0, Math.PI * 2, true);
+        ctx.fill();
+        ctx.restore();
 
-      // Soft bloom
-      ctx.globalCompositeOperation = 'lighter';
-      ctx.shadowBlur = 15;
-      ctx.shadowColor = 'rgba(255, 250, 235, 0.5)';
-      ctx.fillStyle = 'rgba(255, 255, 248, 0.15)';
-      ctx.beginPath();
-      ctx.arc(0, 0, haloInner * 1.1, 0, Math.PI * 2);
-      ctx.fill();
-      ctx.shadowBlur = 0;
-      ctx.globalCompositeOperation = 'source-over';
-      ctx.restore();
+        // 3. Event horizon (pure black void)
+        ctx.fillStyle = '#000000';
+        ctx.beginPath();
+        ctx.arc(x, y, eh, 0, Math.PI * 2);
+        ctx.fill();
 
-      // 3. Horizontal accretion disk (the main flat disk)
-      const diskInner = eh * 1.01; // Very tight to event horizon
-      const diskOuterRadius = eh * 4.5;
+        // 4. Photon ring (bright edge glow hugging the event horizon)
+        const photonGrad = ctx.createRadialGradient(x, y, eh * 0.97, x, y, eh * 1.25);
+        photonGrad.addColorStop(0, 'rgba(255, 255, 250, 0.9)');
+        photonGrad.addColorStop(0.4, 'rgba(255, 240, 200, 0.7)');
+        photonGrad.addColorStop(1, 'rgba(255, 180, 100, 0)');
+        ctx.fillStyle = photonGrad;
+        ctx.beginPath();
+        ctx.arc(x, y, eh * 1.25, 0, Math.PI * 2);
+        ctx.fill();
+      } else if (quality === 'reduced') {
+        // REDUCED: Skip particles, Doppler, bloom; use simpler gradients
+        const diskInner = eh * 1.01;
+        const diskOuterRadius = eh * 4.5;
 
-      ctx.save();
-      ctx.translate(x, y);
-      ctx.scale(1, 0.18); // Thicker disk
+        // Simplified outer glow (2 stops instead of 4)
+        const glowRadius = eh * 6;
+        const ambientGlow = ctx.createRadialGradient(x, y, eh, x, y, glowRadius);
+        ambientGlow.addColorStop(0, 'rgba(255, 220, 180, 0.12)');
+        ambientGlow.addColorStop(1, 'rgba(200, 120, 60, 0)');
+        ctx.fillStyle = ambientGlow;
+        ctx.beginPath();
+        ctx.arc(x, y, glowRadius, 0, Math.PI * 2);
+        ctx.fill();
 
-      const diskGrad = ctx.createRadialGradient(0, 0, diskInner, 0, 0, diskOuterRadius);
-      diskGrad.addColorStop(0, 'rgba(255, 255, 240, 0.95)');
-      diskGrad.addColorStop(0.12, 'rgba(255, 240, 200, 0.8)');
-      diskGrad.addColorStop(0.3, 'rgba(255, 200, 130, 0.55)');
-      diskGrad.addColorStop(0.5, 'rgba(255, 150, 70, 0.35)');
-      diskGrad.addColorStop(0.75, 'rgba(200, 100, 40, 0.15)');
-      diskGrad.addColorStop(1, 'rgba(150, 70, 30, 0)');
-      ctx.fillStyle = diskGrad;
-      ctx.beginPath();
-      ctx.arc(0, 0, diskOuterRadius, 0, Math.PI * 2);
-      ctx.arc(0, 0, diskInner, 0, Math.PI * 2, true);
-      ctx.fill();
+        // Simplified halo (3 stops instead of 5, no bloom)
+        const haloOuter = eh * 1.8;
+        const haloInner = eh * 1.08;
+        ctx.save();
+        ctx.translate(x, y);
+        const haloGrad = ctx.createRadialGradient(0, 0, haloInner, 0, 0, haloOuter);
+        haloGrad.addColorStop(0, 'rgba(255, 255, 250, 0.9)');
+        haloGrad.addColorStop(0.5, 'rgba(255, 220, 170, 0.4)');
+        haloGrad.addColorStop(1, 'rgba(220, 140, 80, 0)');
+        ctx.fillStyle = haloGrad;
+        ctx.beginPath();
+        ctx.arc(0, 0, haloOuter, 0, Math.PI * 2);
+        ctx.arc(0, 0, haloInner, 0, Math.PI * 2, true);
+        ctx.fill();
+        ctx.restore();
 
-      // Doppler brightening on approaching side
-      ctx.globalCompositeOperation = 'lighter';
-      const dopplerGrad = ctx.createLinearGradient(-diskOuterRadius, 0, diskOuterRadius, 0);
-      dopplerGrad.addColorStop(0, 'rgba(255, 160, 100, 0.08)');
-      dopplerGrad.addColorStop(0.5, 'rgba(255, 230, 180, 0.15)');
-      dopplerGrad.addColorStop(1, 'rgba(255, 255, 230, 0.25)');
-      ctx.fillStyle = dopplerGrad;
-      ctx.beginPath();
-      ctx.arc(0, 0, diskOuterRadius * 0.95, 0, Math.PI * 2);
-      ctx.arc(0, 0, diskInner * 1.05, 0, Math.PI * 2, true);
-      ctx.fill();
-      ctx.globalCompositeOperation = 'source-over';
-      ctx.restore();
+        // Simplified accretion disk (3 stops instead of 6, no Doppler)
+        ctx.save();
+        ctx.translate(x, y);
+        ctx.scale(1, 0.18);
+        const diskGrad = ctx.createRadialGradient(0, 0, diskInner, 0, 0, diskOuterRadius);
+        diskGrad.addColorStop(0, 'rgba(255, 250, 230, 0.85)');
+        diskGrad.addColorStop(0.4, 'rgba(255, 180, 100, 0.4)');
+        diskGrad.addColorStop(1, 'rgba(150, 70, 30, 0)');
+        ctx.fillStyle = diskGrad;
+        ctx.beginPath();
+        ctx.arc(0, 0, diskOuterRadius, 0, Math.PI * 2);
+        ctx.arc(0, 0, diskInner, 0, Math.PI * 2, true);
+        ctx.fill();
+        ctx.restore();
 
-      // 4. Spiraling particles in disk
-      ctx.save();
-      ctx.translate(x, y);
-      ctx.lineCap = 'round';
-      ctx.lineWidth = 2;
-      ctx.beginPath();
-      for (let i = 0; i < 8; i++) {
-        const phase = (time * 0.4 + i * 0.4) % 3;
-        const progress = phase / 3;
-        const spiralAngle = (i / 8) * Math.PI * 2 + progress * Math.PI * 4;
-        const r = diskInner * 1.5 + (diskWidth - diskInner) * (1 - progress * progress);
-        const px = Math.cos(spiralAngle) * r;
-        const py = Math.sin(spiralAngle) * r * 0.18;
+        // Event horizon (pure black core)
+        ctx.fillStyle = '#000000';
+        ctx.beginPath();
+        ctx.arc(x, y, eh, 0, Math.PI * 2);
+        ctx.fill();
 
-        const stretch = 10 * progress;
-        const dx = Math.cos(spiralAngle + Math.PI * 0.5) * stretch;
-        const dy = Math.sin(spiralAngle + Math.PI * 0.5) * stretch * 0.18;
-        ctx.moveTo(px - dx, py - dy);
-        ctx.lineTo(px, py);
+        // Simplified photon ring (2 stops, no composite)
+        const photonGlow = ctx.createRadialGradient(x, y, eh * 0.98, x, y, eh * 1.3);
+        photonGlow.addColorStop(0, 'rgba(255, 250, 230, 0.7)');
+        photonGlow.addColorStop(1, 'rgba(255, 200, 140, 0)');
+        ctx.fillStyle = photonGlow;
+        ctx.beginPath();
+        ctx.arc(x, y, eh * 1.3, 0, Math.PI * 2);
+        ctx.fill();
+      } else {
+        // FULL: All effects (original implementation)
+        const time = performance.now() / 1000;
+        const diskWidth = eh * 4.5;
+
+        // 1. Outer ambient glow - soft warm halo
+        const glowRadius = eh * 8;
+        const ambientGlow = ctx.createRadialGradient(x, y, eh, x, y, glowRadius);
+        ambientGlow.addColorStop(0, 'rgba(255, 240, 200, 0.18)');
+        ambientGlow.addColorStop(0.3, 'rgba(255, 190, 130, 0.1)');
+        ambientGlow.addColorStop(0.6, 'rgba(220, 130, 70, 0.04)');
+        ambientGlow.addColorStop(1, 'rgba(150, 80, 40, 0)');
+        ctx.fillStyle = ambientGlow;
+        ctx.beginPath();
+        ctx.arc(x, y, glowRadius, 0, Math.PI * 2);
+        ctx.fill();
+
+        // 2. Gravitational lensing halo
+        const haloOuter = eh * 1.8;
+        const haloInner = eh * 1.08;
+        ctx.save();
+        ctx.translate(x, y);
+        const haloGrad = ctx.createRadialGradient(0, 0, haloInner, 0, 0, haloOuter);
+        haloGrad.addColorStop(0, 'rgba(255, 255, 250, 0.95)');
+        haloGrad.addColorStop(0.25, 'rgba(255, 250, 235, 0.8)');
+        haloGrad.addColorStop(0.5, 'rgba(255, 230, 190, 0.5)');
+        haloGrad.addColorStop(0.75, 'rgba(255, 190, 130, 0.2)');
+        haloGrad.addColorStop(1, 'rgba(220, 140, 80, 0)');
+        ctx.fillStyle = haloGrad;
+        ctx.beginPath();
+        ctx.arc(0, 0, haloOuter, 0, Math.PI * 2);
+        ctx.arc(0, 0, haloInner, 0, Math.PI * 2, true);
+        ctx.fill();
+
+        // Soft bloom
+        ctx.globalCompositeOperation = 'lighter';
+        ctx.shadowBlur = 15;
+        ctx.shadowColor = 'rgba(255, 250, 235, 0.5)';
+        ctx.fillStyle = 'rgba(255, 255, 248, 0.15)';
+        ctx.beginPath();
+        ctx.arc(0, 0, haloInner * 1.1, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.shadowBlur = 0;
+        ctx.globalCompositeOperation = 'source-over';
+        ctx.restore();
+
+        // 3. Horizontal accretion disk
+        const diskInner = eh * 1.01;
+        const diskOuterRadius = eh * 4.5;
+        ctx.save();
+        ctx.translate(x, y);
+        ctx.scale(1, 0.18);
+        const diskGrad = ctx.createRadialGradient(0, 0, diskInner, 0, 0, diskOuterRadius);
+        diskGrad.addColorStop(0, 'rgba(255, 255, 240, 0.95)');
+        diskGrad.addColorStop(0.12, 'rgba(255, 240, 200, 0.8)');
+        diskGrad.addColorStop(0.3, 'rgba(255, 200, 130, 0.55)');
+        diskGrad.addColorStop(0.5, 'rgba(255, 150, 70, 0.35)');
+        diskGrad.addColorStop(0.75, 'rgba(200, 100, 40, 0.15)');
+        diskGrad.addColorStop(1, 'rgba(150, 70, 30, 0)');
+        ctx.fillStyle = diskGrad;
+        ctx.beginPath();
+        ctx.arc(0, 0, diskOuterRadius, 0, Math.PI * 2);
+        ctx.arc(0, 0, diskInner, 0, Math.PI * 2, true);
+        ctx.fill();
+
+        // Doppler brightening
+        ctx.globalCompositeOperation = 'lighter';
+        const dopplerGrad = ctx.createLinearGradient(-diskOuterRadius, 0, diskOuterRadius, 0);
+        dopplerGrad.addColorStop(0, 'rgba(255, 160, 100, 0.08)');
+        dopplerGrad.addColorStop(0.5, 'rgba(255, 230, 180, 0.15)');
+        dopplerGrad.addColorStop(1, 'rgba(255, 255, 230, 0.25)');
+        ctx.fillStyle = dopplerGrad;
+        ctx.beginPath();
+        ctx.arc(0, 0, diskOuterRadius * 0.95, 0, Math.PI * 2);
+        ctx.arc(0, 0, diskInner * 1.05, 0, Math.PI * 2, true);
+        ctx.fill();
+        ctx.globalCompositeOperation = 'source-over';
+        ctx.restore();
+
+        // 4. Spiraling particles in disk
+        ctx.save();
+        ctx.translate(x, y);
+        ctx.lineCap = 'round';
+        ctx.lineWidth = 2;
+        ctx.beginPath();
+        for (let i = 0; i < 8; i++) {
+          const phase = (time * 0.4 + i * 0.4) % 3;
+          const progress = phase / 3;
+          const spiralAngle = (i / 8) * Math.PI * 2 + progress * Math.PI * 4;
+          const r = diskInner * 1.5 + (diskWidth - diskInner) * (1 - progress * progress);
+          const px = Math.cos(spiralAngle) * r;
+          const py = Math.sin(spiralAngle) * r * 0.18;
+          const stretch = 10 * progress;
+          const dx = Math.cos(spiralAngle + Math.PI * 0.5) * stretch;
+          const dy = Math.sin(spiralAngle + Math.PI * 0.5) * stretch * 0.18;
+          ctx.moveTo(px - dx, py - dy);
+          ctx.lineTo(px, py);
+        }
+        ctx.globalAlpha = 0.3;
+        ctx.strokeStyle = 'rgba(255, 230, 180, 1)';
+        ctx.stroke();
+        ctx.globalAlpha = 1;
+        ctx.restore();
+
+        // 5. Event horizon (pure black core)
+        ctx.fillStyle = '#000000';
+        ctx.beginPath();
+        ctx.arc(x, y, eh, 0, Math.PI * 2);
+        ctx.fill();
+
+        // Subtle depth shading
+        const horizonGrad = ctx.createRadialGradient(
+          x - eh * 0.2, y - eh * 0.15, eh * 0.1,
+          x, y, eh
+        );
+        horizonGrad.addColorStop(0, 'rgba(10, 10, 15, 1)');
+        horizonGrad.addColorStop(0.5, 'rgba(0, 0, 0, 1)');
+        horizonGrad.addColorStop(1, 'rgba(5, 5, 8, 0.95)');
+        ctx.fillStyle = horizonGrad;
+        ctx.beginPath();
+        ctx.arc(x, y, eh, 0, Math.PI * 2);
+        ctx.fill();
+
+        // 6. Soft photon ring glow
+        ctx.save();
+        ctx.translate(x, y);
+        const photonGlow = ctx.createRadialGradient(0, 0, eh * 0.95, 0, 0, eh * 1.4);
+        photonGlow.addColorStop(0, 'rgba(0, 0, 0, 0)');
+        photonGlow.addColorStop(0.4, 'rgba(255, 250, 230, 0.6)');
+        photonGlow.addColorStop(0.6, 'rgba(255, 255, 245, 0.8)');
+        photonGlow.addColorStop(0.75, 'rgba(255, 240, 200, 0.5)');
+        photonGlow.addColorStop(1, 'rgba(255, 200, 140, 0)');
+        ctx.globalCompositeOperation = 'lighter';
+        ctx.fillStyle = photonGlow;
+        ctx.beginPath();
+        ctx.arc(0, 0, eh * 1.4, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.globalCompositeOperation = 'source-over';
+        ctx.restore();
       }
-      ctx.globalAlpha = 0.3;
-      ctx.strokeStyle = 'rgba(255, 230, 180, 1)';
-      ctx.stroke();
-      ctx.globalAlpha = 1;
-      ctx.restore();
-
-      // 5. Event horizon (pure black core)
-      ctx.fillStyle = '#000000';
-      ctx.beginPath();
-      ctx.arc(x, y, eh, 0, Math.PI * 2);
-      ctx.fill();
-
-      // Subtle depth shading on event horizon
-      const horizonGrad = ctx.createRadialGradient(
-        x - eh * 0.2, y - eh * 0.15, eh * 0.1,
-        x, y, eh
-      );
-      horizonGrad.addColorStop(0, 'rgba(10, 10, 15, 1)');
-      horizonGrad.addColorStop(0.5, 'rgba(0, 0, 0, 1)');
-      horizonGrad.addColorStop(1, 'rgba(5, 5, 8, 0.95)');
-      ctx.fillStyle = horizonGrad;
-      ctx.beginPath();
-      ctx.arc(x, y, eh, 0, Math.PI * 2);
-      ctx.fill();
-
-      // 6. Soft photon ring glow - diffuse edge glow instead of hard line
-      ctx.save();
-      ctx.translate(x, y);
-
-      // Diffuse glow ring using gradient instead of stroke
-      const photonGlow = ctx.createRadialGradient(0, 0, eh * 0.95, 0, 0, eh * 1.4);
-      photonGlow.addColorStop(0, 'rgba(0, 0, 0, 0)');
-      photonGlow.addColorStop(0.4, 'rgba(255, 250, 230, 0.6)');
-      photonGlow.addColorStop(0.6, 'rgba(255, 255, 245, 0.8)');
-      photonGlow.addColorStop(0.75, 'rgba(255, 240, 200, 0.5)');
-      photonGlow.addColorStop(1, 'rgba(255, 200, 140, 0)');
-
-      ctx.globalCompositeOperation = 'lighter';
-      ctx.fillStyle = photonGlow;
-      ctx.beginPath();
-      ctx.arc(0, 0, eh * 1.4, 0, Math.PI * 2);
-      ctx.fill();
-      ctx.globalCompositeOperation = 'source-over';
-      ctx.restore();
     } else {
       // === NORMAL GRAVITY WELL (star/sun) ===
-      // Different star types based on position hash for variety
+      // Quality levels optimize rendering for zoomed-out spectators
 
       // Generate deterministic "random" values from well id (stable identifier)
-      // Using id instead of position prevents flickering as wells orbit
       const seed = Math.abs(wellId * 7919 + 104729) % 10000;
-      const starType = seed % 6; // 6 different star types
-      const variation = (seed % 100) / 100; // 0-1 for subtle variations
+      const starType = seed % 6;
 
       // Star color palettes based on stellar classification
       type StarColors = {
@@ -785,73 +902,106 @@ export class RenderSystem {
       };
 
       const starTypes: StarColors[] = [
-        // O-type: Blue giant (hot, bright blue-white)
         { core: [200, 220, 255], mid: [150, 180, 255], outer: [100, 140, 255], glow: [80, 120, 255] },
-        // B-type: Blue-white
         { core: [220, 230, 255], mid: [180, 200, 255], outer: [140, 170, 255], glow: [100, 150, 255] },
-        // A-type: White
         { core: [255, 255, 255], mid: [240, 245, 255], outer: [220, 230, 250], glow: [200, 210, 240] },
-        // G-type: Yellow (sun-like)
         { core: [255, 250, 200], mid: [255, 220, 120], outer: [255, 180, 60], glow: [255, 150, 30] },
-        // K-type: Orange
         { core: [255, 200, 150], mid: [255, 150, 80], outer: [255, 100, 40], glow: [255, 80, 20] },
-        // M-type: Red dwarf
         { core: [255, 180, 160], mid: [255, 120, 100], outer: [220, 80, 60], glow: [180, 50, 30] },
       ];
 
       const colors = starTypes[starType];
 
-      // Apply subtle variation to colors
-      const vary = (c: number, amount: number) => Math.min(255, Math.max(0, c + (variation - 0.5) * amount));
-
-      // Outer glow based on mass
-      const glowRadius = coreRadius * (1.5 + Math.log10(mass) * 0.1);
-      const outerGlow = this.ctx.createRadialGradient(x, y, coreRadius * 0.5, x, y, glowRadius);
-      outerGlow.addColorStop(0, `rgba(${vary(colors.glow[0], 20)}, ${vary(colors.glow[1], 20)}, ${vary(colors.glow[2], 20)}, 0.35)`);
-      outerGlow.addColorStop(0.5, `rgba(${vary(colors.glow[0], 30)}, ${vary(colors.glow[1], 30)}, ${vary(colors.glow[2], 30)}, 0.15)`);
-      outerGlow.addColorStop(1, `rgba(${colors.glow[0]}, ${colors.glow[1]}, ${colors.glow[2]}, 0)`);
-      this.ctx.fillStyle = outerGlow;
-      this.ctx.beginPath();
-      this.ctx.arc(x, y, glowRadius, 0, Math.PI * 2);
-      this.ctx.fill();
-
-      // Corona/surface activity (subtle shimmer effect for larger stars)
-      if (coreRadius > 40) {
-        const time = Date.now() / 2000;
-        const coronaRadius = coreRadius * 1.15;
-        this.ctx.save();
-        this.ctx.globalAlpha = 0.3 + Math.sin(time * 2 + seed) * 0.1;
-        const corona = this.ctx.createRadialGradient(x, y, coreRadius * 0.9, x, y, coronaRadius);
-        corona.addColorStop(0, `rgba(${colors.core[0]}, ${colors.core[1]}, ${colors.core[2]}, 0.4)`);
-        corona.addColorStop(1, `rgba(${colors.mid[0]}, ${colors.mid[1]}, ${colors.mid[2]}, 0)`);
-        this.ctx.fillStyle = corona;
+      if (quality === 'minimal') {
+        // MINIMAL: Solid core + single glow (2 passes)
+        // Simple outer glow
+        const glowRadius = coreRadius * 1.4;
+        const outerGlow = this.ctx.createRadialGradient(x, y, coreRadius * 0.8, x, y, glowRadius);
+        outerGlow.addColorStop(0, `rgba(${colors.glow[0]}, ${colors.glow[1]}, ${colors.glow[2]}, 0.3)`);
+        outerGlow.addColorStop(1, `rgba(${colors.glow[0]}, ${colors.glow[1]}, ${colors.glow[2]}, 0)`);
+        this.ctx.fillStyle = outerGlow;
         this.ctx.beginPath();
-        this.ctx.arc(x, y, coronaRadius, 0, Math.PI * 2);
+        this.ctx.arc(x, y, glowRadius, 0, Math.PI * 2);
         this.ctx.fill();
-        this.ctx.restore();
+
+        // Solid core
+        this.ctx.fillStyle = `rgba(${colors.core[0]}, ${colors.core[1]}, ${colors.core[2]}, 0.9)`;
+        this.ctx.beginPath();
+        this.ctx.arc(x, y, coreRadius, 0, Math.PI * 2);
+        this.ctx.fill();
+      } else if (quality === 'reduced') {
+        // REDUCED: Skip corona shimmer, use simpler gradients (2 stops instead of 3-4)
+        // Simplified outer glow
+        const glowRadius = coreRadius * 1.5;
+        const outerGlow = this.ctx.createRadialGradient(x, y, coreRadius * 0.6, x, y, glowRadius);
+        outerGlow.addColorStop(0, `rgba(${colors.glow[0]}, ${colors.glow[1]}, ${colors.glow[2]}, 0.3)`);
+        outerGlow.addColorStop(1, `rgba(${colors.glow[0]}, ${colors.glow[1]}, ${colors.glow[2]}, 0)`);
+        this.ctx.fillStyle = outerGlow;
+        this.ctx.beginPath();
+        this.ctx.arc(x, y, glowRadius, 0, Math.PI * 2);
+        this.ctx.fill();
+
+        // Simplified core gradient (2 stops)
+        const gradient = this.ctx.createRadialGradient(x, y, 0, x, y, coreRadius);
+        gradient.addColorStop(0, `rgba(${colors.core[0]}, ${colors.core[1]}, ${colors.core[2]}, 0.95)`);
+        gradient.addColorStop(1, `rgba(${colors.outer[0]}, ${colors.outer[1]}, ${colors.outer[2]}, 0.4)`);
+        this.ctx.fillStyle = gradient;
+        this.ctx.beginPath();
+        this.ctx.arc(x, y, coreRadius, 0, Math.PI * 2);
+        this.ctx.fill();
+      } else {
+        // FULL: All effects (original implementation)
+        const variation = (seed % 100) / 100;
+        const vary = (c: number, amount: number) => Math.min(255, Math.max(0, c + (variation - 0.5) * amount));
+
+        // Outer glow based on mass
+        const glowRadius = coreRadius * (1.5 + Math.log10(mass) * 0.1);
+        const outerGlow = this.ctx.createRadialGradient(x, y, coreRadius * 0.5, x, y, glowRadius);
+        outerGlow.addColorStop(0, `rgba(${vary(colors.glow[0], 20)}, ${vary(colors.glow[1], 20)}, ${vary(colors.glow[2], 20)}, 0.35)`);
+        outerGlow.addColorStop(0.5, `rgba(${vary(colors.glow[0], 30)}, ${vary(colors.glow[1], 30)}, ${vary(colors.glow[2], 30)}, 0.15)`);
+        outerGlow.addColorStop(1, `rgba(${colors.glow[0]}, ${colors.glow[1]}, ${colors.glow[2]}, 0)`);
+        this.ctx.fillStyle = outerGlow;
+        this.ctx.beginPath();
+        this.ctx.arc(x, y, glowRadius, 0, Math.PI * 2);
+        this.ctx.fill();
+
+        // Corona/surface activity (subtle shimmer effect for larger stars)
+        if (coreRadius > 40) {
+          const time = Date.now() / 2000;
+          const coronaRadius = coreRadius * 1.15;
+          this.ctx.save();
+          this.ctx.globalAlpha = 0.3 + Math.sin(time * 2 + seed) * 0.1;
+          const corona = this.ctx.createRadialGradient(x, y, coreRadius * 0.9, x, y, coronaRadius);
+          corona.addColorStop(0, `rgba(${colors.core[0]}, ${colors.core[1]}, ${colors.core[2]}, 0.4)`);
+          corona.addColorStop(1, `rgba(${colors.mid[0]}, ${colors.mid[1]}, ${colors.mid[2]}, 0)`);
+          this.ctx.fillStyle = corona;
+          this.ctx.beginPath();
+          this.ctx.arc(x, y, coronaRadius, 0, Math.PI * 2);
+          this.ctx.fill();
+          this.ctx.restore();
+        }
+
+        // Core gradient
+        const gradient = this.ctx.createRadialGradient(x, y, 0, x, y, coreRadius);
+        gradient.addColorStop(0, `rgba(${vary(colors.core[0], 15)}, ${vary(colors.core[1], 15)}, ${vary(colors.core[2], 15)}, 0.95)`);
+        gradient.addColorStop(0.3, `rgba(${vary(colors.mid[0], 20)}, ${vary(colors.mid[1], 20)}, ${vary(colors.mid[2], 20)}, 0.85)`);
+        gradient.addColorStop(0.7, `rgba(${vary(colors.outer[0], 25)}, ${vary(colors.outer[1], 25)}, ${vary(colors.outer[2], 25)}, 0.6)`);
+        gradient.addColorStop(1, `rgba(${colors.outer[0]}, ${colors.outer[1]}, ${colors.outer[2]}, 0.25)`);
+        this.ctx.fillStyle = gradient;
+        this.ctx.beginPath();
+        this.ctx.arc(x, y, coreRadius, 0, Math.PI * 2);
+        this.ctx.fill();
+
+        // Bright center spot (photosphere highlight)
+        const centerGlow = this.ctx.createRadialGradient(x, y, 0, x, y, coreRadius * 0.4);
+        centerGlow.addColorStop(0, `rgba(255, 255, 255, 0.6)`);
+        centerGlow.addColorStop(0.5, `rgba(${colors.core[0]}, ${colors.core[1]}, ${colors.core[2]}, 0.3)`);
+        centerGlow.addColorStop(1, `rgba(${colors.core[0]}, ${colors.core[1]}, ${colors.core[2]}, 0)`);
+        this.ctx.fillStyle = centerGlow;
+        this.ctx.beginPath();
+        this.ctx.arc(x, y, coreRadius * 0.4, 0, Math.PI * 2);
+        this.ctx.fill();
       }
-
-      // Core gradient
-      const gradient = this.ctx.createRadialGradient(x, y, 0, x, y, coreRadius);
-      gradient.addColorStop(0, `rgba(${vary(colors.core[0], 15)}, ${vary(colors.core[1], 15)}, ${vary(colors.core[2], 15)}, 0.95)`);
-      gradient.addColorStop(0.3, `rgba(${vary(colors.mid[0], 20)}, ${vary(colors.mid[1], 20)}, ${vary(colors.mid[2], 20)}, 0.85)`);
-      gradient.addColorStop(0.7, `rgba(${vary(colors.outer[0], 25)}, ${vary(colors.outer[1], 25)}, ${vary(colors.outer[2], 25)}, 0.6)`);
-      gradient.addColorStop(1, `rgba(${colors.outer[0]}, ${colors.outer[1]}, ${colors.outer[2]}, 0.25)`);
-
-      this.ctx.fillStyle = gradient;
-      this.ctx.beginPath();
-      this.ctx.arc(x, y, coreRadius, 0, Math.PI * 2);
-      this.ctx.fill();
-
-      // Bright center spot (photosphere highlight)
-      const centerGlow = this.ctx.createRadialGradient(x, y, 0, x, y, coreRadius * 0.4);
-      centerGlow.addColorStop(0, `rgba(255, 255, 255, 0.6)`);
-      centerGlow.addColorStop(0.5, `rgba(${colors.core[0]}, ${colors.core[1]}, ${colors.core[2]}, 0.3)`);
-      centerGlow.addColorStop(1, `rgba(${colors.core[0]}, ${colors.core[1]}, ${colors.core[2]}, 0)`);
-      this.ctx.fillStyle = centerGlow;
-      this.ctx.beginPath();
-      this.ctx.arc(x, y, coreRadius * 0.4, 0, Math.PI * 2);
-      this.ctx.fill();
     }
 
     // Restore context after birth animation transforms

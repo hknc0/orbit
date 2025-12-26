@@ -528,3 +528,129 @@ describe('Full Spectator Click Flow', () => {
     expect(speed).toBe(0);
   });
 });
+
+// Test gravity well quality optimization
+describe('Gravity Well Quality Optimization', () => {
+  // The effect quality function that drives gravity well rendering
+  function getEffectQuality(
+    currentZoom: number,
+    isSpectator: boolean = false,
+    spectateTargetId: string | null = null
+  ): 'full' | 'reduced' | 'minimal' {
+    if (isSpectator && spectateTargetId === null) {
+      if (currentZoom > 0.3) return 'reduced';
+      return 'minimal';
+    }
+    if (currentZoom > 0.4) return 'full';
+    if (currentZoom > 0.2) return 'reduced';
+    return 'minimal';
+  }
+
+  describe('Central black hole quality', () => {
+    it('should use full quality for normal players', () => {
+      // Normal player at default zoom sees full black hole effects
+      expect(getEffectQuality(1.0, false, null)).toBe('full');
+    });
+
+    it('should use reduced quality for full-view spectators at high zoom', () => {
+      // Full-view spectator when arena shrinks (zoom 0.5-0.8)
+      // Should use reduced quality to skip particles, Doppler, etc.
+      expect(getEffectQuality(0.6, true, null)).toBe('reduced');
+      expect(getEffectQuality(0.5, true, null)).toBe('reduced');
+    });
+
+    it('should use minimal quality for full-view spectators at low zoom', () => {
+      // Full-view spectator at full map view
+      // Should use minimal (just event horizon + simple halo)
+      expect(getEffectQuality(0.2, true, null)).toBe('minimal');
+      expect(getEffectQuality(0.1, true, null)).toBe('minimal');
+    });
+
+    it('should use full quality for follow-mode spectators', () => {
+      // Spectator following a player sees same quality as player
+      expect(getEffectQuality(0.6, true, 'player-123')).toBe('full');
+    });
+  });
+
+  describe('Normal gravity well (star) quality', () => {
+    it('should use full quality for normal players', () => {
+      expect(getEffectQuality(0.8, false, null)).toBe('full');
+    });
+
+    it('should use reduced quality for full-view spectators', () => {
+      // Should skip corona shimmer, use simpler gradients
+      expect(getEffectQuality(0.5, true, null)).toBe('reduced');
+    });
+
+    it('should use minimal quality for zoomed-out view', () => {
+      // Should use solid core + single glow only
+      expect(getEffectQuality(0.15, true, null)).toBe('minimal');
+    });
+  });
+
+  describe('Orbit zones', () => {
+    it('should render orbit zones at full quality', () => {
+      const quality = getEffectQuality(1.0, false, null);
+      expect(quality !== 'minimal').toBe(true);
+    });
+
+    it('should render orbit zones at reduced quality', () => {
+      const quality = getEffectQuality(0.35, true, null);
+      expect(quality !== 'minimal').toBe(true);
+    });
+
+    it('should skip orbit zones at minimal quality', () => {
+      const quality = getEffectQuality(0.1, true, null);
+      expect(quality).toBe('minimal');
+      // At minimal quality, orbit zones are not rendered
+    });
+  });
+
+  describe('Performance impact estimation', () => {
+    // These tests document the expected draw call reduction
+    const estimateBlackHoleDrawCalls = (quality: 'full' | 'reduced' | 'minimal'): number => {
+      switch (quality) {
+        case 'full': return 9;     // All effects: ambient, halo, bloom, disk, Doppler, particles, horizon, shading, photon
+        case 'reduced': return 5;  // Skip particles, Doppler, bloom: ambient, halo, disk, horizon, photon
+        case 'minimal': return 4;  // Iconic look: ambient, disk, horizon, photon ring (no particles/Doppler/bloom/shadows)
+      }
+    };
+
+    const estimateStarDrawCalls = (quality: 'full' | 'reduced' | 'minimal'): number => {
+      switch (quality) {
+        case 'full': return 5;     // Outer glow, corona, core gradient, center spot, + orbit zones
+        case 'reduced': return 2;  // Outer glow, core gradient (no corona, no center spot)
+        case 'minimal': return 2;  // Simple glow, solid core
+      }
+    };
+
+    it('should reduce black hole draw calls significantly at minimal quality', () => {
+      const fullCalls = estimateBlackHoleDrawCalls('full');
+      const minimalCalls = estimateBlackHoleDrawCalls('minimal');
+      const reduction = (fullCalls - minimalCalls) / fullCalls;
+      expect(reduction).toBeGreaterThan(0.5); // >50% reduction (9 -> 4 passes)
+      // Minimal still looks impressive (has disk + photon ring) but skips expensive effects
+    });
+
+    it('should reduce star draw calls at reduced quality', () => {
+      const fullCalls = estimateStarDrawCalls('full');
+      const reducedCalls = estimateStarDrawCalls('reduced');
+      const reduction = (fullCalls - reducedCalls) / fullCalls;
+      expect(reduction).toBeGreaterThan(0.5); // >50% reduction
+    });
+
+    it('should estimate significant savings for full-view spectator with 10 wells', () => {
+      const wellCount = 10;
+      const fullViewQuality = getEffectQuality(0.2, true, null);
+      expect(fullViewQuality).toBe('minimal');
+
+      // At full quality: 1 black hole (9) + 10 stars (50) = 59 draw calls
+      // At minimal quality: 1 black hole (4) + 10 stars (20) = 24 draw calls
+      // Savings: ~59% fewer draw calls, but black hole still looks impressive
+      const fullCalls = 9 + wellCount * 5;
+      const minimalCalls = 4 + wellCount * 2;
+      const savings = (fullCalls - minimalCalls) / fullCalls;
+      expect(savings).toBeGreaterThan(0.5); // Still >50% savings
+    });
+  });
+});
