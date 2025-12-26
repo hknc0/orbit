@@ -73,6 +73,10 @@ export class RenderSystem {
   private readonly ZOOM_MAX = 1.0;  // Normal zoom at rest
   private readonly SPEED_FOR_MAX_ZOOM_OUT = 250; // Speed at which max zoom out is reached
 
+  // Spectator mode zoom settings
+  private readonly SPECTATOR_ZOOM_MIN = 0.1; // Minimum zoom for full map view
+  private readonly SPECTATOR_ARENA_PADDING = 2.5; // How much arena padding for full view
+
   // Track previous speeds to detect acceleration (for other players' boost flames)
   private previousSpeeds: Map<string, number> = new Map();
 
@@ -270,31 +274,69 @@ export class RenderSystem {
     const centerX = canvas.width / 2;
     const centerY = canvas.height / 2;
 
-    // Update camera to follow local player (only when alive)
-    const localPlayer = world.getLocalPlayer();
-    if (localPlayer && localPlayer.alive) {
-      this.targetCameraOffset.set(
-        centerX - localPlayer.position.x,
-        centerY - localPlayer.position.y
-      );
-
-      // Snap camera on first frame or respawn (avoid jump)
+    // Update camera - handle spectator mode, follow mode, or local player
+    if (world.isSpectator) {
+      // Spectator mode
+      if (world.isFullMapView()) {
+        // Full map view: center on arena, zoom out to show entire arena
+        this.targetCameraOffset.set(centerX, centerY);
+        // Zoom out to fit arena - use arena safe radius scaled appropriately
+        const arenaRadius = world.arena.outerRadius * world.arena.scale;
+        const minDimension = Math.min(canvas.width, canvas.height);
+        this.targetZoom = Math.max(this.SPECTATOR_ZOOM_MIN, minDimension / (arenaRadius * this.SPECTATOR_ARENA_PADDING));
+      } else {
+        // Follow mode: track the spectated player
+        const spectateTarget = world.getSpectateTarget();
+        if (spectateTarget && spectateTarget.position && spectateTarget.velocity) {
+          this.targetCameraOffset.set(
+            centerX - spectateTarget.position.x,
+            centerY - spectateTarget.position.y
+          );
+          // Smooth zoom based on target's speed
+          const speed = spectateTarget.velocity.length?.() ?? 0;
+          const speedRatio = Math.min(speed / this.SPEED_FOR_MAX_ZOOM_OUT, 1);
+          this.targetZoom = this.ZOOM_MAX - (this.ZOOM_MAX - this.ZOOM_MIN) * speedRatio;
+        } else if (world.spectateTargetId) {
+          // Target not found in current state - fall back to full map view
+          // This can happen briefly when target dies or leaves
+          this.targetCameraOffset.set(centerX, centerY);
+          const arenaRadius = world.arena.outerRadius * world.arena.scale;
+          const minDimension = Math.min(canvas.width, canvas.height);
+          this.targetZoom = Math.max(this.SPECTATOR_ZOOM_MIN, minDimension / (arenaRadius * this.SPECTATOR_ARENA_PADDING));
+        }
+      }
+      // Initialize camera for spectator mode
       if (!this.cameraInitialized) {
         this.cameraOffset.copy(this.targetCameraOffset);
         this.cameraInitialized = true;
-        if (this.gameStartTime === 0) {
-          this.gameStartTime = Date.now();
-        }
       }
-
-      // Calculate dynamic zoom based on speed
-      const speed = localPlayer.velocity.length();
-      const speedRatio = Math.min(speed / this.SPEED_FOR_MAX_ZOOM_OUT, 1);
-      this.targetZoom = this.ZOOM_MAX - (this.ZOOM_MAX - this.ZOOM_MIN) * speedRatio;
     } else {
-      // Player dead or not found - reset for next spawn
-      this.cameraInitialized = false;
-      this.targetZoom = this.ZOOM_MAX;
+      // Normal player mode: follow local player (only when alive)
+      const localPlayer = world.getLocalPlayer();
+      if (localPlayer && localPlayer.alive) {
+        this.targetCameraOffset.set(
+          centerX - localPlayer.position.x,
+          centerY - localPlayer.position.y
+        );
+
+        // Snap camera on first frame or respawn (avoid jump)
+        if (!this.cameraInitialized) {
+          this.cameraOffset.copy(this.targetCameraOffset);
+          this.cameraInitialized = true;
+          if (this.gameStartTime === 0) {
+            this.gameStartTime = Date.now();
+          }
+        }
+
+        // Calculate dynamic zoom based on speed
+        const speed = localPlayer.velocity.length();
+        const speedRatio = Math.min(speed / this.SPEED_FOR_MAX_ZOOM_OUT, 1);
+        this.targetZoom = this.ZOOM_MAX - (this.ZOOM_MAX - this.ZOOM_MIN) * speedRatio;
+      } else {
+        // Player dead or not found - reset for next spawn
+        this.cameraInitialized = false;
+        this.targetZoom = this.ZOOM_MAX;
+      }
     }
 
     // Smooth camera interpolation
@@ -1861,6 +1903,47 @@ export class RenderSystem {
       });
     }
 
+    // === SPECTATOR MODE INDICATOR ===
+    if (world.isSpectator) {
+      const specPanelW = 280;
+      const specPanelH = 40;
+      const specPanelX = Math.round((canvas.width - specPanelW) / 2);
+      const specPanelY = padding;
+
+      // Panel background
+      this.ctx.fillStyle = 'rgba(15, 23, 42, 0.9)';
+      this.ctx.beginPath();
+      this.ctx.roundRect(specPanelX, specPanelY, specPanelW, specPanelH, 6);
+      this.ctx.fill();
+
+      // Cyan border
+      this.ctx.strokeStyle = 'rgba(0, 255, 255, 0.4)';
+      this.ctx.lineWidth = 1;
+      this.ctx.stroke();
+
+      // Icon and text
+      this.ctx.font = 'bold 12px Inter, system-ui, sans-serif';
+      this.ctx.textAlign = 'center';
+
+      if (world.spectateTargetId) {
+        // Following a player
+        const target = world.getPlayer(world.spectateTargetId);
+        const targetName = target?.name || 'Unknown';
+        this.ctx.fillStyle = '#00ffff';
+        this.ctx.fillText(`👁 FOLLOWING: ${targetName}`, specPanelX + specPanelW / 2, specPanelY + 17);
+        this.ctx.fillStyle = '#64748b';
+        this.ctx.font = '10px Inter, system-ui, sans-serif';
+        this.ctx.fillText('Click empty space to return to full view', specPanelX + specPanelW / 2, specPanelY + 32);
+      } else {
+        // Full map view
+        this.ctx.fillStyle = '#a78bfa';
+        this.ctx.fillText('👁 SPECTATOR MODE', specPanelX + specPanelW / 2, specPanelY + 17);
+        this.ctx.fillStyle = '#64748b';
+        this.ctx.font = '10px Inter, system-ui, sans-serif';
+        this.ctx.fillText('Click on a player to follow them', specPanelX + specPanelW / 2, specPanelY + 32);
+      }
+    }
+
     // === MINIMAP ===
     this.renderMinimap(world, canvas, padding);
   }
@@ -2536,6 +2619,25 @@ export class RenderSystem {
     const g = Math.min(255, rgb.g + percent);
     const b = Math.min(255, rgb.b + percent);
     return `rgb(${r}, ${g}, ${b})`;
+  }
+
+  /**
+   * Convert screen coordinates to world coordinates
+   * Used for click-to-follow in spectator mode
+   */
+  screenToWorld(screenX: number, screenY: number): Vec2 {
+    const canvas = this.ctx.canvas;
+    const centerX = canvas.width / 2;
+    const centerY = canvas.height / 2;
+
+    // Reverse the camera transformation:
+    // 1. Screen -> centered coords
+    // 2. Undo zoom
+    // 3. Undo camera offset
+    const worldX = (screenX - centerX) / this.currentZoom + centerX - this.cameraOffset.x;
+    const worldY = (screenY - centerY) / this.currentZoom + centerY - this.cameraOffset.y;
+
+    return new Vec2(worldX, worldY);
   }
 
   /** Reset render state for new game session */

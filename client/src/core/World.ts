@@ -132,6 +132,27 @@ export class World {
   // AI Manager status (from server snapshot)
   aiStatus: AIStatusSnapshot | null = null;
 
+  // Spectator mode state
+  isSpectator: boolean = false;
+  spectateTargetId: PlayerId | null = null; // null = full map view
+
+  // Set spectator mode
+  setSpectatorMode(enabled: boolean, targetId: PlayerId | null = null): void {
+    this.isSpectator = enabled;
+    this.spectateTargetId = targetId;
+  }
+
+  // Get the player being spectated (for follow mode camera)
+  getSpectateTarget(): InterpolatedPlayer | undefined {
+    if (!this.spectateTargetId) return undefined;
+    return this.state?.players.get(this.spectateTargetId);
+  }
+
+  // Check if in full map view mode (spectating but not following anyone)
+  isFullMapView(): boolean {
+    return this.isSpectator && this.spectateTargetId === null;
+  }
+
   // Update from interpolated server state
   updateFromState(state: InterpolatedState): void {
     const now = Date.now();

@@ -287,7 +287,7 @@ async fn handle_connection(
                                 };
 
                                 match client_msg {
-                                    ClientMessage::JoinRequest { player_name, color_index } => {
+                                    ClientMessage::JoinRequest { player_name, color_index, is_spectator } => {
                                         // === INPUT VALIDATION ===
                                         // Sanitize player name: trim, remove control chars, limit length
                                         let sanitized_name: String = player_name
@@ -321,10 +321,15 @@ async fn handle_connection(
                                         // Clamp color index to valid range (0-19)
                                         let safe_color_index = color_index.min(19);
 
-                                        tracing::debug!("Received JoinRequest from '{}' with color {}", sanitized_name, safe_color_index);
+                                        let join_type = if is_spectator { "spectator" } else { "player" };
+                                        tracing::debug!("Received JoinRequest from '{}' as {} with color {}", sanitized_name, join_type, safe_color_index);
 
-                                        // Check if server can accept new players (performance-based)
-                                        let can_accept = {
+                                        // Check if server can accept new connections (performance-based)
+                                        // Note: can_accept_spectator needs write access for potential eviction
+                                        let can_accept = if is_spectator {
+                                            let mut session = game_session.write().await;
+                                            session.can_accept_spectator()
+                                        } else {
                                             let session = game_session.read().await;
                                             session.can_accept_player()
                                         };
@@ -333,9 +338,13 @@ async fn handle_connection(
                                             // Reject due to performance/capacity
                                             let rejection_msg = {
                                                 let session = game_session.read().await;
-                                                session.rejection_message()
+                                                if is_spectator {
+                                                    "Server at capacity, spectating unavailable".to_string()
+                                                } else {
+                                                    session.rejection_message()
+                                                }
                                             };
-                                            tracing::warn!("Rejecting player '{}': {}", sanitized_name, rejection_msg);
+                                            tracing::warn!("Rejecting {} '{}': {}", join_type, sanitized_name, rejection_msg);
 
                                             let response_msg = ServerMessage::JoinRejected {
                                                 reason: rejection_msg,
@@ -349,15 +358,23 @@ async fn handle_connection(
                                         // Generate player ID
                                         let new_player_id = uuid::Uuid::new_v4();
 
-                                        // Add player to game session
+                                        // Add player or spectator to game session
                                         {
                                             let mut session = game_session.write().await;
-                                            session.add_player(
-                                                new_player_id,
-                                                sanitized_name.clone(),
-                                                safe_color_index,
-                                                writer.clone(),
-                                            );
+                                            if is_spectator {
+                                                session.add_spectator(
+                                                    new_player_id,
+                                                    sanitized_name.clone(),
+                                                    writer.clone(),
+                                                );
+                                            } else {
+                                                session.add_player(
+                                                    new_player_id,
+                                                    sanitized_name.clone(),
+                                                    safe_color_index,
+                                                    writer.clone(),
+                                                );
+                                            }
                                         }
 
                                         // Store player ID for this connection
@@ -368,6 +385,7 @@ async fn handle_connection(
                                         let response_msg = ServerMessage::JoinAccepted {
                                             player_id: new_player_id,
                                             session_token,
+                                            is_spectator,
                                         };
 
                                         if let Err(e) = send_to_player(&writer, &response_msg).await {
@@ -416,6 +434,12 @@ async fn handle_connection(
                                     }
 
                                     ClientMessage::Ping { timestamp } => {
+                                        // Update activity for spectator idle tracking
+                                        if let Some(pid) = *player_id.read().await {
+                                            let mut session = game_session.write().await;
+                                            session.update_activity(pid);
+                                        }
+
                                         let response_msg = ServerMessage::Pong {
                                             client_timestamp: timestamp,
                                             server_timestamp: std::time::SystemTime::now()
@@ -431,6 +455,36 @@ async fn handle_connection(
 
                                     ClientMessage::SnapshotAck { tick: _ } => {
                                         // Acknowledge received, could be used for delta compression
+                                    }
+
+                                    ClientMessage::SpectateTarget { target_id } => {
+                                        // Spectator wants to change follow target
+                                        if let Some(pid) = *player_id.read().await {
+                                            let mut session = game_session.write().await;
+                                            session.set_spectate_target(pid, target_id);
+                                            tracing::debug!("Spectator {} set target to {:?}", pid, target_id);
+                                        }
+                                    }
+
+                                    ClientMessage::SwitchToPlayer { color_index } => {
+                                        // Spectator wants to become a player
+                                        if let Some(pid) = *player_id.read().await {
+                                            let safe_color_index = color_index.min(19);
+                                            let mut session = game_session.write().await;
+                                            // Update activity before conversion attempt
+                                            session.update_activity(pid);
+                                            let success = session.convert_spectator_to_player(pid, safe_color_index);
+
+                                            let response_msg = ServerMessage::SpectatorModeChanged {
+                                                is_spectator: !success,
+                                            };
+                                            if let Err(e) = send_to_player(&writer, &response_msg).await {
+                                                tracing::warn!("Failed to send SpectatorModeChanged: {}", e);
+                                            }
+                                            if success {
+                                                tracing::info!("Spectator {} converted to player", pid);
+                                            }
+                                        }
                                     }
                                 }
                             }

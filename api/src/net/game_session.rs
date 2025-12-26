@@ -92,6 +92,37 @@ use crate::metrics::Metrics;
 use crate::net::aoi::{AOIConfig, AOIManager};
 use crate::net::protocol::{GameEvent, GameSnapshot, PlayerInput, ServerMessage};
 
+// ============================================================================
+// SPECTATOR MODE CONSTANTS
+// ============================================================================
+
+/// Maximum number of spectators allowed per game session
+const MAX_SPECTATORS: usize = 20;
+
+/// Spectator rate limiting: send updates every N ticks (2 = 5Hz at 10Hz tick rate)
+const SPECTATOR_TICK_DIVISOR: u64 = 2;
+
+/// Spectator inactivity timeout: kick spectators after this many seconds of no messages
+const SPECTATOR_IDLE_TIMEOUT_SECS: u64 = 300; // 5 minutes
+
+/// How often to check for idle spectators (in ticks)
+/// At 30 TPS, 450 ticks = 15 seconds
+const SPECTATOR_IDLE_CHECK_INTERVAL_TICKS: u64 = 450;
+
+/// Minimum projectile mass to include in spectator snapshots (filters tiny projectiles)
+const SPECTATOR_MIN_PROJECTILE_MASS: f32 = 10.0;
+
+/// Maximum number of projectiles to include in spectator snapshots
+const SPECTATOR_MAX_PROJECTILES: usize = 100;
+
+/// Maximum number of debris to include in spectator snapshots
+const SPECTATOR_MAX_DEBRIS: usize = 50;
+
+/// Minimum debris size to include in spectator snapshots (0=small, 1=medium, 2=large)
+const SPECTATOR_MIN_DEBRIS_SIZE: u8 = 1;
+
+// ============================================================================
+
 // Feature-gated anticheat integration
 #[cfg(feature = "anticheat")]
 use crate::anticheat::validator::{sanitize_input, InputValidator};
@@ -171,6 +202,12 @@ pub struct PlayerConnection {
     pub sender: mpsc::UnboundedSender<Vec<u8>>,
     /// Legacy writer for backwards compatibility during transition
     pub writer: Arc<RwLock<Option<wtransport::SendStream>>>,
+    /// Whether this connection is a spectator (no game entity)
+    pub is_spectator: bool,
+    /// Player ID to follow (None = full map view for spectators)
+    pub spectate_target: Option<PlayerId>,
+    /// Last time this connection sent any message (for idle detection)
+    pub last_activity: Instant,
 }
 
 /// Shared game session that manages the game loop and player connections
@@ -196,6 +233,8 @@ pub struct GameSession {
     last_client_times: HashMap<PlayerId, u64>,
     /// Last processed input sequence per player (for deduplication)
     last_input_sequences: HashMap<PlayerId, u64>,
+    /// Last tick when we checked for idle spectators
+    last_idle_check_tick: u64,
     /// Input validator for anti-cheat (feature-gated)
     #[cfg(feature = "anticheat")]
     input_validator: InputValidator,
@@ -324,6 +363,7 @@ impl GameSession {
             last_bot_spawn_tick: 0,
             last_client_times: HashMap::new(),
             last_input_sequences: HashMap::new(),
+            last_idle_check_tick: 0,
             #[cfg(feature = "anticheat")]
             input_validator: InputValidator::default(),
             #[cfg(feature = "anticheat")]
@@ -393,6 +433,9 @@ impl GameSession {
                 player_name,
                 sender,
                 writer,
+                is_spectator: false,
+                spectate_target: None,
+                last_activity: Instant::now(),
             },
         );
 
@@ -402,19 +445,191 @@ impl GameSession {
         player_id
     }
 
-    /// Remove a player from the game session
+    /// Add a spectator to the game session (no game entity, receive-only)
+    pub fn add_spectator(
+        &mut self,
+        player_id: PlayerId,
+        player_name: String,
+        writer: Arc<RwLock<Option<wtransport::SendStream>>>,
+    ) -> PlayerId {
+        info!("Spectator joined: {} ({})", player_name, player_id);
+
+        // Create unbounded channel for lock-free message sending
+        let (sender, receiver) = mpsc::unbounded_channel::<Vec<u8>>();
+
+        // Spawn dedicated writer task for this connection
+        let writer_clone = writer.clone();
+        let pid = player_id;
+        tokio::spawn(async move {
+            run_writer_task(pid, receiver, writer_clone).await;
+        });
+
+        // Store connection as spectator (no game entity created)
+        self.players.insert(
+            player_id,
+            PlayerConnection {
+                player_id,
+                player_name,
+                sender,
+                writer,
+                is_spectator: true,
+                spectate_target: None, // Full view by default
+                last_activity: Instant::now(),
+            },
+        );
+
+        player_id
+    }
+
+    /// Set spectator's follow target
+    pub fn set_spectate_target(&mut self, spectator_id: PlayerId, target: Option<PlayerId>) {
+        if let Some(conn) = self.players.get_mut(&spectator_id) {
+            if conn.is_spectator {
+                conn.spectate_target = target;
+                conn.last_activity = Instant::now(); // Activity on target change
+                info!("Spectator {} now following {:?}", spectator_id, target);
+            }
+        }
+    }
+
+    /// Update last activity timestamp for a connection (call on message receive)
+    pub fn update_activity(&mut self, player_id: PlayerId) {
+        if let Some(conn) = self.players.get_mut(&player_id) {
+            conn.last_activity = Instant::now();
+        }
+    }
+
+    /// Convert a spectator to an active player
+    pub fn convert_spectator_to_player(
+        &mut self,
+        spectator_id: PlayerId,
+        color_index: u8,
+    ) -> bool {
+        if let Some(conn) = self.players.get_mut(&spectator_id) {
+            if conn.is_spectator {
+                // Create player entity
+                let player = Player::new(spectator_id, conn.player_name.clone(), false, color_index);
+                self.game_loop.add_player(player);
+
+                // Update connection state
+                conn.is_spectator = false;
+                conn.spectate_target = None;
+
+                info!("Spectator {} converted to player", spectator_id);
+                self.update_arena_scale();
+                return true;
+            }
+        }
+        false
+    }
+
+    /// Check if server can accept a new spectator
+    /// If at spectator capacity, tries to evict an idle spectator first
+    pub fn can_accept_spectator(&mut self) -> bool {
+        // If server can't accept players (at capacity), don't accept spectators either
+        if !self.can_accept_player() {
+            return false;
+        }
+
+        // If under limit, accept
+        if self.spectator_count() < MAX_SPECTATORS {
+            return true;
+        }
+
+        // At limit - try to evict an idle spectator
+        self.evict_idle_spectator()
+    }
+
+    /// Get count of current spectators
+    pub fn spectator_count(&self) -> usize {
+        self.players.values().filter(|c| c.is_spectator).count()
+    }
+
+    /// Clean up spectators that have been idle for too long
+    /// Returns the list of kicked spectator IDs
+    pub fn cleanup_idle_spectators(&mut self) -> Vec<PlayerId> {
+        let timeout = Duration::from_secs(SPECTATOR_IDLE_TIMEOUT_SECS);
+        let now = Instant::now();
+
+        // Find idle spectators
+        let idle_spectators: Vec<PlayerId> = self.players.iter()
+            .filter(|(_, conn)| {
+                conn.is_spectator && now.duration_since(conn.last_activity) > timeout
+            })
+            .map(|(id, _)| *id)
+            .collect();
+
+        // Remove them
+        for spectator_id in &idle_spectators {
+            info!("Kicking idle spectator {} (inactive for >{}s)", spectator_id, SPECTATOR_IDLE_TIMEOUT_SECS);
+            self.players.remove(spectator_id);
+            self.last_client_times.remove(spectator_id);
+        }
+
+        idle_spectators
+    }
+
+    /// Try to evict the oldest idle spectator to make room for a new one
+    /// Only evicts if the spectator has been idle for at least SPECTATOR_IDLE_TIMEOUT_SECS
+    /// Returns true if a spectator was evicted
+    pub fn evict_idle_spectator(&mut self) -> bool {
+        let timeout = Duration::from_secs(SPECTATOR_IDLE_TIMEOUT_SECS);
+
+        // Find the spectator with oldest last_activity
+        let oldest = self.players.iter()
+            .filter(|(_, c)| c.is_spectator)
+            .min_by_key(|(_, c)| c.last_activity)
+            .map(|(id, c)| (*id, c.last_activity));
+
+        if let Some((spectator_id, last_activity)) = oldest {
+            // Only evict if idle for at least the timeout duration
+            if last_activity.elapsed() > timeout {
+                info!("Evicting idle spectator {} to make room for new connection", spectator_id);
+                self.players.remove(&spectator_id);
+                self.last_client_times.remove(&spectator_id);
+                return true;
+            }
+        }
+
+        false
+    }
+
+    /// Check if we should run idle spectator cleanup this tick
+    pub fn should_check_idle_spectators(&mut self) -> bool {
+        let current_tick = self.game_loop.state().tick;
+        if current_tick >= self.last_idle_check_tick + SPECTATOR_IDLE_CHECK_INTERVAL_TICKS {
+            self.last_idle_check_tick = current_tick;
+            true
+        } else {
+            false
+        }
+    }
+
+    /// Remove a player or spectator from the game session
     pub fn remove_player(&mut self, player_id: PlayerId) {
-        info!("Player left: {}", player_id);
-        self.game_loop.remove_player(player_id);
+        // Check if this was a spectator (no game entity to remove)
+        let was_spectator = self.players.get(&player_id)
+            .map(|c| c.is_spectator)
+            .unwrap_or(false);
+
+        if was_spectator {
+            info!("Spectator left: {}", player_id);
+        } else {
+            info!("Player left: {}", player_id);
+            self.game_loop.remove_player(player_id);
+        }
+
         self.players.remove(&player_id); // Dropping sender closes the channel, ending writer task
         self.last_client_times.remove(&player_id);
         self.last_input_sequences.remove(&player_id);
 
-        // Ensure we have enough bots
-        self.maintain_player_count();
+        if !was_spectator {
+            // Ensure we have enough bots
+            self.maintain_player_count();
 
-        // Update arena scaling based on new player count
-        self.update_arena_scale();
+            // Update arena scaling based on new player count
+            self.update_arena_scale();
+        }
     }
 
     /// Update arena scale and gravity wells based on player count
@@ -543,6 +758,14 @@ impl GameSession {
 
         // Update simulation bot target if in simulation mode
         self.update_simulation_bot_count();
+
+        // Periodically clean up idle spectators
+        if self.should_check_idle_spectators() {
+            let kicked = self.cleanup_idle_spectators();
+            if !kicked.is_empty() {
+                debug!("Cleaned up {} idle spectators", kicked.len());
+            }
+        }
 
         // Performance-based bot management
         // Only forcibly remove bots in catastrophic situations (>150% budget)
@@ -1063,7 +1286,14 @@ pub async fn broadcast_message(
 /// Broadcast AOI-filtered snapshots to each player using channels (lock-free)
 /// Each player receives only entities relevant to their position
 /// Uses pooled buffers to minimize allocations
-pub async fn broadcast_filtered_snapshots(session: &GameSession) {
+///
+/// SPECTATOR OPTIMIZATION:
+/// - Full-view spectators share a single pre-encoded snapshot (Arc)
+/// - Follow-mode spectators reuse the target player's cached snapshot
+/// - Spectators receive updates at 5Hz (every 2nd tick) vs 10Hz for players
+pub async fn broadcast_filtered_snapshots(session: &GameSession, tick: u64) {
+    use std::sync::Arc;
+
     // Get full snapshot once
     let full_snapshot = session.get_snapshot();
 
@@ -1077,8 +1307,40 @@ pub async fn broadcast_filtered_snapshots(session: &GameSession) {
     #[cfg(feature = "metrics_extended")]
     let mut total_filtered_projectiles = 0usize;
 
-    // Prepare and send per-client data
+    // OPTIMIZATION: Check if we have any full-view spectators
+    let has_full_view_spectators = session.players.values()
+        .any(|c| c.is_spectator && c.spectate_target.is_none());
+
+    // OPTIMIZATION: Pre-encode full snapshot ONCE for all full-view spectators
+    // This saves ~2ms per spectator by encoding only once and sharing via Arc
+    let full_snapshot_bytes: Option<Arc<Vec<u8>>> = if has_full_view_spectators {
+        // Create a spectator-optimized snapshot (filter tiny debris/projectiles)
+        let spectator_snapshot = create_spectator_snapshot(&full_snapshot);
+        let message = ServerMessage::Snapshot(spectator_snapshot);
+        match encode_pooled(&message) {
+            Ok(encoded) => Some(Arc::new(encoded)),
+            Err(e) => {
+                warn!("Failed to encode spectator snapshot: {}", e);
+                None
+            }
+        }
+    } else {
+        None
+    };
+
+    // OPTIMIZATION: Cache player snapshots for follow-mode spectators
+    // Spectators following a player get the exact same bytes (zero extra encoding)
+    let mut player_snapshot_cache: HashMap<PlayerId, Arc<Vec<u8>>> = HashMap::new();
+
+    // Rate limit: spectators get updates at reduced rate (every Nth tick)
+    let spectator_tick = tick % SPECTATOR_TICK_DIVISOR == 0;
+
+    // First pass: encode and send to players, cache for potential followers
     for (&player_id, conn) in session.players.iter() {
+        if conn.is_spectator {
+            continue; // Handle spectators in second pass
+        }
+
         // Get player position and velocity for filtering
         let (player_position, player_velocity) = session.game_loop.state()
             .get_player(player_id)
@@ -1114,13 +1376,52 @@ pub async fn broadcast_filtered_snapshots(session: &GameSession) {
         let message = ServerMessage::Snapshot(filtered);
         match encode_pooled(&message) {
             Ok(encoded) => {
-                // Send via channel - writer task will return buffer to pool
-                if let Err(e) = conn.sender.send(encoded) {
+                // Cache for potential followers (Arc avoids extra allocation)
+                let shared = Arc::new(encoded);
+                player_snapshot_cache.insert(player_id, shared.clone());
+
+                // Send to player - clone the inner Vec for the channel
+                if let Err(e) = conn.sender.send((*shared).clone()) {
                     debug!("AOI broadcast to {}: channel closed ({})", player_id, e);
                 }
             }
             Err(e) => {
                 warn!("Failed to encode snapshot for {}: {}", player_id, e);
+            }
+        }
+    }
+
+    // Second pass: spectators (skip if not spectator tick for rate limiting)
+    if spectator_tick {
+        for (&player_id, conn) in session.players.iter() {
+            if !conn.is_spectator {
+                continue;
+            }
+
+            let bytes = match conn.spectate_target {
+                // FULL VIEW: Use shared pre-encoded snapshot (O(1))
+                None => {
+                    if let Some(ref full) = full_snapshot_bytes {
+                        (**full).clone()
+                    } else {
+                        continue;
+                    }
+                }
+                // FOLLOW MODE: Reuse target's cached snapshot (O(1))
+                Some(target_id) => {
+                    if let Some(cached) = player_snapshot_cache.get(&target_id) {
+                        (**cached).clone()
+                    } else if let Some(ref full) = full_snapshot_bytes {
+                        // Target not found (dead/disconnected), fallback to full view
+                        (**full).clone()
+                    } else {
+                        continue;
+                    }
+                }
+            };
+
+            if let Err(e) = conn.sender.send(bytes) {
+                debug!("Spectator broadcast to {}: channel closed ({})", player_id, e);
             }
         }
     }
@@ -1137,6 +1438,39 @@ pub async fn broadcast_filtered_snapshots(session: &GameSession) {
             let reduction = (1.0 - (total_filtered_players as f32 / total_original_players as f32)) * 100.0;
             metrics.aoi_reduction_percent.store(reduction as u64, Ordering::Relaxed);
         }
+    }
+}
+
+/// Create a filtered snapshot for spectators (reduce bandwidth)
+/// Filters out tiny debris/projectiles that aren't visible at full-map zoom
+/// Uses module-level SPECTATOR_* constants for configuration
+fn create_spectator_snapshot(full: &GameSnapshot) -> GameSnapshot {
+    GameSnapshot {
+        tick: full.tick,
+        match_phase: full.match_phase.clone(),
+        match_time: full.match_time,
+        countdown: full.countdown,
+        players: full.players.clone(), // ALL players always visible
+        projectiles: full.projectiles.iter()
+            .filter(|p| p.mass > SPECTATOR_MIN_PROJECTILE_MASS)
+            .take(SPECTATOR_MAX_PROJECTILES)
+            .cloned()
+            .collect(),
+        debris: full.debris.iter()
+            .filter(|d| d.size >= SPECTATOR_MIN_DEBRIS_SIZE)
+            .take(SPECTATOR_MAX_DEBRIS)
+            .cloned()
+            .collect(),
+        arena_collapse_phase: full.arena_collapse_phase,
+        arena_safe_radius: full.arena_safe_radius,
+        arena_scale: full.arena_scale,
+        gravity_wells: full.gravity_wells.clone(),
+        total_players: full.total_players,
+        total_alive: full.total_alive,
+        density_grid: full.density_grid.clone(),
+        notable_players: full.notable_players.clone(),
+        echo_client_time: 0, // Spectators don't need RTT measurement
+        ai_status: full.ai_status.clone(),
     }
 }
 
@@ -1263,6 +1597,148 @@ mod simulation_tests {
     }
 }
 
+#[cfg(test)]
+mod spectator_tests {
+    use super::*;
+    use crate::net::protocol::GameSnapshot;
+
+    #[test]
+    fn test_create_spectator_snapshot_filters_small_entities() {
+        // Create a full snapshot with various entity sizes
+        let full = GameSnapshot {
+            tick: 100,
+            match_phase: crate::game::state::MatchPhase::Playing,
+            match_time: 60.0,
+            countdown: 0.0,
+            players: vec![],
+            projectiles: vec![
+                crate::net::protocol::ProjectileSnapshot {
+                    id: 1,
+                    owner_id: uuid::Uuid::nil(),
+                    position: crate::util::vec2::Vec2::ZERO,
+                    velocity: crate::util::vec2::Vec2::ZERO,
+                    mass: 5.0,  // Should be filtered (< 10.0)
+                },
+                crate::net::protocol::ProjectileSnapshot {
+                    id: 2,
+                    owner_id: uuid::Uuid::nil(),
+                    position: crate::util::vec2::Vec2::ZERO,
+                    velocity: crate::util::vec2::Vec2::ZERO,
+                    mass: 15.0,  // Should be kept (> 10.0)
+                },
+            ],
+            debris: vec![
+                crate::net::protocol::DebrisSnapshot { id: 1, position: crate::util::vec2::Vec2::ZERO, size: 0 },  // Small, filtered
+                crate::net::protocol::DebrisSnapshot { id: 2, position: crate::util::vec2::Vec2::ZERO, size: 1 },  // Medium, kept
+                crate::net::protocol::DebrisSnapshot { id: 3, position: crate::util::vec2::Vec2::ZERO, size: 2 },  // Large, kept
+            ],
+            arena_collapse_phase: 0,
+            arena_safe_radius: 1000.0,
+            arena_scale: 1.0,
+            gravity_wells: vec![],
+            total_players: 0,
+            total_alive: 0,
+            density_grid: vec![],
+            notable_players: vec![],
+            echo_client_time: 12345,
+            ai_status: None,
+        };
+
+        let spectator_snap = create_spectator_snapshot(&full);
+
+        // Projectiles: only mass > 10 kept
+        assert_eq!(spectator_snap.projectiles.len(), 1);
+        assert_eq!(spectator_snap.projectiles[0].id, 2);
+
+        // Debris: only size >= 1 kept
+        assert_eq!(spectator_snap.debris.len(), 2);
+
+        // Echo time should be 0 for spectators
+        assert_eq!(spectator_snap.echo_client_time, 0);
+
+        // Other fields preserved
+        assert_eq!(spectator_snap.tick, 100);
+        assert_eq!(spectator_snap.arena_safe_radius, 1000.0);
+    }
+
+    #[test]
+    fn test_spectator_snapshot_respects_limits() {
+        // Create snapshot with more entities than spectator limits
+        let mut projectiles = Vec::new();
+        for i in 0..150 {
+            projectiles.push(crate::net::protocol::ProjectileSnapshot {
+                id: i,
+                owner_id: uuid::Uuid::nil(),
+                position: crate::util::vec2::Vec2::ZERO,
+                velocity: crate::util::vec2::Vec2::ZERO,
+                mass: 20.0,  // All above threshold
+            });
+        }
+
+        let mut debris = Vec::new();
+        for i in 0..100 {
+            debris.push(crate::net::protocol::DebrisSnapshot {
+                id: i,
+                position: crate::util::vec2::Vec2::ZERO,
+                size: 2,  // All large
+            });
+        }
+
+        let full = GameSnapshot {
+            tick: 100,
+            match_phase: crate::game::state::MatchPhase::Playing,
+            match_time: 60.0,
+            countdown: 0.0,
+            players: vec![],
+            projectiles,
+            debris,
+            arena_collapse_phase: 0,
+            arena_safe_radius: 1000.0,
+            arena_scale: 1.0,
+            gravity_wells: vec![],
+            total_players: 0,
+            total_alive: 0,
+            density_grid: vec![],
+            notable_players: vec![],
+            echo_client_time: 0,
+            ai_status: None,
+        };
+
+        let spectator_snap = create_spectator_snapshot(&full);
+
+        // Should respect limits (100 projectiles, 50 debris)
+        assert_eq!(spectator_snap.projectiles.len(), 100);
+        assert_eq!(spectator_snap.debris.len(), 50);
+    }
+}
+
+#[cfg(test)]
+mod idle_spectator_tests {
+    use super::*;
+
+    #[test]
+    fn test_spectator_timeout_constant() {
+        // Verify timeout is set to 5 minutes (300 seconds)
+        assert_eq!(SPECTATOR_IDLE_TIMEOUT_SECS, 300);
+    }
+
+    #[test]
+    fn test_idle_check_interval_is_reasonable() {
+        // At 30 TPS, check should happen roughly every 15 seconds
+        let check_interval_secs = SPECTATOR_IDLE_CHECK_INTERVAL_TICKS / 30;
+        assert!(check_interval_secs >= 10 && check_interval_secs <= 20,
+            "Idle check interval should be between 10-20 seconds, got {} seconds",
+            check_interval_secs);
+    }
+
+    #[test]
+    fn test_max_spectators_limit() {
+        // MAX_SPECTATORS should be a reasonable limit
+        assert!(MAX_SPECTATORS >= 10 && MAX_SPECTATORS <= 100,
+            "MAX_SPECTATORS should be between 10-100, got {}", MAX_SPECTATORS);
+    }
+}
+
 /// Sanitize player state to prevent NaN/Infinity corruption
 fn sanitize_game_state(session: &mut GameSession) {
     for player in session.game_loop.state_mut().players.values_mut() {
@@ -1381,10 +1857,11 @@ pub fn start_game_loop(session: Arc<RwLock<GameSession>>) {
             // Broadcast AOI-filtered snapshots if needed (each player gets their own filtered view)
             if snapshot.is_some() {
                 let session_clone = session.clone();
+                let current_tick = tick_count;
                 tokio::spawn(async move {
                     let session_guard = session_clone.read().await;
                     // Use AOI filtering for per-client snapshots
-                    broadcast_filtered_snapshots(&session_guard).await;
+                    broadcast_filtered_snapshots(&session_guard, current_tick).await;
                 });
             }
 

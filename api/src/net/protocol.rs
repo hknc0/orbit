@@ -6,8 +6,13 @@ use crate::util::vec2::Vec2;
 /// Messages from client to server
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum ClientMessage {
-    /// Request to join a game
-    JoinRequest { player_name: String, color_index: u8 },
+    /// Request to join a game (as player or spectator)
+    JoinRequest {
+        player_name: String,
+        color_index: u8,
+        #[serde(default)]
+        is_spectator: bool,
+    },
     /// Player input for current tick
     Input(PlayerInput),
     /// Request to leave the game
@@ -16,6 +21,10 @@ pub enum ClientMessage {
     Ping { timestamp: u64 },
     /// Acknowledge receiving a snapshot
     SnapshotAck { tick: u64 },
+    /// Spectator: set follow target (None = full view)
+    SpectateTarget { target_id: Option<PlayerId> },
+    /// Spectator: request to convert to player
+    SwitchToPlayer { color_index: u8 },
 }
 
 /// Messages from server to client
@@ -25,6 +34,8 @@ pub enum ServerMessage {
     JoinAccepted {
         player_id: PlayerId,
         session_token: Vec<u8>,
+        #[serde(default)]
+        is_spectator: bool,
     },
     /// Join was rejected
     JoinRejected { reason: String },
@@ -43,6 +54,8 @@ pub enum ServerMessage {
     Kicked { reason: String },
     /// Match phase changed
     PhaseChange { phase: MatchPhase, countdown: f32 },
+    /// Spectator mode changed (after switch)
+    SpectatorModeChanged { is_spectator: bool },
 }
 
 /// Player input state for one tick
@@ -502,13 +515,33 @@ mod tests {
         let msg = ClientMessage::JoinRequest {
             player_name: "TestPlayer".to_string(),
             color_index: 3,
+            is_spectator: false,
         };
         let encoded = encode(&msg).unwrap();
         let decoded: ClientMessage = decode(&encoded).unwrap();
         match decoded {
-            ClientMessage::JoinRequest { player_name, color_index } => {
+            ClientMessage::JoinRequest { player_name, color_index, is_spectator } => {
                 assert_eq!(player_name, "TestPlayer");
                 assert_eq!(color_index, 3);
+                assert!(!is_spectator);
+            }
+            _ => panic!("Wrong message type"),
+        }
+    }
+
+    #[test]
+    fn test_client_message_join_spectator() {
+        let msg = ClientMessage::JoinRequest {
+            player_name: "Spectator".to_string(),
+            color_index: 0,
+            is_spectator: true,
+        };
+        let encoded = encode(&msg).unwrap();
+        let decoded: ClientMessage = decode(&encoded).unwrap();
+        match decoded {
+            ClientMessage::JoinRequest { player_name, is_spectator, .. } => {
+                assert_eq!(player_name, "Spectator");
+                assert!(is_spectator);
             }
             _ => panic!("Wrong message type"),
         }
@@ -545,6 +578,7 @@ mod tests {
         let msg = ServerMessage::JoinAccepted {
             player_id,
             session_token: vec![1, 2, 3, 4],
+            is_spectator: false,
         };
         let encoded = encode(&msg).unwrap();
         let decoded: ServerMessage = decode(&encoded).unwrap();
@@ -552,9 +586,24 @@ mod tests {
             ServerMessage::JoinAccepted {
                 player_id: pid,
                 session_token,
+                is_spectator,
             } => {
                 assert_eq!(pid, player_id);
                 assert_eq!(session_token, vec![1, 2, 3, 4]);
+                assert!(!is_spectator);
+            }
+            _ => panic!("Wrong message type"),
+        }
+    }
+
+    #[test]
+    fn test_server_message_spectator_mode_changed() {
+        let msg = ServerMessage::SpectatorModeChanged { is_spectator: true };
+        let encoded = encode(&msg).unwrap();
+        let decoded: ServerMessage = decode(&encoded).unwrap();
+        match decoded {
+            ServerMessage::SpectatorModeChanged { is_spectator } => {
+                assert!(is_spectator);
             }
             _ => panic!("Wrong message type"),
         }
@@ -698,6 +747,7 @@ mod encoding_tests {
         let msg = ServerMessage::JoinAccepted {
             player_id: uuid::Uuid::nil(),
             session_token: vec![1, 2, 3, 4],
+            is_spectator: false,
         };
         let encoded = encode(&msg).unwrap();
         println!("\n=== JoinAccepted ===");

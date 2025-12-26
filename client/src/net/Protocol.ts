@@ -11,22 +11,25 @@ export type MatchPhase = 'waiting' | 'countdown' | 'playing' | 'ended';
 
 // Client -> Server messages
 export type ClientMessage =
-  | { type: 'JoinRequest'; playerName: string; colorIndex: number }
+  | { type: 'JoinRequest'; playerName: string; colorIndex: number; isSpectator: boolean }
   | { type: 'Input'; input: PlayerInput }
   | { type: 'Leave' }
   | { type: 'Ping'; timestamp: number }
-  | { type: 'SnapshotAck'; tick: number };
+  | { type: 'SnapshotAck'; tick: number }
+  | { type: 'SpectateTarget'; targetId: PlayerId | null }
+  | { type: 'SwitchToPlayer'; colorIndex: number };
 
 // Server -> Client messages
 export type ServerMessage =
-  | { type: 'JoinAccepted'; playerId: PlayerId; sessionToken: Uint8Array }
+  | { type: 'JoinAccepted'; playerId: PlayerId; sessionToken: Uint8Array; isSpectator: boolean }
   | { type: 'JoinRejected'; reason: string }
   | { type: 'Snapshot'; snapshot: GameSnapshot }
   | { type: 'Delta'; delta: DeltaUpdate }
   | { type: 'Event'; event: GameEvent }
   | { type: 'Pong'; clientTimestamp: number; serverTimestamp: number }
   | { type: 'Kicked'; reason: string }
-  | { type: 'PhaseChange'; phase: MatchPhase; countdown: number };
+  | { type: 'PhaseChange'; phase: MatchPhase; countdown: number }
+  | { type: 'SpectatorModeChanged'; isSpectator: boolean };
 
 // Player input for one tick
 export interface PlayerInput {

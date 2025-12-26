@@ -182,6 +182,7 @@ export function encodeClientMessage(msg: ClientMessage): Uint8Array {
       writer.writeU32(0); // Enum variant
       writer.writeString(msg.playerName);
       writer.writeU8(msg.colorIndex);
+      writer.writeBool(msg.isSpectator);
       break;
     case 'Input':
       writer.writeU32(1);
@@ -197,6 +198,20 @@ export function encodeClientMessage(msg: ClientMessage): Uint8Array {
     case 'SnapshotAck':
       writer.writeU32(4);
       writer.writeU64(msg.tick);
+      break;
+    case 'SpectateTarget':
+      writer.writeU32(5);
+      // Option<PlayerId> - write 0 for None, 1+UUID for Some
+      if (msg.targetId === null) {
+        writer.writeU8(0); // None
+      } else {
+        writer.writeU8(1); // Some
+        writer.writeUuid(msg.targetId);
+      }
+      break;
+    case 'SwitchToPlayer':
+      writer.writeU32(6);
+      writer.writeU8(msg.colorIndex);
       break;
   }
 
@@ -225,6 +240,7 @@ export function decodeServerMessage(data: ArrayBuffer): ServerMessage {
         type: 'JoinAccepted',
         playerId: reader.readUuid(),
         sessionToken: reader.readByteArray(),
+        isSpectator: reader.readBool(),
       };
     case 1: // JoinRejected
       return {
@@ -262,6 +278,11 @@ export function decodeServerMessage(data: ArrayBuffer): ServerMessage {
         type: 'PhaseChange',
         phase: readMatchPhase(reader),
         countdown: reader.readF32(),
+      };
+    case 8: // SpectatorModeChanged
+      return {
+        type: 'SpectatorModeChanged',
+        isSpectator: reader.readBool(),
       };
     default:
       throw new Error(`Unknown server message variant: ${variant}`);

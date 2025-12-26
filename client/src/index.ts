@@ -134,6 +134,10 @@ const serverUrl = import.meta.env.VITE_SERVER_URL || defaultServerUrl;
 const certHash = import.meta.env.VITE_CERT_HASH;
 game.setServer(serverUrl, certHash);
 
+// Parse URL parameters for spectator mode
+const urlParams = new URLSearchParams(window.location.search);
+const isSpectatorFromUrl = urlParams.get('spectate') === '1';
+
 // Handle window resize
 window.addEventListener('resize', () => {
   canvas.width = window.innerWidth;
@@ -144,7 +148,14 @@ window.addEventListener('resize', () => {
 screens.onPlay(() => {
   const playerName = screens.getPlayerName();
   const colorIndex = screens.getSelectedColor();
-  game.start(playerName, colorIndex);
+  game.start(playerName, colorIndex, false);
+});
+
+// Handle spectate button click
+screens.onSpectate(() => {
+  const playerName = screens.getPlayerName() || 'Spectator';
+  const colorIndex = screens.getSelectedColor();
+  game.start(playerName, colorIndex, true);
 });
 
 // Handle restart button click
@@ -198,3 +209,10 @@ window.addEventListener('keydown', (e) => {
 
 // Start with menu screen visible
 screens.showMenu();
+
+// Auto-join as spectator if URL parameter is set
+if (isSpectatorFromUrl) {
+  const playerName = screens.getPlayerName() || 'Spectator';
+  const colorIndex = screens.getSelectedColor();
+  game.start(playerName, colorIndex, true);
+}

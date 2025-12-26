@@ -181,9 +181,15 @@ export class Screens {
     playBtn.id = 'play-btn';
     playBtn.textContent = 'PLAY';
 
+    // Spectate button - secondary style
+    const spectateBtn = this.createElement('button', 'btn-spectate');
+    spectateBtn.id = 'spectate-btn';
+    spectateBtn.textContent = 'SPECTATE';
+
     formArea.appendChild(nameContainer);
     formArea.appendChild(colorContainer);
     formArea.appendChild(playBtn);
+    formArea.appendChild(spectateBtn);
 
     // Controls section - minimal but complete
     const controlsSection = this.createElement('div', 'controls-section');
@@ -619,6 +625,28 @@ export class Screens {
         transform: translateY(0);
       }
 
+      /* Spectate button - secondary style */
+      .btn-spectate {
+        width: 100%;
+        padding: 0.6rem 1.5rem;
+        font-family: 'Orbitron', sans-serif;
+        font-size: 0.75rem;
+        font-weight: 500;
+        letter-spacing: 0.15em;
+        background: transparent;
+        color: rgba(160, 180, 200, 0.7);
+        border: 1px solid rgba(100, 150, 255, 0.2);
+        border-radius: 3px;
+        cursor: pointer;
+        transition: all 0.2s ease;
+      }
+
+      .btn-spectate:hover {
+        color: #00ffff;
+        border-color: rgba(0, 255, 255, 0.4);
+        background: rgba(0, 255, 255, 0.05);
+      }
+
       /* btn-primary for end/error screens */
       .btn-primary {
         padding: 0.875rem 2rem;
@@ -917,6 +945,15 @@ export class Screens {
       if (e.key === 'Enter' && this.validateName()) {
         callback();
       }
+    });
+  }
+
+  onSpectate(callback: () => void): void {
+    const btn = this.menuScreen.querySelector('#spectate-btn');
+    btn?.addEventListener('click', () => {
+      // Spectators don't need a name, but use one if provided
+      this.savePreferences();
+      callback();
     });
   }
 

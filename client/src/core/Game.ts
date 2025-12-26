@@ -35,6 +35,9 @@ export class Game {
   // Event handlers
   private events: GameEvents;
 
+  // Spectator heartbeat interval (keeps spectators alive, prevents idle kick)
+  private spectatorHeartbeatInterval: number | null = null;
+
   // Server URL (set via setServer, secure default to localhost)
   private serverUrl: string = 'https://localhost:4433';
   private certHash?: string;
@@ -61,6 +64,61 @@ export class Game {
       onError: this.handleConnectionError.bind(this),
     });
 
+    // Set up spectator click-to-follow
+    this.canvas.addEventListener('click', this.handleSpectatorClick.bind(this));
+  }
+
+  // Handle click to follow a player in spectator mode
+  private handleSpectatorClick(e: MouseEvent): void {
+    try {
+      // Only handle clicks in spectator mode during gameplay
+      if (!this.world.isSpectator || (this.phase !== 'playing' && this.phase !== 'countdown')) {
+        return;
+      }
+
+      // Convert screen coords to world coords
+      const worldPos = this.renderSystem.screenToWorld(e.clientX, e.clientY);
+
+      // Validate world position
+      if (!worldPos || !isFinite(worldPos.x) || !isFinite(worldPos.y)) {
+        console.warn('Invalid world position from screenToWorld');
+        return;
+      }
+
+      // Find the closest alive player to the click position
+      let closestPlayer: { id: string; distance: number } | null = null;
+      const clickRadius = 100; // Max distance to select a player
+
+      const players = this.world.getPlayers();
+      for (const player of players.values()) {
+        if (!player.alive) continue;
+        if (!player.position || !isFinite(player.position.x) || !isFinite(player.position.y)) continue;
+
+        const dx = player.position.x - worldPos.x;
+        const dy = player.position.y - worldPos.y;
+        const distance = Math.sqrt(dx * dx + dy * dy);
+
+        // Account for player size (mass affects visual size)
+        const playerRadius = Math.sqrt(player.mass || 100) * 2;
+        const adjustedDistance = Math.max(0, distance - playerRadius);
+
+        if (adjustedDistance < clickRadius) {
+          if (!closestPlayer || adjustedDistance < closestPlayer.distance) {
+            closestPlayer = { id: player.id, distance: adjustedDistance };
+          }
+        }
+      }
+
+      if (closestPlayer) {
+        // Follow this player
+        this.setSpectateTarget(closestPlayer.id);
+      } else if (this.world.spectateTargetId !== null) {
+        // Clicked on empty space while following someone - return to full view
+        this.setSpectateTarget(null);
+      }
+    } catch (err) {
+      console.error('Error in spectator click handler:', err);
+    }
   }
 
   // Configure server connection
@@ -70,7 +128,7 @@ export class Game {
   }
 
   // Start connecting and playing
-  async start(playerName: string, colorIndex: number): Promise<void> {
+  async start(playerName: string, colorIndex: number, isSpectator: boolean = false): Promise<void> {
     this.setPhase('connecting');
     this.inputSequence = 0;
 
@@ -82,6 +140,7 @@ export class Game {
         type: 'JoinRequest',
         playerName,
         colorIndex,
+        isSpectator,
       });
     } catch (err) {
       this.setPhase('disconnected');
@@ -89,8 +148,26 @@ export class Game {
     }
   }
 
+  // Set spectator follow target (null = full map view)
+  setSpectateTarget(targetId: string | null): void {
+    this.world.spectateTargetId = targetId;
+    this.transport.sendReliable({
+      type: 'SpectateTarget',
+      targetId,
+    });
+  }
+
+  // Switch from spectator to player mode
+  switchToPlayer(colorIndex: number): void {
+    this.transport.sendReliable({
+      type: 'SwitchToPlayer',
+      colorIndex,
+    });
+  }
+
   // Disconnect and return to menu
   disconnect(): void {
+    this.stopSpectatorHeartbeat();
     this.transport.disconnect();
     this.world.reset();
     this.stateSync.reset();
@@ -104,6 +181,28 @@ export class Game {
   destroy(): void {
     this.disconnect();
     this.inputSystem.destroy();
+  }
+
+  // Start spectator heartbeat (sends periodic pings to avoid idle kick)
+  private startSpectatorHeartbeat(): void {
+    this.stopSpectatorHeartbeat(); // Clear any existing
+    // Send ping every 15 seconds to stay active (server timeout is 45s)
+    this.spectatorHeartbeatInterval = window.setInterval(() => {
+      if (this.world.isSpectator) {
+        this.transport.sendReliable({
+          type: 'Ping',
+          timestamp: Date.now(),
+        });
+      }
+    }, 15000);
+  }
+
+  // Stop spectator heartbeat
+  private stopSpectatorHeartbeat(): void {
+    if (this.spectatorHeartbeatInterval !== null) {
+      clearInterval(this.spectatorHeartbeatInterval);
+      this.spectatorHeartbeatInterval = null;
+    }
   }
 
   // Main game loop
@@ -186,7 +285,7 @@ export class Game {
 
     switch (message.type) {
       case 'JoinAccepted':
-        this.handleJoinAccepted(message.playerId);
+        this.handleJoinAccepted(message.playerId, message.isSpectator);
         break;
 
       case 'JoinRejected':
@@ -220,12 +319,28 @@ export class Game {
       case 'Pong':
         // RTT is handled in transport
         break;
+
+      case 'SpectatorModeChanged':
+        this.world.setSpectatorMode(message.isSpectator);
+        // Start/stop heartbeat based on spectator mode
+        if (message.isSpectator) {
+          this.startSpectatorHeartbeat();
+        } else {
+          this.stopSpectatorHeartbeat();
+        }
+        break;
     }
   }
 
-  private handleJoinAccepted(playerId: PlayerId): void {
+  private handleJoinAccepted(playerId: PlayerId, isSpectator: boolean): void {
     this.world.localPlayerId = playerId;
+    this.world.setSpectatorMode(isSpectator);
     this.stateSync.setLocalPlayerId(playerId);
+
+    // Start spectator heartbeat if joining as spectator
+    if (isSpectator) {
+      this.startSpectatorHeartbeat();
+    }
 
     // Start game loop but stay in connecting phase until first snapshot arrives
     // This prevents flicker from showing game before player data is ready
