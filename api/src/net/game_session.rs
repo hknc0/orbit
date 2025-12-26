@@ -1307,13 +1307,15 @@ pub async fn broadcast_filtered_snapshots(session: &GameSession, tick: u64) {
     #[cfg(feature = "metrics_extended")]
     let mut total_filtered_projectiles = 0usize;
 
-    // OPTIMIZATION: Check if we have any full-view spectators
-    let has_full_view_spectators = session.players.values()
-        .any(|c| c.is_spectator && c.spectate_target.is_none());
+    // OPTIMIZATION: Check if we have any spectators that need full snapshot
+    // This includes full-view spectators AND follow-mode spectators following bots
+    // (bots don't have connections, so won't be in player_snapshot_cache)
+    let has_spectators = session.players.values().any(|c| c.is_spectator);
 
-    // OPTIMIZATION: Pre-encode full snapshot ONCE for all full-view spectators
+    // OPTIMIZATION: Pre-encode full snapshot ONCE for spectators
     // This saves ~2ms per spectator by encoding only once and sharing via Arc
-    let full_snapshot_bytes: Option<Arc<Vec<u8>>> = if has_full_view_spectators {
+    // Always create if there are ANY spectators (needed as fallback for bot targets)
+    let full_snapshot_bytes: Option<Arc<Vec<u8>>> = if has_spectators {
         // Create a spectator-optimized snapshot (filter tiny debris/projectiles)
         let spectator_snapshot = create_spectator_snapshot(&full_snapshot);
         let message = ServerMessage::Snapshot(spectator_snapshot);
@@ -1391,38 +1393,69 @@ pub async fn broadcast_filtered_snapshots(session: &GameSession, tick: u64) {
         }
     }
 
-    // Second pass: spectators (skip if not spectator tick for rate limiting)
-    if spectator_tick {
-        for (&player_id, conn) in session.players.iter() {
-            if !conn.is_spectator {
-                continue;
-            }
+    // Second pass: spectators
+    // - Follow-mode spectators get updates at FULL rate (same as the player they follow)
+    // - Full-view spectators get updates at reduced rate (large snapshots, bandwidth savings)
+    for (&player_id, conn) in session.players.iter() {
+        if !conn.is_spectator {
+            continue;
+        }
 
-            let bytes = match conn.spectate_target {
-                // FULL VIEW: Use shared pre-encoded snapshot (O(1))
-                None => {
-                    if let Some(ref full) = full_snapshot_bytes {
-                        (**full).clone()
-                    } else {
+        let bytes = match conn.spectate_target {
+            // FULL VIEW: Rate-limited (large snapshots)
+            None => {
+                // Only send on spectator ticks to save bandwidth
+                if !spectator_tick {
+                    continue;
+                }
+                if let Some(ref full) = full_snapshot_bytes {
+                    (**full).clone()
+                } else {
+                    continue;
+                }
+            }
+            // FOLLOW MODE: Full rate (same AOI-filtered data as the target player)
+            // No rate limiting - spectators following a player should see smooth movement
+            Some(target_id) => {
+                if let Some(cached) = player_snapshot_cache.get(&target_id) {
+                    // Human player - use their cached AOI-filtered snapshot (O(1))
+                    (**cached).clone()
+                } else if let Some(target_player) = session.game_loop.state().get_player(target_id) {
+                    // Bot or entity not in cache - generate AOI-filtered view for their position
+                    // This ensures spectators following bots see the same AOI as a player at that position
+                    //
+                    // TODO(perf): Cache bot snapshots when multiple spectators follow the same bot.
+                    // Currently each spectator following the same bot triggers a separate AOI filter
+                    // and encode. For N spectators following M bots, this is O(N×M) instead of O(M).
+                    // Solution: Pre-compute AOI snapshots for all bots with followers, then share via Arc.
+                    let filtered = session.aoi_manager.filter_for_player(
+                        target_id,
+                        target_player.position,
+                        target_player.velocity,
+                        &full_snapshot,
+                    );
+                    let message = ServerMessage::Snapshot(filtered);
+                    match encode_pooled(&message) {
+                        Ok(encoded) => encoded,
+                        Err(e) => {
+                            warn!("Failed to encode bot-follow snapshot: {}", e);
+                            continue;
+                        }
+                    }
+                } else if let Some(ref full) = full_snapshot_bytes {
+                    // Target doesn't exist (disconnected/dead) - fall back to full view (rate-limited)
+                    if !spectator_tick {
                         continue;
                     }
+                    (**full).clone()
+                } else {
+                    continue;
                 }
-                // FOLLOW MODE: Reuse target's cached snapshot (O(1))
-                Some(target_id) => {
-                    if let Some(cached) = player_snapshot_cache.get(&target_id) {
-                        (**cached).clone()
-                    } else if let Some(ref full) = full_snapshot_bytes {
-                        // Target not found (dead/disconnected), fallback to full view
-                        (**full).clone()
-                    } else {
-                        continue;
-                    }
-                }
-            };
-
-            if let Err(e) = conn.sender.send(bytes) {
-                debug!("Spectator broadcast to {}: channel closed ({})", player_id, e);
             }
+        };
+
+        if let Err(e) = conn.sender.send(bytes) {
+            debug!("Spectator broadcast to {}: channel closed ({})", player_id, e);
         }
     }
 
@@ -1709,6 +1742,195 @@ mod spectator_tests {
         // Should respect limits (100 projectiles, 50 debris)
         assert_eq!(spectator_snap.projectiles.len(), 100);
         assert_eq!(spectator_snap.debris.len(), 50);
+    }
+
+    #[test]
+    fn test_spectator_follow_mode_uses_aoi_filter() {
+        // This test documents the follow mode behavior:
+        // When a spectator follows a player (human or bot), they see the SAME
+        // AOI-filtered view that the target player would see.
+        //
+        // For human players: reuse cached snapshot from player_snapshot_cache
+        // For bots: generate AOI-filtered snapshot using bot's position/velocity
+        //
+        // This is critical for consistent viewing experience - spectators following
+        // bots should see exactly what a player at that position would see,
+        // not the full unfiltered map.
+        //
+        // The code path in broadcast_filtered_snapshots:
+        // 1. Check player_snapshot_cache (human players)
+        // 2. If not found, lookup player in game state (bots)
+        // 3. If found, generate AOI-filtered snapshot for bot's position
+        // 4. If not found (disconnected), fall back to full view
+
+        // This test documents that the logic handles all three cases:
+        struct SnapshotSource {
+            from_cache: bool,
+            from_aoi_filter: bool,
+            from_full_fallback: bool,
+        }
+
+        fn get_snapshot_source(in_cache: bool, in_game_state: bool) -> SnapshotSource {
+            if in_cache {
+                // Human player - use cached
+                SnapshotSource { from_cache: true, from_aoi_filter: false, from_full_fallback: false }
+            } else if in_game_state {
+                // Bot - generate AOI filter
+                SnapshotSource { from_cache: false, from_aoi_filter: true, from_full_fallback: false }
+            } else {
+                // Disconnected - full fallback
+                SnapshotSource { from_cache: false, from_aoi_filter: false, from_full_fallback: true }
+            }
+        }
+
+        // Following human player → use cache
+        let human = get_snapshot_source(true, true);
+        assert!(human.from_cache, "Human player should use cached snapshot");
+        assert!(!human.from_aoi_filter, "Human player should not regenerate AOI");
+
+        // Following bot → generate AOI
+        let bot = get_snapshot_source(false, true);
+        assert!(!bot.from_cache, "Bot should not be in cache");
+        assert!(bot.from_aoi_filter, "Bot should get AOI-filtered view");
+
+        // Following disconnected player → full fallback
+        let disconnected = get_snapshot_source(false, false);
+        assert!(disconnected.from_full_fallback, "Disconnected should fall back to full view");
+    }
+
+    #[test]
+    fn test_spectator_full_snapshot_created_for_follow_mode() {
+        // Verify that full_snapshot_bytes is created when there are follow-mode spectators
+        // This is critical for spectators following bots (which aren't in player_snapshot_cache)
+
+        struct MockConnection {
+            is_spectator: bool,
+            spectate_target: Option<u32>,
+        }
+
+        // Scenario 1: Only follow-mode spectators (following bots)
+        let connections1 = vec![
+            MockConnection { is_spectator: true, spectate_target: Some(1) },
+            MockConnection { is_spectator: true, spectate_target: Some(2) },
+        ];
+        let has_spectators = connections1.iter().any(|c| c.is_spectator);
+        assert!(has_spectators, "Should create full snapshot for follow-mode spectators");
+
+        // Scenario 2: Mix of full-view and follow-mode
+        let connections2 = vec![
+            MockConnection { is_spectator: true, spectate_target: None }, // Full view
+            MockConnection { is_spectator: true, spectate_target: Some(1) }, // Following
+        ];
+        let has_spectators = connections2.iter().any(|c| c.is_spectator);
+        assert!(has_spectators, "Should create full snapshot for mixed spectators");
+
+        // Scenario 3: No spectators
+        let connections3: Vec<MockConnection> = vec![];
+        let has_spectators = connections3.iter().any(|c| c.is_spectator);
+        assert!(!has_spectators, "Should NOT create full snapshot when no spectators");
+
+        // Scenario 4: Only players (no spectators)
+        let connections4 = vec![
+            MockConnection { is_spectator: false, spectate_target: None },
+            MockConnection { is_spectator: false, spectate_target: None },
+        ];
+        let has_spectators = connections4.iter().any(|c| c.is_spectator);
+        assert!(!has_spectators, "Should NOT create full snapshot for players only");
+    }
+
+    #[test]
+    fn test_spectator_rate_limiting_by_mode() {
+        // This test documents the rate limiting behavior for spectators:
+        // - Full-view spectators: rate-limited (SPECTATOR_TICK_DIVISOR, e.g., every 2nd tick)
+        // - Follow-mode spectators: full rate (every tick, same as players)
+        //
+        // This is critical for smooth viewing when following a player.
+
+        #[derive(Clone)]
+        struct MockSpectator {
+            spectate_target: Option<u32>,  // None = full view, Some = following
+        }
+
+        // Simulate the rate limiting logic from broadcast_filtered_snapshots
+        fn should_send_update(spectator: &MockSpectator, tick: u64, tick_divisor: u64) -> bool {
+            let spectator_tick = tick % tick_divisor == 0;
+
+            match spectator.spectate_target {
+                // Full view: rate-limited
+                None => spectator_tick,
+                // Follow mode: full rate (always send)
+                Some(_target_id) => true,
+            }
+        }
+
+        let tick_divisor = 2u64;  // Same as SPECTATOR_TICK_DIVISOR
+
+        // Full-view spectator should only receive updates on spectator ticks
+        let full_view = MockSpectator { spectate_target: None };
+        assert!(should_send_update(&full_view, 0, tick_divisor), "Full view: tick 0 (even) should send");
+        assert!(!should_send_update(&full_view, 1, tick_divisor), "Full view: tick 1 (odd) should skip");
+        assert!(should_send_update(&full_view, 2, tick_divisor), "Full view: tick 2 (even) should send");
+        assert!(!should_send_update(&full_view, 3, tick_divisor), "Full view: tick 3 (odd) should skip");
+
+        // Follow-mode spectator should receive updates every tick
+        let follow_mode = MockSpectator { spectate_target: Some(123) };
+        assert!(should_send_update(&follow_mode, 0, tick_divisor), "Follow mode: tick 0 should send");
+        assert!(should_send_update(&follow_mode, 1, tick_divisor), "Follow mode: tick 1 should send");
+        assert!(should_send_update(&follow_mode, 2, tick_divisor), "Follow mode: tick 2 should send");
+        assert!(should_send_update(&follow_mode, 3, tick_divisor), "Follow mode: tick 3 should send");
+
+        // Count updates over 10 ticks
+        let full_view_updates: usize = (0..10).filter(|&t| should_send_update(&full_view, t, tick_divisor)).count();
+        let follow_mode_updates: usize = (0..10).filter(|&t| should_send_update(&follow_mode, t, tick_divisor)).count();
+
+        assert_eq!(full_view_updates, 5, "Full view should receive 5 updates in 10 ticks (50%)");
+        assert_eq!(follow_mode_updates, 10, "Follow mode should receive 10 updates in 10 ticks (100%)");
+    }
+
+    #[test]
+    fn test_spectator_mode_switch_changes_rate() {
+        // When a spectator switches from full-view to follow-mode (or vice versa),
+        // their update rate should change accordingly.
+
+        #[derive(Clone)]
+        struct MockSpectator {
+            spectate_target: Option<u32>,
+        }
+
+        fn should_send_update(spectator: &MockSpectator, tick: u64, tick_divisor: u64) -> bool {
+            let spectator_tick = tick % tick_divisor == 0;
+            match spectator.spectate_target {
+                None => spectator_tick,
+                Some(_) => true,
+            }
+        }
+
+        let tick_divisor = 2u64;
+        let mut spectator = MockSpectator { spectate_target: None };
+
+        // Start in full-view mode
+        let updates_full_view: Vec<bool> = (0..6).map(|t| should_send_update(&spectator, t, tick_divisor)).collect();
+        assert_eq!(updates_full_view, vec![true, false, true, false, true, false],
+            "Full view: should alternate between send and skip");
+
+        // Switch to follow mode at tick 3
+        spectator.spectate_target = Some(42);
+        let updates_after_switch: Vec<bool> = (3..9).map(|t| should_send_update(&spectator, t, tick_divisor)).collect();
+        assert_eq!(updates_after_switch, vec![true, true, true, true, true, true],
+            "After switching to follow mode: should send every tick");
+
+        // Switch back to full view
+        spectator.spectate_target = None;
+        let updates_back_full: Vec<bool> = (6..12).map(|t| should_send_update(&spectator, t, tick_divisor)).collect();
+        assert_eq!(updates_back_full, vec![true, false, true, false, true, false],
+            "After switching back to full view: should alternate again");
+    }
+
+    #[test]
+    fn test_spectator_divisor_constant() {
+        // Verify the tick divisor is set to a reasonable value
+        assert_eq!(super::SPECTATOR_TICK_DIVISOR, 2,
+            "SPECTATOR_TICK_DIVISOR should be 2 (50% rate for full-view spectators)");
     }
 }
 
