@@ -851,7 +851,8 @@ mod tests {
         for player_count in [10, 50, 100, 200, 500] {
             let mut arena = Arena::default();
             // Use area-based scaling instead of legacy player-based
-            for _ in 0..50 {
+            // With slower lerp (0.05) and cap (30/tick), need more iterations
+            for _ in 0..300 {
                 arena.scale_for_simulation(player_count, &config);
             }
 

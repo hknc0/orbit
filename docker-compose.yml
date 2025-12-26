@@ -20,16 +20,16 @@ services:
       - "4433:4433/udp"   # WebTransport (QUIC/UDP)
       - "9090:9090"        # Metrics endpoint
     environment:
-      - RUST_LOG=info
+      - RUST_LOG=debug
       - HOST=0.0.0.0
       - PORT=4433
       - METRICS_PORT=9090
       - BOT_COUNT=10
       # Simulation mode (load testing)
-      - SIMULATION_MODE=false
+      - SIMULATION_MODE=true
       - SIMULATION_MIN_BOTS=10
-      - SIMULATION_MAX_BOTS=500
-      - SIMULATION_CYCLE_MINUTES=10
+      - SIMULATION_MAX_BOTS=5000
+      - SIMULATION_CYCLE_MINUTES=5
       #
       # Gravity wave explosions (wells randomly explode creating shockwaves)
       # - GRAVITY_WAVE_ENABLED=true          # Master switch (true/false)

@@ -115,8 +115,8 @@ pub fn process_input(
 
     let charge = charge_manager.get_mut(player_id);
 
+    // Phase 1: Handle charging (if fire button is held)
     if input.fire {
-        // Start or continue charging
         if !charge.is_charging {
             charge.is_charging = true;
             charge.charge_time = 0.0;
@@ -128,21 +128,23 @@ pub fn process_input(
         if input.aim.length_sq() > 0.01 {
             charge.aim_direction = input.aim.normalize();
         }
+    }
 
-        None
-    } else if input.fire_released && charge.is_charging {
-        // Fire released - always fire (even quick taps)
-        // Quick taps fire smaller/faster projectiles
+    // Phase 2: Handle firing (if fire button was released)
+    // This is checked separately to support quick taps where fire+fire_released
+    // arrive in the same tick (coalesced inputs from high-fps clients)
+    if input.fire_released && charge.is_charging {
         let event = fire_projectile(state, player_id, charge);
         charge_manager.reset(player_id);
-        event
-    } else {
-        // Not firing
-        if charge.is_charging {
-            charge_manager.reset(player_id);
-        }
-        None
+        return event;
     }
+
+    // Phase 3: Reset charge if not firing and was charging
+    if !input.fire && !input.fire_released && charge.is_charging {
+        charge_manager.reset(player_id);
+    }
+
+    None
 }
 
 /// Fire a projectile from a player
@@ -388,6 +390,38 @@ mod tests {
 
         // Player should have lost MIN_MASS
         assert!(state.get_player(player_id).unwrap().mass < initial_mass);
+    }
+
+    #[test]
+    fn test_quick_tap_same_tick_fires() {
+        // Regression test: fire + fire_released in same input (from coalesced quick tap)
+        let (mut state, player_id) = create_test_state();
+        let initial_mass = state.get_player(player_id).unwrap().mass;
+        let mut charge_manager = ChargeManager::new();
+
+        // Coalesced input: both fire and fire_released true (quick tap in same tick)
+        let input = PlayerInput {
+            fire: true,
+            fire_released: true,
+            aim: Vec2::new(1.0, 0.0),
+            ..Default::default()
+        };
+        let event = process_input(&mut state, player_id, &input, &mut charge_manager, 0.033);
+
+        // Should fire a projectile
+        assert!(event.is_some(), "Quick tap with fire+fire_released should fire");
+        assert_eq!(state.projectiles.len(), 1);
+
+        // Player should have lost MIN_MASS
+        let mass_lost = initial_mass - state.get_player(player_id).unwrap().mass;
+        assert!((mass_lost - MIN_MASS).abs() < 0.1, "Quick tap should fire MIN_MASS projectile");
+
+        // Projectile should have high velocity (quick tap = fast projectile)
+        let projectile = &state.projectiles[0];
+        assert!(
+            projectile.velocity.length() > MIN_VELOCITY,
+            "Quick tap projectile should be fast"
+        );
     }
 
     #[test]
