@@ -876,6 +876,11 @@ export class Screens {
   showMenu(): void {
     this.hideAll();
     this.menuScreen.classList.remove('hidden');
+    // Auto-focus name input for easy "type name + Enter" flow
+    setTimeout(() => {
+      this.playerNameInput?.focus();
+      this.playerNameInput?.select(); // Select existing text for easy replacement
+    }, 100);
   }
 
   hideMenu(): void {
