@@ -7,3 +7,4 @@ pub mod transport;
 pub mod connection;
 pub mod game_session;
 pub mod aoi;
+pub mod delta;

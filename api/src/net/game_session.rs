@@ -123,6 +123,7 @@ use crate::game::performance::{PerformanceMonitor, PerformanceStatus};
 use crate::game::state::{MatchPhase, Player, PlayerId};
 use crate::metrics::Metrics;
 use crate::net::aoi::{AOIConfig, AOIManager};
+use crate::net::delta::{generate_delta, DeltaStats};
 use crate::net::protocol::{GameEvent, GameSnapshot, PlayerInput, ServerMessage};
 
 // ============================================================================
@@ -153,6 +154,14 @@ const SPECTATOR_MAX_DEBRIS: usize = 50;
 
 /// Minimum debris size to include in spectator snapshots (0=small, 1=medium, 2=large)
 const SPECTATOR_MIN_DEBRIS_SIZE: u8 = 1;
+
+// ============================================================================
+// DELTA COMPRESSION CONSTANTS
+// ============================================================================
+
+/// How often to send full snapshots (every N ticks)
+/// At 30 TPS: 300 ticks = 10 seconds between full snapshots
+const FULL_RESYNC_INTERVAL: u64 = 300;
 
 // ============================================================================
 
@@ -225,6 +234,44 @@ impl SimulationConfig {
     }
 }
 
+// ============================================================================
+// Delta Compression State
+// ============================================================================
+
+/// Per-client network state for delta compression and rate limiting
+/// Tracks the last sent snapshot to generate deltas, and per-entity update timing
+pub struct ClientNetState {
+    /// Last full snapshot sent (used as delta base)
+    pub last_snapshot: Option<GameSnapshot>,
+    /// Tick of the last full snapshot sent
+    pub last_full_tick: u64,
+    /// Per-entity last update tick (for distance-based rate limiting)
+    pub entity_last_update: HashMap<PlayerId, u64>,
+    /// Whether this client needs a full resync (first message or error recovery)
+    pub needs_full_resync: bool,
+}
+
+impl Default for ClientNetState {
+    fn default() -> Self {
+        Self {
+            last_snapshot: None,
+            last_full_tick: 0,
+            entity_last_update: HashMap::with_capacity(64),
+            needs_full_resync: true, // First message is always full
+        }
+    }
+}
+
+impl ClientNetState {
+    /// Reset state (on disconnect/reconnect)
+    pub fn reset(&mut self) {
+        self.last_snapshot = None;
+        self.last_full_tick = 0;
+        self.entity_last_update.clear();
+        self.needs_full_resync = true;
+    }
+}
+
 /// A connected player's message channel for lock-free sending
 /// Uses unbounded channel to avoid backpressure blocking the game loop
 #[allow(dead_code)]
@@ -246,6 +293,8 @@ pub struct PlayerConnection {
     /// Current viewport zoom level for filtering (1.0 = normal, 0.1 = zoomed out)
     /// Used to skip sending entities that would be too small to see at current zoom
     pub viewport_zoom: f32,
+    /// Delta compression state for this client
+    pub net_state: ClientNetState,
 }
 
 /// Shared game session that manages the game loop and player connections
@@ -476,6 +525,7 @@ impl GameSession {
                 spectate_target: None,
                 last_activity: Instant::now(),
                 viewport_zoom: 1.0, // Default to normal zoom
+                net_state: ClientNetState::default(),
             },
         );
 
@@ -522,6 +572,7 @@ impl GameSession {
                 spectate_target: None, // Full view by default
                 last_activity: Instant::now(),
                 viewport_zoom: 0.1, // Spectators start zoomed out
+                net_state: ClientNetState::default(),
             },
         );
 
@@ -1376,7 +1427,12 @@ pub async fn broadcast_message(
 /// - Full-view spectators share a single pre-encoded snapshot (Arc)
 /// - Follow-mode spectators reuse the target player's cached snapshot
 /// - Spectators receive updates at 5Hz (every 2nd tick) vs 10Hz for players
-pub async fn broadcast_filtered_snapshots(session: &GameSession, tick: u64) {
+///
+/// DELTA COMPRESSION:
+/// - Sends full snapshot periodically (every FULL_RESYNC_INTERVAL ticks)
+/// - Between full snapshots, sends deltas with only changed fields
+/// - Distance-based rate limiting: close entities 30Hz, medium 7.5Hz, far 3.75Hz
+pub async fn broadcast_filtered_snapshots(session: &mut GameSession, tick: u64) {
     use std::sync::Arc;
 
     // Get full snapshot once
@@ -1463,8 +1519,16 @@ pub async fn broadcast_filtered_snapshots(session: &GameSession, tick: u64) {
     // Rate limit: spectators get updates at reduced rate (every Nth tick)
     let spectator_tick = tick % SPECTATOR_TICK_DIVISOR == 0;
 
+    // Metrics tracking for delta compression
+    #[cfg(feature = "metrics_extended")]
+    let mut delta_updates_sent = 0u64;
+    #[cfg(feature = "metrics_extended")]
+    let mut full_updates_sent = 0u64;
+    #[cfg(feature = "metrics_extended")]
+    let mut total_delta_stats = DeltaStats::default();
+
     // First pass: encode and send to players, cache for potential followers
-    for (&player_id, conn) in session.players.iter() {
+    for (&player_id, conn) in session.players.iter_mut() {
         if conn.is_spectator {
             continue; // Handle spectators in second pass
         }
@@ -1500,21 +1564,94 @@ pub async fn broadcast_filtered_snapshots(session: &GameSession, tick: u64) {
             .copied()
             .unwrap_or(0);
 
-        // Encode the message using pooled buffer
-        let message = ServerMessage::Snapshot(filtered);
-        match encode_pooled(&message) {
-            Ok(encoded) => {
-                // Cache for potential followers (Arc avoids extra allocation)
-                let shared = Arc::new(encoded);
-                player_snapshot_cache.insert(player_id, shared.clone());
+        // Determine if we need a full resync for this client
+        let needs_full = conn.net_state.needs_full_resync
+            || conn.net_state.last_snapshot.is_none()
+            || tick - conn.net_state.last_full_tick >= FULL_RESYNC_INTERVAL;
 
-                // Send to player - Arc::clone is O(1), just increments refcount
-                if let Err(e) = conn.sender.send(shared.clone()) {
-                    debug!("AOI broadcast to {}: channel closed ({})", player_id, e);
+        if needs_full {
+            // Send full snapshot
+            let message = ServerMessage::Snapshot(filtered.clone());
+            match encode_pooled(&message) {
+                Ok(encoded) => {
+                    let shared = Arc::new(encoded);
+                    player_snapshot_cache.insert(player_id, shared.clone());
+
+                    if let Err(e) = conn.sender.send(shared.clone()) {
+                        debug!("AOI broadcast to {}: channel closed ({})", player_id, e);
+                    }
+
+                    // Update net_state for delta tracking
+                    conn.net_state.last_snapshot = Some(filtered);
+                    conn.net_state.last_full_tick = tick;
+                    conn.net_state.needs_full_resync = false;
+                    conn.net_state.entity_last_update.clear();
+
+                    #[cfg(feature = "metrics_extended")]
+                    {
+                        full_updates_sent += 1;
+                    }
+                }
+                Err(e) => {
+                    warn!("Failed to encode snapshot for {}: {}", player_id, e);
+                    conn.net_state.needs_full_resync = true; // Retry next tick
                 }
             }
-            Err(e) => {
-                warn!("Failed to encode snapshot for {}: {}", player_id, e);
+        } else {
+            // Generate and send delta
+            let base_snapshot = conn.net_state.last_snapshot.as_ref().unwrap();
+
+            match generate_delta(
+                base_snapshot,
+                &filtered,
+                player_position,
+                tick,
+                &conn.net_state.entity_last_update,
+            ) {
+                Some((delta, stats)) => {
+                    let message = ServerMessage::Delta(delta);
+                    match encode_pooled(&message) {
+                        Ok(encoded) => {
+                            let shared = Arc::new(encoded);
+                            // For spectator following, we still need to cache the full snapshot
+                            // Generate full snapshot bytes for cache (spectators need full data)
+                            if let Ok(full_encoded) = encode_pooled(&ServerMessage::Snapshot(filtered.clone())) {
+                                player_snapshot_cache.insert(player_id, Arc::new(full_encoded));
+                            }
+
+                            if let Err(e) = conn.sender.send(shared) {
+                                debug!("Delta broadcast to {}: channel closed ({})", player_id, e);
+                            }
+
+                            // Update entity_last_update for rate limiting
+                            for player in &filtered.players {
+                                conn.net_state.entity_last_update.insert(player.id, tick);
+                            }
+
+                            // Update base snapshot for next delta
+                            conn.net_state.last_snapshot = Some(filtered);
+
+                            #[cfg(feature = "metrics_extended")]
+                            {
+                                delta_updates_sent += 1;
+                                total_delta_stats.players_included += stats.players_included;
+                                total_delta_stats.players_skipped += stats.players_skipped;
+                                total_delta_stats.full_rate_count += stats.full_rate_count;
+                                total_delta_stats.reduced_rate_count += stats.reduced_rate_count;
+                                total_delta_stats.dormant_rate_count += stats.dormant_rate_count;
+                            }
+                        }
+                        Err(e) => {
+                            warn!("Failed to encode delta for {}: {}", player_id, e);
+                            conn.net_state.needs_full_resync = true; // Fallback to full
+                        }
+                    }
+                }
+                None => {
+                    // No changes to send - nothing to do
+                    // Still update base snapshot so next delta is relative to current state
+                    conn.net_state.last_snapshot = Some(filtered);
+                }
             }
         }
     }
@@ -1579,6 +1716,14 @@ pub async fn broadcast_filtered_snapshots(session: &GameSession, tick: u64) {
             let reduction = (1.0 - (total_filtered_players as f32 / total_original_players as f32)) * 100.0;
             metrics.aoi_reduction_percent.store(reduction as u64, Ordering::Relaxed);
         }
+
+        // Delta compression metrics
+        metrics.delta_updates_sent.fetch_add(delta_updates_sent, Ordering::Relaxed);
+        metrics.full_updates_sent.fetch_add(full_updates_sent, Ordering::Relaxed);
+        metrics.updates_full_rate.fetch_add(total_delta_stats.full_rate_count as u64, Ordering::Relaxed);
+        metrics.updates_reduced_rate.fetch_add(total_delta_stats.reduced_rate_count as u64, Ordering::Relaxed);
+        metrics.updates_dormant_rate.fetch_add(total_delta_stats.dormant_rate_count as u64, Ordering::Relaxed);
+        metrics.updates_skipped_total.fetch_add(total_delta_stats.players_skipped as u64, Ordering::Relaxed);
     }
 }
 
@@ -2389,13 +2534,14 @@ pub fn start_game_loop(session: Arc<RwLock<GameSession>>) {
             }
 
             // Broadcast AOI-filtered snapshots if needed (each player gets their own filtered view)
+            // Uses write lock to update per-client delta compression state
             if snapshot.is_some() {
                 let session_clone = session.clone();
                 let current_tick = tick_count;
                 tokio::spawn(async move {
-                    let session_guard = session_clone.read().await;
-                    // Use AOI filtering for per-client snapshots
-                    broadcast_filtered_snapshots(&session_guard, current_tick).await;
+                    let mut session_guard = session_clone.write().await;
+                    // Use AOI filtering + delta compression for per-client snapshots
+                    broadcast_filtered_snapshots(&mut session_guard, current_tick).await;
                 });
             }
 
@@ -2485,4 +2631,122 @@ pub async fn start_ai_manager(session: Arc<RwLock<GameSession>>) {
         info!("Starting AI Simulation Manager");
         manager.run(metrics, arena_config).await;
     });
+}
+
+#[cfg(test)]
+mod client_net_state_tests {
+    use super::*;
+    use uuid::Uuid;
+
+    /// Create an empty test snapshot
+    fn test_snapshot() -> GameSnapshot {
+        GameSnapshot {
+            tick: 0,
+            match_phase: crate::game::state::MatchPhase::Playing,
+            match_time: 0.0,
+            countdown: 0.0,
+            players: Vec::new(),
+            projectiles: Vec::new(),
+            debris: Vec::new(),
+            arena_collapse_phase: 0,
+            arena_safe_radius: 3000.0,
+            arena_scale: 1.0,
+            gravity_wells: Vec::new(),
+            total_players: 0,
+            total_alive: 0,
+            density_grid: Vec::new(),
+            notable_players: Vec::new(),
+            echo_client_time: 0,
+            ai_status: None,
+        }
+    }
+
+    #[test]
+    fn test_client_net_state_default() {
+        let state = ClientNetState::default();
+        assert!(state.last_snapshot.is_none());
+        assert_eq!(state.last_full_tick, 0);
+        assert!(state.entity_last_update.is_empty());
+        assert!(state.needs_full_resync);
+    }
+
+    #[test]
+    fn test_client_net_state_reset() {
+        let mut state = ClientNetState::default();
+        state.last_full_tick = 100;
+        state.entity_last_update.insert(Uuid::new_v4(), 50);
+        state.needs_full_resync = false;
+
+        state.reset();
+
+        assert!(state.last_snapshot.is_none());
+        assert_eq!(state.last_full_tick, 0);
+        assert!(state.entity_last_update.is_empty());
+        assert!(state.needs_full_resync);
+    }
+
+    #[test]
+    fn test_full_resync_interval_constant() {
+        // Every 300 ticks = 10 seconds at 30 TPS
+        assert_eq!(FULL_RESYNC_INTERVAL, 300);
+    }
+
+    #[test]
+    fn test_needs_full_on_first_message() {
+        let state = ClientNetState::default();
+        // On first message, needs_full_resync is true and last_snapshot is None
+        // Both conditions trigger a full resync
+        assert!(state.needs_full_resync || state.last_snapshot.is_none());
+    }
+
+    #[test]
+    fn test_needs_full_after_interval() {
+        let state = ClientNetState {
+            last_snapshot: Some(test_snapshot()),
+            last_full_tick: 0,
+            entity_last_update: HashMap::new(),
+            needs_full_resync: false,
+        };
+
+        let current_tick = FULL_RESYNC_INTERVAL + 1;
+        let needs_full = state.needs_full_resync
+            || state.last_snapshot.is_none()
+            || current_tick - state.last_full_tick >= FULL_RESYNC_INTERVAL;
+
+        assert!(needs_full, "Should need full resync after interval elapsed");
+    }
+
+    #[test]
+    fn test_delta_within_interval() {
+        let state = ClientNetState {
+            last_snapshot: Some(test_snapshot()),
+            last_full_tick: 100,
+            entity_last_update: HashMap::new(),
+            needs_full_resync: false,
+        };
+
+        let current_tick = 200; // Only 100 ticks since last full, interval is 300
+        let needs_full = state.needs_full_resync
+            || state.last_snapshot.is_none()
+            || current_tick - state.last_full_tick >= FULL_RESYNC_INTERVAL;
+
+        assert!(!needs_full, "Should send delta within interval");
+    }
+
+    #[test]
+    fn test_entity_last_update_tracking() {
+        let mut state = ClientNetState::default();
+        let player_id = Uuid::new_v4();
+
+        // Initially empty
+        assert!(state.entity_last_update.get(&player_id).is_none());
+
+        // After update
+        state.entity_last_update.insert(player_id, 100);
+        assert_eq!(state.entity_last_update.get(&player_id), Some(&100));
+
+        // Update again
+        state.entity_last_update.insert(player_id, 200);
+        assert_eq!(state.entity_last_update.get(&player_id), Some(&200));
+    }
 }

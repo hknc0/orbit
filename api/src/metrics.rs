@@ -127,6 +127,22 @@ pub struct Metrics {
     pub network_write_failures_total: AtomicU64, // Failed network writes
     pub broadcast_latency_us: AtomicU64,         // Broadcast time in microseconds
 
+    // Delta compression metrics
+    pub delta_updates_sent: AtomicU64,           // Delta update messages sent
+    pub full_updates_sent: AtomicU64,            // Full snapshot messages sent
+    pub delta_bytes_saved: AtomicU64,            // Estimated bytes saved by delta compression
+
+    // Distance-based rate limiting metrics
+    pub updates_full_rate: AtomicU64,            // Entity updates at full rate (30Hz)
+    pub updates_reduced_rate: AtomicU64,         // Entity updates at reduced rate (7.5Hz)
+    pub updates_dormant_rate: AtomicU64,         // Entity updates at dormant rate (3.75Hz)
+    pub updates_skipped_total: AtomicU64,        // Total updates skipped by rate limiting
+
+    // Compression efficiency
+    pub avg_delta_size_bytes: AtomicU64,         // Average delta message size
+    pub avg_snapshot_size_bytes: AtomicU64,      // Average full snapshot size
+    pub compression_ratio: AtomicU64,            // Delta size / Full size (x100 for percentage)
+
     // Rolling tick times for percentile calculation (VecDeque for O(1) pop_front)
     tick_history: RwLock<VecDeque<u64>>,
 }
@@ -214,6 +230,19 @@ impl Metrics {
             // Network quality
             network_write_failures_total: AtomicU64::new(0),
             broadcast_latency_us: AtomicU64::new(0),
+            // Delta compression
+            delta_updates_sent: AtomicU64::new(0),
+            full_updates_sent: AtomicU64::new(0),
+            delta_bytes_saved: AtomicU64::new(0),
+            // Rate limiting
+            updates_full_rate: AtomicU64::new(0),
+            updates_reduced_rate: AtomicU64::new(0),
+            updates_dormant_rate: AtomicU64::new(0),
+            updates_skipped_total: AtomicU64::new(0),
+            // Compression efficiency
+            avg_delta_size_bytes: AtomicU64::new(0),
+            avg_snapshot_size_bytes: AtomicU64::new(0),
+            compression_ratio: AtomicU64::new(0),
             tick_history: RwLock::new(VecDeque::with_capacity(1000)),
         }
     }
@@ -484,6 +513,32 @@ impl Metrics {
             self.network_write_failures_total.load(Ordering::Relaxed));
         metric!("orbit_royale_broadcast_latency_microseconds", "Broadcast time", "gauge",
             self.broadcast_latency_us.load(Ordering::Relaxed));
+
+        // Delta compression metrics
+        metric!("orbit_royale_delta_updates_sent", "Delta update messages sent", "counter",
+            self.delta_updates_sent.load(Ordering::Relaxed));
+        metric!("orbit_royale_full_updates_sent", "Full snapshot messages sent", "counter",
+            self.full_updates_sent.load(Ordering::Relaxed));
+        metric!("orbit_royale_delta_bytes_saved", "Bytes saved by delta compression", "counter",
+            self.delta_bytes_saved.load(Ordering::Relaxed));
+
+        // Rate limiting metrics
+        metric!("orbit_royale_updates_full_rate", "Entity updates at full rate (30Hz)", "counter",
+            self.updates_full_rate.load(Ordering::Relaxed));
+        metric!("orbit_royale_updates_reduced_rate", "Entity updates at reduced rate (7.5Hz)", "counter",
+            self.updates_reduced_rate.load(Ordering::Relaxed));
+        metric!("orbit_royale_updates_dormant_rate", "Entity updates at dormant rate (3.75Hz)", "counter",
+            self.updates_dormant_rate.load(Ordering::Relaxed));
+        metric!("orbit_royale_updates_skipped_total", "Updates skipped by rate limiting", "counter",
+            self.updates_skipped_total.load(Ordering::Relaxed));
+
+        // Compression efficiency
+        metric!("orbit_royale_avg_delta_size_bytes", "Average delta message size", "gauge",
+            self.avg_delta_size_bytes.load(Ordering::Relaxed));
+        metric!("orbit_royale_avg_snapshot_size_bytes", "Average full snapshot size", "gauge",
+            self.avg_snapshot_size_bytes.load(Ordering::Relaxed));
+        metric!("orbit_royale_compression_ratio", "Delta/Full size ratio (x100)", "gauge",
+            self.compression_ratio.load(Ordering::Relaxed));
 
         output
     }
