@@ -276,7 +276,7 @@ export class Game {
       }
 
       // Render
-      this.render();
+      this.render(dt);
 
       // Report viewport changes to server for entity filtering
       this.reportViewportIfChanged();
@@ -311,24 +311,28 @@ export class Game {
     this.transport.sendUnreliable(input);
   }
 
-  private render(): void {
+  private render(deltaTime: number): void {
     // Clear canvas
     this.ctx.fillStyle = '#0a0a1a';
     this.ctx.fillRect(0, 0, this.canvas.width, this.canvas.height);
 
     // Render game world
-    this.renderSystem.render(this.world, {
-      phase: this.phase,
-      matchTime: this.world.getMatchTime(),
-      input: {
-        aimDirection: this.inputSystem.getAimDirection(),
-        chargeRatio: this.inputSystem.getChargeRatio(),
-        isCharging: this.inputSystem.isCharging(),
-        isBoosting: this.inputSystem.isBoosting(),
+    this.renderSystem.render(
+      this.world,
+      {
+        phase: this.phase,
+        matchTime: this.world.getMatchTime(),
+        input: {
+          aimDirection: this.inputSystem.getAimDirection(),
+          chargeRatio: this.inputSystem.getChargeRatio(),
+          isCharging: this.inputSystem.isCharging(),
+          isBoosting: this.inputSystem.isBoosting(),
+        },
+        rtt: this.transport.getRtt(),
+        connectionState: this.transport.getState(),
       },
-      rtt: this.transport.getRtt(),
-      connectionState: this.transport.getState(),
-    });
+      deltaTime
+    );
   }
 
   private handleConnectionStateChange(state: ConnectionState): void {
@@ -459,12 +463,22 @@ export class Game {
         // Add collision effect at the collision point
         this.world.addCollisionEffect(event.position, event.intensity, color);
 
-        // Trigger screen shake if local player is involved
+        // Trigger directional screen shake if local player is involved
         if (
           event.playerA === this.world.localPlayerId ||
           event.playerB === this.world.localPlayerId
         ) {
-          this.renderSystem.triggerShake(event.intensity);
+          const localPlayer = this.world.getLocalPlayer();
+          if (localPlayer) {
+            // Direction from collision point toward player
+            const dir = {
+              x: localPlayer.position.x - event.position.x,
+              y: localPlayer.position.y - event.position.y,
+            };
+            this.renderSystem.triggerShake(event.intensity, dir);
+          } else {
+            this.renderSystem.triggerShake(event.intensity);
+          }
         }
         break;
       }
@@ -485,11 +499,19 @@ export class Game {
           const dx = localPlayer.position.x - event.position.x;
           const dy = localPlayer.position.y - event.position.y;
           const dist = Math.sqrt(dx * dx + dy * dy);
-          // Shake intensity based on distance (stronger when closer)
-          const maxDist = 1500;
+
+          // Scale maxDist with arena size (base 1500 at scale 1.0)
+          const maxDist = 1500 * this.world.arena.scale;
+
           if (dist < maxDist) {
-            const intensity = event.strength * (1 - dist / maxDist) * 0.8;
-            this.renderSystem.triggerShake(intensity);
+            const falloff = 1 - dist / maxDist;
+            // Quadratic falloff for realistic distance attenuation
+            const intensity = event.strength * falloff * falloff * 0.8;
+
+            // Only shake if above threshold (prevents micro-shakes)
+            if (intensity > 0.15) {
+              this.renderSystem.triggerShake(intensity);
+            }
           }
         }
         break;

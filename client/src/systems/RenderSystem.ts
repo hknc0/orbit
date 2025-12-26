@@ -126,6 +126,7 @@ export class RenderSystem {
   // Screen shake effect
   private shakeOffset = { x: 0, y: 0 };
   private shakeIntensity = 0;
+  private shakeDirection: { x: number; y: number } | null = null;
   private readonly SHAKE_DECAY = 0.85;
   private readonly MAX_SHAKE = 12;
 
@@ -362,7 +363,7 @@ export class RenderSystem {
     ctx.globalAlpha = 1.0;
   }
 
-  render(world: World, state: RenderState): void {
+  render(world: World, state: RenderState, deltaTime: number = 1 / 60): void {
     const canvas = this.ctx.canvas;
     const centerX = canvas.width / 2;
     const centerY = canvas.height / 2;
@@ -481,7 +482,7 @@ export class RenderSystem {
     this.ctx.scale(this.currentZoom, this.currentZoom);
     this.ctx.translate(-centerX, -centerY);
     // Update and apply shake
-    this.updateShake();
+    this.updateShake(deltaTime);
     // Then apply camera offset with shake
     // Divide shake by zoom to keep screen-space shake constant regardless of zoom level
     this.ctx.translate(
@@ -1541,8 +1542,15 @@ export class RenderSystem {
   }
 
   // Trigger screen shake (called when local player is in collision)
-  triggerShake(intensity: number): void {
+  triggerShake(intensity: number, direction?: { x: number; y: number }): void {
     this.shakeIntensity = Math.min(this.shakeIntensity + intensity * 8, this.MAX_SHAKE);
+    if (direction) {
+      // Normalize direction
+      const len = Math.sqrt(direction.x * direction.x + direction.y * direction.y);
+      if (len > 0) {
+        this.shakeDirection = { x: direction.x / len, y: direction.y / len };
+      }
+    }
   }
 
   // Update shake (called each frame)
@@ -1636,16 +1644,32 @@ export class RenderSystem {
     }
   }
 
-  private updateShake(): void {
+  private updateShake(deltaTime: number): void {
     if (this.shakeIntensity > 0.5) {
-      const angle = Math.random() * Math.PI * 2;
+      // Random base angle
+      let angle = Math.random() * Math.PI * 2;
+
+      // Bias toward stored direction (30% directional, 70% random)
+      if (this.shakeDirection) {
+        const dirAngle = Math.atan2(this.shakeDirection.y, this.shakeDirection.x);
+        angle = angle * 0.7 + dirAngle * 0.3;
+      }
+
       this.shakeOffset.x = Math.cos(angle) * this.shakeIntensity;
       this.shakeOffset.y = Math.sin(angle) * this.shakeIntensity;
-      this.shakeIntensity *= this.SHAKE_DECAY;
+
+      // Frame-rate independent decay: 0.85^60 per second
+      this.shakeIntensity *= Math.pow(this.SHAKE_DECAY, deltaTime * 60);
+
+      // Fade direction bias as shake decays
+      if (this.shakeIntensity < 2) {
+        this.shakeDirection = null;
+      }
     } else {
       this.shakeOffset.x = 0;
       this.shakeOffset.y = 0;
       this.shakeIntensity = 0;
+      this.shakeDirection = null;
     }
   }
 

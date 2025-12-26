@@ -820,6 +820,43 @@ describe('RenderSystem Class', () => {
       // Implementation might clamp or use absolute value
       expect(() => renderSystem.triggerShake(-0.5)).not.toThrow();
     });
+
+    it('should accept optional direction parameter', async () => {
+      const { RenderSystem } = await import('./RenderSystem');
+      const renderSystem = new RenderSystem(ctx);
+
+      expect(() => renderSystem.triggerShake(0.5, { x: 1, y: 0 })).not.toThrow();
+    });
+
+    it('should handle direction with zero length', async () => {
+      const { RenderSystem } = await import('./RenderSystem');
+      const renderSystem = new RenderSystem(ctx);
+
+      // Zero-length direction should not cause errors
+      expect(() => renderSystem.triggerShake(0.5, { x: 0, y: 0 })).not.toThrow();
+    });
+
+    it('should accumulate shake from multiple triggers', async () => {
+      const { RenderSystem } = await import('./RenderSystem');
+      const renderSystem = new RenderSystem(ctx);
+
+      // Multiple small shakes should accumulate
+      renderSystem.triggerShake(0.2);
+      renderSystem.triggerShake(0.2);
+      renderSystem.triggerShake(0.2);
+      expect(() => renderSystem.triggerShake(0.2)).not.toThrow();
+    });
+
+    it('should cap intensity at MAX_SHAKE', async () => {
+      const { RenderSystem } = await import('./RenderSystem');
+      const renderSystem = new RenderSystem(ctx);
+
+      // Trigger with very high intensity multiple times
+      renderSystem.triggerShake(10);
+      renderSystem.triggerShake(10);
+      renderSystem.triggerShake(10);
+      expect(() => renderSystem.triggerShake(10)).not.toThrow();
+    });
   });
 
   describe('screenToWorld', () => {
