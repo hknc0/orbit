@@ -72,50 +72,100 @@ describe('Vec2', () => {
 
 // Test getEffectQuality logic
 describe('Effect Quality Logic', () => {
-  // Simulate the getEffectQuality function
-  function getEffectQuality(currentZoom: number): 'full' | 'reduced' | 'minimal' {
+  // Simulate the getEffectQuality function with spectator awareness
+  function getEffectQuality(
+    currentZoom: number,
+    isSpectator: boolean = false,
+    spectateTargetId: string | null = null
+  ): 'full' | 'reduced' | 'minimal' {
+    // Full-view spectators: viewing entire arena with all entities
+    if (isSpectator && spectateTargetId === null) {
+      if (currentZoom > 0.3) return 'reduced';
+      return 'minimal';
+    }
+
+    // Players AND follow-mode spectators use normal thresholds
     if (currentZoom > 0.4) return 'full';
     if (currentZoom > 0.2) return 'reduced';
     return 'minimal';
   }
 
-  it('should return full for normal player zoom (1.0)', () => {
-    expect(getEffectQuality(1.0)).toBe('full');
+  describe('Normal player (unchanged behavior)', () => {
+    it('should return full for normal player zoom (1.0)', () => {
+      expect(getEffectQuality(1.0)).toBe('full');
+    });
+
+    it('should return full for player at max speed zoom (0.45)', () => {
+      expect(getEffectQuality(0.45)).toBe('full');
+    });
+
+    it('should return full for zoom just above threshold (0.41)', () => {
+      expect(getEffectQuality(0.41)).toBe('full');
+    });
+
+    it('should return reduced for medium zoom (0.3)', () => {
+      expect(getEffectQuality(0.3)).toBe('reduced');
+    });
+
+    it('should return minimal for very zoomed out (0.1)', () => {
+      expect(getEffectQuality(0.1)).toBe('minimal');
+    });
+
+    it('should handle edge cases', () => {
+      expect(getEffectQuality(0.4)).toBe('reduced'); // Exactly at threshold
+      expect(getEffectQuality(0.2)).toBe('minimal'); // Exactly at threshold
+    });
   });
 
-  it('should return full for player at max speed zoom (0.45)', () => {
-    expect(getEffectQuality(0.45)).toBe('full');
+  describe('Full-view spectator (reduced quality)', () => {
+    it('should return reduced at high zoom (0.6) - never full', () => {
+      expect(getEffectQuality(0.6, true, null)).toBe('reduced');
+    });
+
+    it('should return reduced at zoom 0.5 - shrunken arena', () => {
+      expect(getEffectQuality(0.5, true, null)).toBe('reduced');
+    });
+
+    it('should return reduced at zoom 0.35', () => {
+      expect(getEffectQuality(0.35, true, null)).toBe('reduced');
+    });
+
+    it('should return minimal at zoom 0.3 (threshold)', () => {
+      expect(getEffectQuality(0.3, true, null)).toBe('minimal');
+    });
+
+    it('should return minimal at low zoom (0.1)', () => {
+      expect(getEffectQuality(0.1, true, null)).toBe('minimal');
+    });
   });
 
-  it('should return full for zoom just above threshold (0.41)', () => {
-    expect(getEffectQuality(0.41)).toBe('full');
+  describe('Follow-mode spectator (same as player)', () => {
+    it('should return full at high zoom (0.6)', () => {
+      expect(getEffectQuality(0.6, true, 'player-123')).toBe('full');
+    });
+
+    it('should return full at zoom 0.45', () => {
+      expect(getEffectQuality(0.45, true, 'player-123')).toBe('full');
+    });
+
+    it('should return reduced at zoom 0.3', () => {
+      expect(getEffectQuality(0.3, true, 'player-123')).toBe('reduced');
+    });
+
+    it('should return minimal at zoom 0.1', () => {
+      expect(getEffectQuality(0.1, true, 'player-123')).toBe('minimal');
+    });
   });
 
-  it('should return reduced for medium zoom (0.3)', () => {
-    expect(getEffectQuality(0.3)).toBe('reduced');
-  });
+  describe('Edge cases', () => {
+    it('should handle NaN gracefully', () => {
+      expect(getEffectQuality(NaN)).toBe('minimal');
+    });
 
-  it('should return minimal for spectator full map view (0.1)', () => {
-    expect(getEffectQuality(0.1)).toBe('minimal');
-  });
-
-  it('should return minimal for very small zoom (0.05)', () => {
-    expect(getEffectQuality(0.05)).toBe('minimal');
-  });
-
-  it('should handle edge cases', () => {
-    expect(getEffectQuality(0.4)).toBe('reduced'); // Exactly at threshold
-    expect(getEffectQuality(0.2)).toBe('minimal'); // Exactly at threshold
-  });
-
-  it('should handle NaN gracefully', () => {
-    // NaN > 0.4 is false, NaN > 0.2 is false
-    expect(getEffectQuality(NaN)).toBe('minimal');
-  });
-
-  it('should handle Infinity', () => {
-    expect(getEffectQuality(Infinity)).toBe('full');
-    expect(getEffectQuality(-Infinity)).toBe('minimal');
+    it('should handle Infinity', () => {
+      expect(getEffectQuality(Infinity)).toBe('full');
+      expect(getEffectQuality(-Infinity)).toBe('minimal');
+    });
   });
 });
 

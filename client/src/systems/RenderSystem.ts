@@ -117,12 +117,19 @@ export class RenderSystem {
 
   // Effect quality levels based on zoom for spectator optimization
   // Reduces rendering cost when zoomed out (effects too small to see)
-  private getEffectQuality(): 'full' | 'reduced' | 'minimal' {
-    // Full effects when zoom > 0.4 (normal player view or close spectator follow)
+  // Full-view spectators always use reduced/minimal (viewing all entities)
+  private getEffectQuality(world: World): 'full' | 'reduced' | 'minimal' {
+    // Full-view spectators: viewing entire arena with all entities
+    // Use reduced/minimal quality regardless of zoom (arena may be small)
+    if (world.isSpectator && world.spectateTargetId === null) {
+      if (this.currentZoom > 0.3) return 'reduced';
+      return 'minimal';
+    }
+
+    // Players AND follow-mode spectators use normal thresholds
+    // (follow-mode sees same AOI as target player)
     if (this.currentZoom > 0.4) return 'full';
-    // Reduced effects when zoom > 0.2 (medium zoom out)
     if (this.currentZoom > 0.2) return 'reduced';
-    // Minimal effects when very zoomed out (full map view)
     return 'minimal';
   }
 
@@ -207,7 +214,7 @@ export class RenderSystem {
 
   private renderPlayerTrails(world: World): void {
     // Skip trails entirely when very zoomed out (sub-pixel rendering)
-    const quality = this.getEffectQuality();
+    const quality = this.getEffectQuality(world);
     if (quality === 'minimal') return;
 
     const now = Date.now();
@@ -908,7 +915,7 @@ export class RenderSystem {
   // Render boost flames separately (rendered first, behind trails)
   private renderBoostFlames(world: World, localPlayerBoosting: boolean): void {
     // Skip flames entirely when very zoomed out (sub-pixel rendering)
-    const quality = this.getEffectQuality();
+    const quality = this.getEffectQuality(world);
     if (quality === 'minimal') return;
 
     const players = world.getPlayers();
@@ -951,7 +958,7 @@ export class RenderSystem {
   private renderPlayerBodies(world: World): void {
     const players = world.getPlayers();
     const now = Date.now();
-    const quality = this.getEffectQuality();
+    const quality = this.getEffectQuality(world);
 
     for (const player of players.values()) {
       if (!player.alive) continue;
@@ -1161,7 +1168,7 @@ export class RenderSystem {
     if (effects.length === 0) return;
 
     const ctx = this.ctx;
-    const quality = this.getEffectQuality();
+    const quality = this.getEffectQuality(world);
 
     for (const effect of effects) {
       const { position, color, radius } = effect;
@@ -1284,7 +1291,7 @@ export class RenderSystem {
 
   private renderCollisionEffects(world: World): void {
     // Skip collision effects entirely when very zoomed out
-    const quality = this.getEffectQuality();
+    const quality = this.getEffectQuality(world);
     if (quality === 'minimal') return;
 
     const effects = world.getCollisionEffects();
