@@ -293,22 +293,51 @@ impl GameLoop {
 
     /// Process pending player inputs
     fn process_inputs(&mut self) {
+        // Max inputs to process per player per tick (prevents flooding)
+        const MAX_INPUTS_PER_TICK: usize = 10;
+
         let inputs: Vec<(PlayerId, Vec<PlayerInput>)> =
             self.pending_inputs.drain().collect();
 
         for (player_id, player_inputs) in inputs {
-            // Process most recent input (could implement input buffer here)
-            if let Some(input) = player_inputs.into_iter().last() {
-                physics::apply_thrust(&mut self.state, player_id, &input, DT);
-                projectile::process_input(
-                    &mut self.state,
-                    player_id,
-                    &input,
-                    &mut self.charge_manager,
-                    DT,
-                );
+            if player_inputs.is_empty() {
+                continue;
             }
+
+            let coalesced = Self::coalesce_inputs(&player_inputs, MAX_INPUTS_PER_TICK);
+
+            physics::apply_thrust(&mut self.state, player_id, &coalesced, DT);
+            projectile::process_input(
+                &mut self.state,
+                player_id,
+                &coalesced,
+                &mut self.charge_manager,
+                DT,
+            );
         }
+    }
+
+    /// Coalesce multiple inputs into one, preserving transient event flags.
+    ///
+    /// When client sends faster than server ticks (e.g., 60fps client vs 30Hz server),
+    /// multiple inputs can arrive per tick. We use the latest input for continuous
+    /// state (thrust, aim) but OR together transient flags (fire_released) to prevent
+    /// missed events.
+    fn coalesce_inputs(inputs: &[PlayerInput], max_inputs: usize) -> PlayerInput {
+        // Limit inputs to prevent flooding attacks
+        let inputs = if inputs.len() > max_inputs {
+            &inputs[inputs.len() - max_inputs..]
+        } else {
+            inputs
+        };
+
+        // Use latest input as base for continuous state
+        let mut coalesced = inputs.last().unwrap().clone();
+
+        // OR transient flags - these are one-shot events that must not be missed
+        coalesced.fire_released = inputs.iter().any(|i| i.fire_released);
+
+        coalesced
     }
 
     /// Process AI inputs
@@ -669,5 +698,132 @@ mod tests {
 
         // No projectile should have been created (charge was reset)
         assert_eq!(game_loop.state().projectiles.len(), 0);
+    }
+
+    #[test]
+    fn test_fire_released_preserved_when_multiple_inputs_coalesce() {
+        // Regression test: When multiple inputs arrive in one tick,
+        // fire_released must be preserved even if a later input has it false
+        let mut game_loop = GameLoop::new(GameLoopConfig::default());
+        let player = create_player("Test", false);
+        let player_id = player.id;
+        game_loop.add_player(player);
+        // Add a second player so match doesn't end (alive_count > 1)
+        game_loop.add_player(create_player("Opponent", true));
+        game_loop.state_mut().match_state.phase = MatchPhase::Playing;
+
+        // Charge up by holding fire for enough ticks (MIN_CHARGE_TIME = 0.2s, DT = 1/30)
+        for i in 1..=10 {
+            game_loop.queue_input(
+                player_id,
+                PlayerInput {
+                    sequence: i as u64,
+                    tick: i as u64,
+                    fire: true,
+                    aim: Vec2::new(1.0, 0.0),
+                    ..Default::default()
+                },
+            );
+            game_loop.tick();
+        }
+
+        // Now simulate the bug scenario: multiple inputs arrive in ONE tick
+        // Input 1: fire_released = true (player released space)
+        game_loop.queue_input(
+            player_id,
+            PlayerInput {
+                sequence: 11,
+                tick: 11,
+                fire: false,
+                fire_released: true, // THIS MUST BE PRESERVED
+                aim: Vec2::new(1.0, 0.0),
+                ..Default::default()
+            },
+        );
+
+        // Input 2: fire_released = false (next frame, flag already consumed by client)
+        game_loop.queue_input(
+            player_id,
+            PlayerInput {
+                sequence: 12,
+                tick: 11,
+                fire: false,
+                fire_released: false, // Would overwrite if we only used .last()
+                aim: Vec2::new(1.0, 0.0),
+                ..Default::default()
+            },
+        );
+
+        // Process both inputs in one tick
+        game_loop.tick();
+
+        // Projectile MUST be created - the fire_released from input 11 should be preserved
+        assert_eq!(
+            game_loop.state().projectiles.len(),
+            1,
+            "Projectile should fire even when fire_released is overwritten by later input"
+        );
+    }
+
+    #[test]
+    fn test_coalesce_inputs_preserves_fire_released() {
+        let inputs = vec![
+            PlayerInput {
+                fire_released: false,
+                ..Default::default()
+            },
+            PlayerInput {
+                fire_released: true, // This must be preserved
+                ..Default::default()
+            },
+            PlayerInput {
+                fire_released: false,
+                ..Default::default()
+            },
+        ];
+
+        let coalesced = GameLoop::coalesce_inputs(&inputs, 10);
+        assert!(coalesced.fire_released, "fire_released should be OR'd across all inputs");
+    }
+
+    #[test]
+    fn test_coalesce_inputs_uses_latest_continuous_state() {
+        let inputs = vec![
+            PlayerInput {
+                thrust: Vec2::new(1.0, 0.0),
+                aim: Vec2::new(0.0, 1.0),
+                boost: false,
+                ..Default::default()
+            },
+            PlayerInput {
+                thrust: Vec2::new(0.0, 1.0),
+                aim: Vec2::new(1.0, 0.0),
+                boost: true,
+                ..Default::default()
+            },
+        ];
+
+        let coalesced = GameLoop::coalesce_inputs(&inputs, 10);
+        assert_eq!(coalesced.thrust, Vec2::new(0.0, 1.0), "Should use latest thrust");
+        assert_eq!(coalesced.aim, Vec2::new(1.0, 0.0), "Should use latest aim");
+        assert!(coalesced.boost, "Should use latest boost state");
+    }
+
+    #[test]
+    fn test_coalesce_inputs_limits_flood() {
+        // Create 20 inputs, only last 5 should be considered
+        let inputs: Vec<PlayerInput> = (0..20)
+            .map(|i| PlayerInput {
+                sequence: i,
+                fire_released: i == 5, // Early input has fire_released
+                ..Default::default()
+            })
+            .collect();
+
+        let coalesced = GameLoop::coalesce_inputs(&inputs, 5);
+
+        // fire_released at index 5 should be discarded (only last 5 kept: indices 15-19)
+        assert!(!coalesced.fire_released, "Should only consider last 5 inputs");
+        assert_eq!(coalesced.sequence, 19, "Should use latest input");
     }
 }
