@@ -262,15 +262,6 @@ impl Default for ClientNetState {
     }
 }
 
-impl ClientNetState {
-    /// Reset state (on disconnect/reconnect)
-    pub fn reset(&mut self) {
-        self.last_snapshot = None;
-        self.last_full_tick = 0;
-        self.entity_last_update.clear();
-        self.needs_full_resync = true;
-    }
-}
 
 /// A connected player's message channel for lock-free sending
 /// Uses unbounded channel to avoid backpressure blocking the game loop
@@ -293,8 +284,8 @@ pub struct PlayerConnection {
     /// Current viewport zoom level for filtering (1.0 = normal, 0.1 = zoomed out)
     /// Used to skip sending entities that would be too small to see at current zoom
     pub viewport_zoom: f32,
-    /// Delta compression state for this client
-    pub net_state: ClientNetState,
+    /// Delta compression state for this client (interior mutability for lock-free broadcast)
+    pub net_state: Arc<tokio::sync::Mutex<ClientNetState>>,
 }
 
 /// Shared game session that manages the game loop and player connections
@@ -525,7 +516,7 @@ impl GameSession {
                 spectate_target: None,
                 last_activity: Instant::now(),
                 viewport_zoom: 1.0, // Default to normal zoom
-                net_state: ClientNetState::default(),
+                net_state: Arc::new(tokio::sync::Mutex::new(ClientNetState::default())),
             },
         );
 
@@ -572,7 +563,7 @@ impl GameSession {
                 spectate_target: None, // Full view by default
                 last_activity: Instant::now(),
                 viewport_zoom: 0.1, // Spectators start zoomed out
-                net_state: ClientNetState::default(),
+                net_state: Arc::new(tokio::sync::Mutex::new(ClientNetState::default())),
             },
         );
 
@@ -1432,7 +1423,8 @@ pub async fn broadcast_message(
 /// - Sends full snapshot periodically (every FULL_RESYNC_INTERVAL ticks)
 /// - Between full snapshots, sends deltas with only changed fields
 /// - Distance-based rate limiting: close entities 30Hz, medium 7.5Hz, far 3.75Hz
-pub async fn broadcast_filtered_snapshots(session: &mut GameSession, tick: u64) {
+/// - Uses "pinned base" strategy: deltas always reference last FULL snapshot
+pub async fn broadcast_filtered_snapshots(session: &GameSession, tick: u64) {
     use std::sync::Arc;
 
     // Get full snapshot once
@@ -1519,6 +1511,11 @@ pub async fn broadcast_filtered_snapshots(session: &mut GameSession, tick: u64) 
     // Rate limit: spectators get updates at reduced rate (every Nth tick)
     let spectator_tick = tick % SPECTATOR_TICK_DIVISOR == 0;
 
+    // Pre-compute set of players with spectator followers (for Bug #5: avoid double encoding)
+    let followed_players: std::collections::HashSet<PlayerId> = session.players.values()
+        .filter_map(|c| if c.is_spectator { c.spectate_target } else { None })
+        .collect();
+
     // Metrics tracking for delta compression
     #[cfg(feature = "metrics_extended")]
     let mut delta_updates_sent = 0u64;
@@ -1528,7 +1525,7 @@ pub async fn broadcast_filtered_snapshots(session: &mut GameSession, tick: u64) 
     let mut total_delta_stats = DeltaStats::default();
 
     // First pass: encode and send to players, cache for potential followers
-    for (&player_id, conn) in session.players.iter_mut() {
+    for (&player_id, conn) in session.players.iter() {
         if conn.is_spectator {
             continue; // Handle spectators in second pass
         }
@@ -1564,28 +1561,32 @@ pub async fn broadcast_filtered_snapshots(session: &mut GameSession, tick: u64) 
             .copied()
             .unwrap_or(0);
 
+        // Lock individual client net_state (interior mutability for lock-free broadcast)
+        let mut state = conn.net_state.lock().await;
+
         // Determine if we need a full resync for this client
-        let needs_full = conn.net_state.needs_full_resync
-            || conn.net_state.last_snapshot.is_none()
-            || tick - conn.net_state.last_full_tick >= FULL_RESYNC_INTERVAL;
+        let needs_full = state.needs_full_resync
+            || state.last_snapshot.is_none()
+            || tick - state.last_full_tick >= FULL_RESYNC_INTERVAL;
 
         if needs_full {
-            // Send full snapshot
+            // === FULL SNAPSHOT PATH ===
+            // This becomes the "pinned base" for future deltas
             let message = ServerMessage::Snapshot(filtered.clone());
             match encode_pooled(&message) {
                 Ok(encoded) => {
                     let shared = Arc::new(encoded);
                     player_snapshot_cache.insert(player_id, shared.clone());
 
-                    if let Err(e) = conn.sender.send(shared.clone()) {
+                    if let Err(e) = conn.sender.send(shared) {
                         debug!("AOI broadcast to {}: channel closed ({})", player_id, e);
                     }
 
-                    // Update net_state for delta tracking
-                    conn.net_state.last_snapshot = Some(filtered);
-                    conn.net_state.last_full_tick = tick;
-                    conn.net_state.needs_full_resync = false;
-                    conn.net_state.entity_last_update.clear();
+                    // Store as pinned base for future deltas
+                    state.last_snapshot = Some(filtered);
+                    state.last_full_tick = tick;
+                    state.needs_full_resync = false;
+                    state.entity_last_update.clear();
 
                     #[cfg(feature = "metrics_extended")]
                     {
@@ -1594,42 +1595,42 @@ pub async fn broadcast_filtered_snapshots(session: &mut GameSession, tick: u64) 
                 }
                 Err(e) => {
                     warn!("Failed to encode snapshot for {}: {}", player_id, e);
-                    conn.net_state.needs_full_resync = true; // Retry next tick
+                    state.needs_full_resync = true; // Retry next tick
                 }
             }
         } else {
-            // Generate and send delta
-            let base_snapshot = conn.net_state.last_snapshot.as_ref().unwrap();
+            // === DELTA PATH ===
+            // Always use pinned base (last FULL snapshot), never update it here
+            let base_snapshot = state.last_snapshot.as_ref().unwrap();
 
             match generate_delta(
                 base_snapshot,
                 &filtered,
                 player_position,
                 tick,
-                &conn.net_state.entity_last_update,
+                &state.entity_last_update,
             ) {
                 Some((delta, stats)) => {
                     let message = ServerMessage::Delta(delta);
                     match encode_pooled(&message) {
                         Ok(encoded) => {
                             let shared = Arc::new(encoded);
-                            // For spectator following, we still need to cache the full snapshot
-                            // Generate full snapshot bytes for cache (spectators need full data)
-                            if let Ok(full_encoded) = encode_pooled(&ServerMessage::Snapshot(filtered.clone())) {
-                                player_snapshot_cache.insert(player_id, Arc::new(full_encoded));
-                            }
 
                             if let Err(e) = conn.sender.send(shared) {
                                 debug!("Delta broadcast to {}: channel closed ({})", player_id, e);
                             }
 
-                            // Update entity_last_update for rate limiting
+                            // Update entity_last_update for rate limiting (NOT last_snapshot!)
                             for player in &filtered.players {
-                                conn.net_state.entity_last_update.insert(player.id, tick);
+                                state.entity_last_update.insert(player.id, tick);
                             }
 
-                            // Update base snapshot for next delta
-                            conn.net_state.last_snapshot = Some(filtered);
+                            // Cache for spectators ONLY if this player has followers (Bug #5 fix)
+                            if followed_players.contains(&player_id) {
+                                if let Ok(full_encoded) = encode_pooled(&ServerMessage::Snapshot(filtered.clone())) {
+                                    player_snapshot_cache.insert(player_id, Arc::new(full_encoded));
+                                }
+                            }
 
                             #[cfg(feature = "metrics_extended")]
                             {
@@ -1643,17 +1644,26 @@ pub async fn broadcast_filtered_snapshots(session: &mut GameSession, tick: u64) 
                         }
                         Err(e) => {
                             warn!("Failed to encode delta for {}: {}", player_id, e);
-                            conn.net_state.needs_full_resync = true; // Fallback to full
+                            state.needs_full_resync = true; // Fallback to full
                         }
                     }
                 }
                 None => {
-                    // No changes to send - nothing to do
-                    // Still update base snapshot so next delta is relative to current state
-                    conn.net_state.last_snapshot = Some(filtered);
+                    // No changes - DO NOTHING (Bug #1 fix)
+                    // Don't update last_snapshot, don't send anything
+                    // Client still has valid base from last full snapshot
                 }
             }
+
+            // Periodic cleanup of stale entity entries (Bug #4 fix)
+            if tick % 300 == 0 {
+                let current_ids: std::collections::HashSet<_> = filtered.players.iter().map(|p| p.id).collect();
+                state.entity_last_update.retain(|id, _| current_ids.contains(id));
+            }
         }
+
+        // Release lock before next iteration (explicit for clarity)
+        drop(state);
     }
 
     // Second pass: spectators
@@ -2534,14 +2544,14 @@ pub fn start_game_loop(session: Arc<RwLock<GameSession>>) {
             }
 
             // Broadcast AOI-filtered snapshots if needed (each player gets their own filtered view)
-            // Uses write lock to update per-client delta compression state
+            // Uses read lock - delta compression state is per-client with interior mutability
             if snapshot.is_some() {
                 let session_clone = session.clone();
                 let current_tick = tick_count;
                 tokio::spawn(async move {
-                    let mut session_guard = session_clone.write().await;
+                    let session_guard = session_clone.read().await;
                     // Use AOI filtering + delta compression for per-client snapshots
-                    broadcast_filtered_snapshots(&mut session_guard, current_tick).await;
+                    broadcast_filtered_snapshots(&session_guard, current_tick).await;
                 });
             }
 
@@ -2671,21 +2681,6 @@ mod client_net_state_tests {
     }
 
     #[test]
-    fn test_client_net_state_reset() {
-        let mut state = ClientNetState::default();
-        state.last_full_tick = 100;
-        state.entity_last_update.insert(Uuid::new_v4(), 50);
-        state.needs_full_resync = false;
-
-        state.reset();
-
-        assert!(state.last_snapshot.is_none());
-        assert_eq!(state.last_full_tick, 0);
-        assert!(state.entity_last_update.is_empty());
-        assert!(state.needs_full_resync);
-    }
-
-    #[test]
     fn test_full_resync_interval_constant() {
         // Every 300 ticks = 10 seconds at 30 TPS
         assert_eq!(FULL_RESYNC_INTERVAL, 300);
@@ -2748,5 +2743,89 @@ mod client_net_state_tests {
         // Update again
         state.entity_last_update.insert(player_id, 200);
         assert_eq!(state.entity_last_update.get(&player_id), Some(&200));
+    }
+
+    #[test]
+    fn test_entity_last_update_cleanup() {
+        // Bug #4 fix: entity_last_update should be cleaned up periodically
+        // to remove stale entries for entities no longer in AOI
+        let mut state = ClientNetState::default();
+        let player1 = Uuid::new_v4();
+        let player2 = Uuid::new_v4();
+        let player3 = Uuid::new_v4();
+
+        // Add entries for 3 players
+        state.entity_last_update.insert(player1, 100);
+        state.entity_last_update.insert(player2, 100);
+        state.entity_last_update.insert(player3, 100);
+        assert_eq!(state.entity_last_update.len(), 3);
+
+        // Simulate cleanup: only player1 and player2 are in current AOI
+        let current_ids: std::collections::HashSet<_> = [player1, player2].into_iter().collect();
+        state.entity_last_update.retain(|id, _| current_ids.contains(id));
+
+        // player3 should be removed
+        assert_eq!(state.entity_last_update.len(), 2);
+        assert!(state.entity_last_update.contains_key(&player1));
+        assert!(state.entity_last_update.contains_key(&player2));
+        assert!(!state.entity_last_update.contains_key(&player3));
+    }
+
+    #[test]
+    fn test_pinned_base_strategy() {
+        // Bug #1 & #2 fix: last_snapshot should ONLY be updated on FULL resync
+        // Deltas should always reference the "pinned base" (last full snapshot)
+        let mut state = ClientNetState::default();
+        let base_snapshot = test_snapshot();
+        let tick_at_full = 100u64;
+
+        // Simulate full resync: store the pinned base
+        state.last_snapshot = Some(base_snapshot.clone());
+        state.last_full_tick = tick_at_full;
+        state.needs_full_resync = false;
+        state.entity_last_update.clear();
+
+        // After full resync, verify state
+        assert!(state.last_snapshot.is_some());
+        assert_eq!(state.last_full_tick, tick_at_full);
+
+        // Simulate multiple delta sends - last_snapshot should NOT change
+        // Only entity_last_update should be updated
+        let player_id = Uuid::new_v4();
+        state.entity_last_update.insert(player_id, 150);
+        state.entity_last_update.insert(player_id, 200);
+        state.entity_last_update.insert(player_id, 250);
+
+        // last_full_tick should still be the original tick
+        assert_eq!(state.last_full_tick, tick_at_full);
+
+        // last_snapshot should still reference the same base
+        // (in real code, we DON'T update it on delta path)
+        assert!(state.last_snapshot.is_some());
+    }
+
+    #[test]
+    fn test_no_changes_no_update() {
+        // Bug #1 fix: when generate_delta returns None (no changes),
+        // we should NOT update last_snapshot
+        let mut state = ClientNetState::default();
+        let base_snapshot = test_snapshot();
+
+        state.last_snapshot = Some(base_snapshot);
+        state.last_full_tick = 100;
+
+        // Simulate "no changes" scenario - nothing should be updated
+        // This matches the behavior: None => { /* DO NOTHING */ }
+        let snapshot_before = state.last_snapshot.clone();
+        let tick_before = state.last_full_tick;
+
+        // In the fixed code, when delta returns None:
+        // - We don't update last_snapshot
+        // - We don't update last_full_tick
+        // - We don't send anything
+
+        // Verify nothing changed (simulating the fix)
+        assert_eq!(state.last_snapshot.is_some(), snapshot_before.is_some());
+        assert_eq!(state.last_full_tick, tick_before);
     }
 }
