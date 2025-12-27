@@ -711,15 +711,15 @@ describe('StateSync', () => {
       expect(player?.bornTime).toBe(0);
     });
 
-    it('should track birth times for players spawning after first snapshot', () => {
+    it('should skip birth animation during AOI stabilization period', () => {
       // First snapshot without player
       mockPerformanceNow = 1000;
       stateSync.applySnapshot(createMockSnapshot(1, {
         players: [],
       }));
 
-      // Second snapshot with new player
-      mockPerformanceNow = 2000;
+      // Second snapshot with new player (within 2s AOI stabilization period)
+      mockPerformanceNow = 2000; // Only 1s after first snapshot
       stateSync.applySnapshot(createMockSnapshot(2, {
         players: [
           createMockPlayerSnapshot({
@@ -729,15 +729,59 @@ describe('StateSync', () => {
         ],
       }));
 
-      // Set time after second snapshot for proper interpolation
       mockPerformanceNow = 2200;
       const state = stateSync.getInterpolatedState();
       const player = state?.players.get('player-1');
 
-      // Player should exist in interpolated state
+      // During stabilization, new players should NOT animate (bornTime = 0)
+      // This prevents the "pop-in" bug when rejoining
+      expect(player?.bornTime).toBe(0);
+    });
+
+    it('should animate new players spawning after AOI stabilization', () => {
+      // First snapshot
+      mockPerformanceNow = 1000;
+      stateSync.applySnapshot(createMockSnapshot(1, {
+        players: [],
+      }));
+
+      // Second snapshot (still empty, building up buffer)
+      mockPerformanceNow = 1100;
+      stateSync.applySnapshot(createMockSnapshot(2, {
+        players: [],
+      }));
+
+      // Wait for AOI stabilization (2 seconds) then add new player
+      mockPerformanceNow = 3500; // 2.5s after first snapshot - past stabilization
+      stateSync.applySnapshot(createMockSnapshot(3, {
+        players: [
+          createMockPlayerSnapshot({
+            id: 'player-1',
+            spawnProtection: true,
+            alive: true,
+          }),
+        ],
+      }));
+
+      // Fourth snapshot to enable interpolation
+      mockPerformanceNow = 3600;
+      stateSync.applySnapshot(createMockSnapshot(4, {
+        players: [
+          createMockPlayerSnapshot({
+            id: 'player-1',
+            spawnProtection: true,
+            alive: true,
+          }),
+        ],
+      }));
+
+      mockPerformanceNow = 3650;
+      const state = stateSync.getInterpolatedState();
+      const player = state?.players.get('player-1');
+
+      // After stabilization, new players with spawn protection SHOULD animate
       expect(player).toBeDefined();
-      // bornTime should be defined (exact value depends on internal timing)
-      expect(player?.bornTime).toBeDefined();
+      expect(player?.bornTime).toBeGreaterThan(0);
     });
 
     it('should track birth times on respawn', () => {
