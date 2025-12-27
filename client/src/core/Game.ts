@@ -43,6 +43,9 @@ export class Game {
   private lastReportedZoom: number = 1.0;
   private readonly VIEWPORT_REPORT_THRESHOLD = 0.05; // Report when zoom changes by 5%
 
+  // Pending phase change (when waiting for snapshot data to be ready)
+  private pendingPhaseChange: { phase: MatchPhase; countdown: number } | null = null;
+
   // Server URL (set via setServer, secure default to localhost)
   private serverUrl: string = 'https://localhost:4433';
   private certHash?: string;
@@ -212,6 +215,7 @@ export class Game {
     this.stateSync.reset();
     this.inputSystem.reset();    // Reset state but keep listeners for next game
     this.renderSystem.reset();   // Clear camera and trails for fresh start
+    this.pendingPhaseChange = null; // Clear any pending phase changes
     this.setPhase('menu');
     this.stopGameLoop();
   }
@@ -264,6 +268,13 @@ export class Game {
     try {
       const dt = Math.min((currentTime - this.lastTime) / 1000, 0.1);
       this.lastTime = currentTime;
+
+      // Check if we have a pending phase change waiting for snapshot data
+      if (this.pendingPhaseChange && this.stateSync.isReady()) {
+        // Data is ready - apply the pending phase change
+        const { phase, countdown } = this.pendingPhaseChange;
+        this.handlePhaseChange(phase, countdown);
+      }
 
       // Update input and send to server
       if (this.phase === 'playing' || this.phase === 'countdown') {
@@ -408,13 +419,24 @@ export class Game {
     // Notify UI of initial spectator mode
     this.events.onSpectatorModeChange?.(isSpectator);
 
-    // Start game loop but stay in connecting phase until first snapshot arrives
-    // This prevents flicker from showing game before player data is ready
+    // Start game loop but stay in connecting phase until we have enough snapshot data
+    // This ensures the world is fully populated before showing the local player
     this.lastTime = performance.now();
     this.animationFrameId = requestAnimationFrame(this.loop.bind(this));
   }
 
-  private handlePhaseChange(phase: MatchPhase, _countdown: number): void {
+  private handlePhaseChange(phase: MatchPhase, countdown: number): void {
+    // Only transition out of 'connecting' phase if we have enough snapshot data
+    // This ensures the world is fully populated before showing to the player
+    if (this.phase === 'connecting' && !this.stateSync.isReady()) {
+      // Not ready yet - save the pending phase change and wait for snapshots
+      this.pendingPhaseChange = { phase, countdown };
+      return;
+    }
+
+    // Clear any pending phase change
+    this.pendingPhaseChange = null;
+
     switch (phase) {
       case 'waiting':
         // Server is in waiting phase (lobby) - hide UI and show game view

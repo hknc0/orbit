@@ -127,6 +127,9 @@ export class StateSync {
   // Track if we've received the first snapshot (entities in first snapshot may skip animation)
   private hasReceivedFirstSnapshot: boolean = false;
 
+  // Track if we have enough data for smooth rendering (at least 2 snapshots for interpolation)
+  private isReadyForRendering: boolean = false;
+
   // Birth animation window: animate players who spawned within this many ticks
   // At 30 TPS, 15 ticks = 0.5 seconds
   private static readonly BIRTH_ANIMATION_TICKS = 15;
@@ -142,6 +145,12 @@ export class StateSync {
   // Getter for current interpolation delay (adapts based on snapshot rate)
   get interpolationDelay(): number {
     return this.adaptiveDelay;
+  }
+
+  // Check if we have enough snapshot data to render smoothly
+  // Returns true when we have at least 2 snapshots buffered for interpolation
+  isReady(): boolean {
+    return this.isReadyForRendering;
   }
 
   // Mark a gravity well as destroyed (called when GravityWellDestroyed event received)
@@ -229,6 +238,12 @@ export class StateSync {
     // Update current tick
     if (snapshot.tick > this.currentTick) {
       this.currentTick = snapshot.tick;
+    }
+
+    // Mark as ready when we have at least 2 snapshots for smooth interpolation
+    // This prevents rendering before we have enough data for a complete game state
+    if (!this.isReadyForRendering && this.snapshots.length >= 2) {
+      this.isReadyForRendering = true;
     }
 
     // Clean up destroyed wells tracking when OLDEST snapshot confirms removal
@@ -793,6 +808,7 @@ export class StateSync {
     this.playerBornTimes.clear();
     this.playerNameCache.clear();
     this.hasReceivedFirstSnapshot = false;
+    this.isReadyForRendering = false;
     // Reset respawn detection tracking
     this.localPlayerLastAlive = false;
     this.localPlayerLastSpawnTick = 0;
