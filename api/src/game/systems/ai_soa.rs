@@ -1156,6 +1156,7 @@ impl AiManagerSoA {
                 };
                 self.active_mask.set(i, should_update);
             }
+        }
     }
 
     /// Update the adaptive dormancy controller with current metrics.
@@ -4003,5 +4004,501 @@ mod tests {
         // Verify the constant exists and has a sensible value
         assert!(AiManagerSoA::MIN_PARALLEL_BATCH_SIZE > 0);
         assert!(AiManagerSoA::MIN_PARALLEL_BATCH_SIZE <= 256);
+    }
+
+    // ========================================================================
+    // Staggered Update Tests
+    // ========================================================================
+
+    #[test]
+    fn test_staggered_updates_distribute_reduced_mode_load() {
+        // Verify that bots in Reduced mode don't all update on the same tick
+        let mut manager = AiManagerSoA::default();
+        let mut state = create_test_state();
+        let config = AiSoaConfig::global();
+        let interval = config.reduced_update_interval as usize;
+
+        // Create bots at reduced-mode distance (1000 units from human)
+        let bot_ids: Vec<_> = (0..interval * 4).map(|i| {
+            // Spread bots in a circle at reduced-mode distance
+            let angle = (i as f32) * 0.1;
+            let bot = create_bot_player(
+                Vec2::new(1000.0 + angle.cos() * 10.0, angle.sin() * 10.0),
+                100.0
+            );
+            let id = bot.id;
+            state.add_player(bot);
+            manager.register_bot(id);
+            id
+        }).collect();
+
+        // Add human at origin to establish distance-based LOD
+        let human = create_human_player(Vec2::ZERO, 100.0);
+        state.add_player(human);
+
+        // Count active bots per tick over a full interval cycle
+        let mut active_counts = vec![0usize; interval];
+
+        for tick in 0..interval as u32 {
+            manager.tick_counter = tick;
+            manager.update_dormancy(&state);
+
+            let active = (0..manager.count)
+                .filter(|&i| {
+                    manager.update_modes[i] == UpdateMode::Reduced &&
+                    manager.active_mask.get(i).map(|b| *b).unwrap_or(false)
+                })
+                .count();
+            active_counts[tick as usize] = active;
+        }
+
+        // With staggering, load should be distributed: ~N/interval bots per tick
+        // Without staggering, all N bots would be active on tick 0 only
+        let total_reduced: usize = (0..manager.count)
+            .filter(|&i| manager.update_modes[i] == UpdateMode::Reduced)
+            .count();
+
+        if total_reduced > 0 {
+            // Check that no single tick has all the bots (unless there's only 1 bot)
+            let max_active = *active_counts.iter().max().unwrap();
+            let expected_per_tick = (total_reduced + interval - 1) / interval; // ceiling division
+
+            // Max should be close to expected_per_tick, not total_reduced
+            assert!(
+                max_active <= expected_per_tick + 1,
+                "Staggering failed: max {} active on one tick, expected ~{} (total {})",
+                max_active, expected_per_tick, total_reduced
+            );
+        }
+    }
+
+    #[test]
+    fn test_staggered_updates_distribute_dormant_mode_load() {
+        // Verify that bots in Dormant mode don't all update on the same tick
+        let mut manager = AiManagerSoA::default();
+        let mut state = create_test_state();
+        let config = AiSoaConfig::global();
+        let interval = config.dormant_update_interval as usize;
+
+        // Create bots at dormant-mode distance (far from human)
+        let bot_ids: Vec<_> = (0..interval * 4).map(|i| {
+            let angle = (i as f32) * 0.1;
+            let bot = create_bot_player(
+                Vec2::new(5000.0 + angle.cos() * 10.0, angle.sin() * 10.0),
+                100.0
+            );
+            let id = bot.id;
+            state.add_player(bot);
+            manager.register_bot(id);
+            id
+        }).collect();
+
+        // Add human at origin
+        let human = create_human_player(Vec2::ZERO, 100.0);
+        state.add_player(human);
+
+        // Count active bots per tick
+        let mut active_counts = vec![0usize; interval];
+
+        for tick in 0..interval as u32 {
+            manager.tick_counter = tick;
+            manager.update_dormancy(&state);
+
+            let active = (0..manager.count)
+                .filter(|&i| {
+                    manager.update_modes[i] == UpdateMode::Dormant &&
+                    manager.active_mask.get(i).map(|b| *b).unwrap_or(false)
+                })
+                .count();
+            active_counts[tick as usize] = active;
+        }
+
+        let total_dormant: usize = (0..manager.count)
+            .filter(|&i| manager.update_modes[i] == UpdateMode::Dormant)
+            .count();
+
+        if total_dormant > 0 {
+            let max_active = *active_counts.iter().max().unwrap();
+            let expected_per_tick = (total_dormant + interval - 1) / interval;
+
+            assert!(
+                max_active <= expected_per_tick + 1,
+                "Staggering failed: max {} active on one tick, expected ~{} (total {})",
+                max_active, expected_per_tick, total_dormant
+            );
+        }
+    }
+
+    #[test]
+    fn test_staggered_updates_different_indices_different_ticks() {
+        // Verify that consecutive bot indices update on consecutive ticks
+        let mut manager = AiManagerSoA::default();
+        let mut state = create_test_state();
+        let config = AiSoaConfig::global();
+        let interval = config.reduced_update_interval;
+
+        // Create exactly `interval` bots at reduced-mode distance
+        for i in 0..interval {
+            let bot = create_bot_player(Vec2::new(1000.0 + i as f32, 0.0), 100.0);
+            state.add_player(bot.clone());
+            manager.register_bot(bot.id);
+        }
+
+        // Add human
+        let human = create_human_player(Vec2::ZERO, 100.0);
+        state.add_player(human);
+
+        // Track which tick each bot becomes active
+        let mut active_ticks: Vec<Option<u32>> = vec![None; interval as usize];
+
+        for tick in 0..interval {
+            manager.tick_counter = tick;
+            manager.update_dormancy(&state);
+
+            for i in 0..manager.count {
+                if manager.update_modes[i] == UpdateMode::Reduced &&
+                   manager.active_mask.get(i).map(|b| *b).unwrap_or(false) &&
+                   active_ticks[i].is_none() {
+                    active_ticks[i] = Some(tick);
+                }
+            }
+        }
+
+        // Each bot should update on a different tick (with staggering)
+        // Bot i should update when (tick + i) % interval == 0
+        // So bot 0 updates on tick 0, bot 1 on tick (interval-1), etc.
+        for i in 0..interval as usize {
+            let expected_tick = if i == 0 { 0 } else { interval - i as u32 };
+            assert_eq!(
+                active_ticks[i], Some(expected_tick),
+                "Bot {} should update on tick {}, but updated on {:?}",
+                i, expected_tick, active_ticks[i]
+            );
+        }
+    }
+
+    #[test]
+    fn test_staggered_updates_each_bot_updates_at_correct_frequency() {
+        // Each bot should still update once per interval, just on different ticks
+        let mut manager = AiManagerSoA::default();
+        let mut state = create_test_state();
+        let config = AiSoaConfig::global();
+        let interval = config.reduced_update_interval;
+
+        // Create multiple bots
+        let num_bots = 8;
+        for i in 0..num_bots {
+            let bot = create_bot_player(Vec2::new(1000.0 + i as f32, 0.0), 100.0);
+            state.add_player(bot.clone());
+            manager.register_bot(bot.id);
+        }
+
+        let human = create_human_player(Vec2::ZERO, 100.0);
+        state.add_player(human);
+
+        // Count updates per bot over multiple intervals
+        let mut update_counts = vec![0u32; num_bots];
+        let num_cycles = 4;
+
+        for tick in 0..(interval * num_cycles) {
+            manager.tick_counter = tick;
+            manager.update_dormancy(&state);
+
+            for i in 0..manager.count {
+                if manager.update_modes[i] == UpdateMode::Reduced &&
+                   manager.active_mask.get(i).map(|b| *b).unwrap_or(false) {
+                    update_counts[i] += 1;
+                }
+            }
+        }
+
+        // Each bot should have updated exactly num_cycles times
+        for (i, &count) in update_counts.iter().enumerate() {
+            if manager.update_modes[i] == UpdateMode::Reduced {
+                assert_eq!(
+                    count, num_cycles,
+                    "Bot {} updated {} times, expected {} (once per {} ticks)",
+                    i, count, num_cycles, interval
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn test_staggered_initial_decision_timers() {
+        // Verify that newly registered bots have staggered decision timers
+        let mut manager = AiManagerSoA::default();
+        let config = AiSoaConfig::global();
+
+        // Register 32 bots (more than the stagger groups of 16)
+        for _ in 0..32 {
+            let id = Uuid::new_v4();
+            manager.register_bot(id);
+        }
+
+        // Check decision timers are staggered
+        let mut unique_timers = std::collections::HashSet::new();
+        for i in 0..manager.count {
+            let timer = manager.decision_timers[i];
+            // Timer should be in range [0, decision_interval)
+            assert!(
+                timer >= 0.0 && timer < config.decision_interval,
+                "Decision timer {} out of range [0, {})",
+                timer, config.decision_interval
+            );
+            // Quantize to avoid floating point comparison issues
+            let quantized = (timer * 1000.0).round() as i32;
+            unique_timers.insert(quantized);
+        }
+
+        // Should have multiple different timer values (at least 8 unique values for 32 bots)
+        assert!(
+            unique_timers.len() >= 8,
+            "Expected at least 8 unique timer values, got {}",
+            unique_timers.len()
+        );
+    }
+
+    #[test]
+    fn test_staggered_decision_timers_formula() {
+        // Verify the exact stagger formula: (index % 16) / 16 * interval
+        let mut manager = AiManagerSoA::default();
+        let config = AiSoaConfig::global();
+
+        // Register bots and check their timers match the formula
+        for i in 0..20u32 {
+            let id = Uuid::new_v4();
+            manager.register_bot(id);
+
+            let expected = (i % 16) as f32 / 16.0 * config.decision_interval;
+            let actual = manager.decision_timers[i as usize];
+
+            assert!(
+                (actual - expected).abs() < 0.0001,
+                "Bot {} timer: expected {}, got {}",
+                i, expected, actual
+            );
+        }
+    }
+
+    #[test]
+    fn test_no_decision_spike_on_mass_registration() {
+        // When many bots are registered at once, not all should decide on first update
+        let mut manager = AiManagerSoA::default();
+        let mut state = create_test_state();
+        let config = AiSoaConfig::global();
+
+        // Register 100 bots
+        for i in 0..100 {
+            let bot = create_bot_player(Vec2::new(i as f32 * 10.0, 0.0), 100.0);
+            state.add_player(bot.clone());
+            manager.register_bot(bot.id);
+        }
+
+        // Add human so bots are in Full mode (update every tick)
+        let human = create_human_player(Vec2::ZERO, 100.0);
+        state.add_player(human);
+
+        // Count how many bots have timer <= 0 (would decide immediately)
+        let immediate_deciders: usize = manager.decision_timers
+            .iter()
+            .take(manager.count)
+            .filter(|&&t| t <= 0.0)
+            .count();
+
+        // With staggering, only ~1/16 should decide immediately (timer = 0 for index % 16 == 0)
+        // That's ~6-7 bots out of 100
+        assert!(
+            immediate_deciders <= 10,
+            "Too many bots ({}) would decide immediately without staggering",
+            immediate_deciders
+        );
+    }
+
+    #[test]
+    fn test_stagger_formula_reduced_mode() {
+        // Verify the exact stagger formula: (tick + index) % interval == 0
+        let mut manager = AiManagerSoA::default();
+        let mut state = create_test_state();
+        let config = AiSoaConfig::global();
+        let interval = config.reduced_update_interval as usize;
+
+        // Create bots at reduced-mode distance
+        for i in 0..8 {
+            let bot = create_bot_player(Vec2::new(1000.0 + i as f32, 0.0), 100.0);
+            state.add_player(bot.clone());
+            manager.register_bot(bot.id);
+        }
+
+        let human = create_human_player(Vec2::ZERO, 100.0);
+        state.add_player(human);
+
+        // Test specific tick/index combinations
+        for tick in 0..interval as u32 {
+            manager.tick_counter = tick;
+            manager.update_dormancy(&state);
+
+            for i in 0..manager.count {
+                if manager.update_modes[i] != UpdateMode::Reduced {
+                    continue;
+                }
+
+                let should_be_active = (tick as usize + i) % interval == 0;
+                let is_active = manager.active_mask.get(i).map(|b| *b).unwrap_or(false);
+
+                assert_eq!(
+                    is_active, should_be_active,
+                    "Tick {}, Bot {}: expected active={}, got active={}",
+                    tick, i, should_be_active, is_active
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn test_stagger_formula_dormant_mode() {
+        // Verify the exact stagger formula for dormant mode
+        let mut manager = AiManagerSoA::default();
+        let mut state = create_test_state();
+        let config = AiSoaConfig::global();
+        let interval = config.dormant_update_interval as usize;
+
+        // Create bots at dormant-mode distance
+        for i in 0..16 {
+            let bot = create_bot_player(Vec2::new(5000.0 + i as f32, 0.0), 100.0);
+            state.add_player(bot.clone());
+            manager.register_bot(bot.id);
+        }
+
+        let human = create_human_player(Vec2::ZERO, 100.0);
+        state.add_player(human);
+
+        // Test specific tick/index combinations
+        for tick in 0..interval as u32 {
+            manager.tick_counter = tick;
+            manager.update_dormancy(&state);
+
+            for i in 0..manager.count {
+                if manager.update_modes[i] != UpdateMode::Dormant {
+                    continue;
+                }
+
+                let should_be_active = (tick as usize + i) % interval == 0;
+                let is_active = manager.active_mask.get(i).map(|b| *b).unwrap_or(false);
+
+                assert_eq!(
+                    is_active, should_be_active,
+                    "Tick {}, Bot {}: expected active={}, got active={}",
+                    tick, i, should_be_active, is_active
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn test_stagger_with_tick_counter_wrapping() {
+        // Verify staggering still works when tick counter wraps around u32::MAX
+        let mut manager = AiManagerSoA::default();
+        let mut state = create_test_state();
+        let config = AiSoaConfig::global();
+        let interval = config.reduced_update_interval;
+
+        // Create bots
+        for i in 0..4 {
+            let bot = create_bot_player(Vec2::new(1000.0 + i as f32, 0.0), 100.0);
+            state.add_player(bot.clone());
+            manager.register_bot(bot.id);
+        }
+
+        let human = create_human_player(Vec2::ZERO, 100.0);
+        state.add_player(human);
+
+        // Test near u32::MAX
+        let start_tick = u32::MAX - 2;
+        for offset in 0..8u32 {
+            let tick = start_tick.wrapping_add(offset);
+            manager.tick_counter = tick;
+            manager.update_dormancy(&state);
+
+            // Count active reduced-mode bots
+            let active_count: usize = (0..manager.count)
+                .filter(|&i| {
+                    manager.update_modes[i] == UpdateMode::Reduced &&
+                    manager.active_mask.get(i).map(|b| *b).unwrap_or(false)
+                })
+                .count();
+
+            // Should have some bots active (staggering distributes them)
+            // The exact count depends on tick value, but shouldn't be 0 or all
+            assert!(
+                active_count <= 2, // With 4 bots and interval 4, max ~1-2 per tick
+                "At tick {} (offset {}), {} bots active",
+                tick, offset, active_count
+            );
+        }
+    }
+
+    #[test]
+    fn test_stagger_eliminates_synchronized_spikes() {
+        // The main goal: verify that we don't get all bots updating on the same tick
+        let mut manager = AiManagerSoA::default();
+        let mut state = create_test_state();
+        let config = AiSoaConfig::global();
+
+        // Create 100 bots at reduced-mode distance
+        for i in 0..100 {
+            let angle = (i as f32) * 0.0628; // Spread around
+            let bot = create_bot_player(
+                Vec2::new(1000.0 * angle.cos(), 1000.0 * angle.sin()),
+                100.0
+            );
+            state.add_player(bot.clone());
+            manager.register_bot(bot.id);
+        }
+
+        let human = create_human_player(Vec2::ZERO, 100.0);
+        state.add_player(human);
+
+        // Run through multiple tick cycles and track max concurrent active
+        let mut max_concurrent = 0usize;
+        let interval = config.reduced_update_interval;
+
+        for tick in 0..(interval * 4) {
+            manager.tick_counter = tick;
+            manager.update_dormancy(&state);
+
+            let active_count: usize = (0..manager.count)
+                .filter(|&i| {
+                    manager.update_modes[i] == UpdateMode::Reduced &&
+                    manager.active_mask.get(i).map(|b| *b).unwrap_or(false)
+                })
+                .count();
+
+            max_concurrent = max_concurrent.max(active_count);
+        }
+
+        // Count total reduced-mode bots
+        manager.tick_counter = 0;
+        manager.update_dormancy(&state);
+        let total_reduced: usize = (0..manager.count)
+            .filter(|&i| manager.update_modes[i] == UpdateMode::Reduced)
+            .count();
+
+        // With proper staggering, max concurrent should be ~total/interval
+        // Without staggering, max would equal total
+        let expected_max = (total_reduced / interval as usize) + 2; // +2 for rounding
+
+        assert!(
+            max_concurrent <= expected_max,
+            "Spike detected: {} concurrent updates, expected max ~{} (total {})",
+            max_concurrent, expected_max, total_reduced
+        );
+
+        // Also verify we're not seeing all bots at once (the old bug)
+        assert!(
+            max_concurrent < total_reduced / 2,
+            "Too many concurrent updates ({}), staggering may not be working",
+            max_concurrent
+        );
     }
 }
