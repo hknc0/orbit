@@ -385,8 +385,12 @@ fn check_core_danger(ai: &mut AiState, bot: &Player, state: &GameState) -> bool 
 }
 
 fn execute_orbit(ai: &mut AiState, bot: &Player, state: &GameState) {
-    // Find nearest gravity well to orbit around
-    let nearest_well = state.arena.gravity_wells.values()
+    // Find nearest orbital well (exclude central supermassive well)
+    let nearest_well = state
+        .arena
+        .gravity_wells
+        .values()
+        .filter(|w| w.id != crate::game::state::CENTRAL_WELL_ID)
         .min_by(|a, b| {
             let dist_a = (a.position - bot.position).length_sq();
             let dist_b = (b.position - bot.position).length_sq();

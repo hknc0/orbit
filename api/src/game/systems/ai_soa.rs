@@ -1334,11 +1334,17 @@ impl AiManagerSoA {
             match self.behaviors[i] {
                 AiBehavior::Orbit => {
                     // Simplified orbit logic for sequential mode
-                    let nearest_well = state.arena.gravity_wells.values().min_by(|a, b| {
-                        let dist_a = (a.position - player.position).length_sq();
-                        let dist_b = (b.position - player.position).length_sq();
-                        dist_a.partial_cmp(&dist_b).unwrap()
-                    });
+                    // Filter out central well - bots should orbit orbital wells only
+                    let nearest_well = state
+                        .arena
+                        .gravity_wells
+                        .values()
+                        .filter(|w| w.id != crate::game::state::CENTRAL_WELL_ID)
+                        .min_by(|a, b| {
+                            let dist_a = (a.position - player.position).length_sq();
+                            let dist_b = (b.position - player.position).length_sq();
+                            dist_a.partial_cmp(&dist_b).unwrap()
+                        });
 
                     if let Some(well) = nearest_well {
                         let to_well = well.position - player.position;
@@ -1387,10 +1393,12 @@ impl AiManagerSoA {
         }
 
         // OPTIMIZATION: Pre-collect well data once (avoid HashMap access in hot loop)
+        // Filter out central well - bots should orbit orbital wells only
         let wells: Vec<(Vec2, f32)> = state
             .arena
             .gravity_wells
             .values()
+            .filter(|w| w.id != crate::game::state::CENTRAL_WELL_ID)
             .map(|w| (w.position, w.core_radius))
             .collect();
 
@@ -2592,9 +2600,9 @@ mod tests {
         let mut manager = AiManagerSoA::default();
         let mut state = create_test_state();
 
-        // Add gravity well at origin
-        let well = create_gravity_well(0, Vec2::new(0.0, 0.0), 10000.0, 50.0);
-        state.arena.gravity_wells.insert(0, well);
+        // Add orbital gravity well (id=1, not central well id=0)
+        let well = create_gravity_well(1, Vec2::new(0.0, 0.0), 10000.0, 50.0);
+        state.arena.gravity_wells.insert(1, well);
 
         // Add bot in stable orbit position
         let bot = create_bot_player(Vec2::new(300.0, 0.0), 100.0);
@@ -2765,9 +2773,9 @@ mod tests {
         let mut manager = AiManagerSoA::default();
         let mut state = create_test_state();
 
-        // Add gravity well
-        let well = create_gravity_well(0, Vec2::new(0.0, 0.0), 10000.0, 50.0);
-        state.arena.gravity_wells.insert(0, well);
+        // Add orbital gravity well (id=1, not central well)
+        let well = create_gravity_well(1, Vec2::new(0.0, 0.0), 10000.0, 50.0);
+        state.arena.gravity_wells.insert(1, well);
 
         // Add bot
         let bot = create_bot_player(Vec2::new(300.0, 0.0), 100.0);
@@ -3272,9 +3280,9 @@ mod tests {
         let mut manager = AiManagerSoA::default();
         let mut state = create_test_state();
 
-        // Add gravity well with core_radius 50
-        let well = create_gravity_well(0, Vec2::new(0.0, 0.0), 10000.0, 50.0);
-        state.arena.gravity_wells.insert(0, well);
+        // Add orbital gravity well with core_radius 50 (id=1, not central well)
+        let well = create_gravity_well(1, Vec2::new(0.0, 0.0), 10000.0, 50.0);
+        state.arena.gravity_wells.insert(1, well);
 
         // Add bot very close to well (in danger zone: < core_radius * 2.5 = 125)
         let bot = create_bot_player(Vec2::new(80.0, 0.0), 100.0);
