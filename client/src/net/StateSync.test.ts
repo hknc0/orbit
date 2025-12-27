@@ -1123,6 +1123,192 @@ describe('StateSync', () => {
     });
   });
 
+  describe('local player respawn detection', () => {
+    beforeEach(() => {
+      stateSync.setLocalPlayerId('local-player');
+    });
+
+    it('should reset interpolation state when local player respawns (dead to alive)', () => {
+      // First snapshot with alive local player and another player
+      mockPerformanceNow = 1000;
+      stateSync.applySnapshot(createMockSnapshot(100, {
+        players: [
+          createMockPlayerSnapshot({
+            id: 'local-player',
+            spawnTick: 50,
+            alive: true,
+          }),
+          createMockPlayerSnapshot({
+            id: 'other-player',
+            spawnTick: 10,
+            alive: true,
+          }),
+        ],
+      }));
+
+      // Local player dies
+      mockPerformanceNow = 2000;
+      stateSync.applySnapshot(createMockSnapshot(200, {
+        players: [
+          createMockPlayerSnapshot({
+            id: 'local-player',
+            spawnTick: 50,
+            alive: false,
+          }),
+        ],
+      }));
+
+      // Build up more snapshots
+      mockPerformanceNow = 2100;
+      stateSync.applySnapshot(createMockSnapshot(203, {
+        players: [
+          createMockPlayerSnapshot({
+            id: 'local-player',
+            spawnTick: 50,
+            alive: false,
+          }),
+        ],
+      }));
+
+      // Local player respawns with new players in AOI
+      mockPerformanceNow = 3000;
+      stateSync.applySnapshot(createMockSnapshot(300, {
+        players: [
+          createMockPlayerSnapshot({
+            id: 'local-player',
+            spawnTick: 298, // New spawn tick
+            alive: true,
+            spawnProtection: true,
+          }),
+          createMockPlayerSnapshot({
+            id: 'new-nearby-player',
+            spawnTick: 10, // Old spawn - entered AOI
+            alive: true,
+          }),
+        ],
+      }));
+
+      // After respawn, interpolation buffer should be reset
+      // so we only have one snapshot (not enough for full interpolation)
+      const state = stateSync.getInterpolatedState();
+      expect(state).not.toBeNull();
+      // The new nearby player should be present
+      expect(state?.players.has('new-nearby-player')).toBe(true);
+    });
+
+    it('should reset interpolation state when local player spawnTick changes', () => {
+      // First snapshot with alive local player
+      mockPerformanceNow = 1000;
+      stateSync.applySnapshot(createMockSnapshot(100, {
+        players: [
+          createMockPlayerSnapshot({
+            id: 'local-player',
+            spawnTick: 50,
+            alive: true,
+          }),
+        ],
+      }));
+
+      // More snapshots to fill buffer
+      mockPerformanceNow = 1100;
+      stateSync.applySnapshot(createMockSnapshot(103, {
+        players: [
+          createMockPlayerSnapshot({
+            id: 'local-player',
+            spawnTick: 50,
+            alive: true,
+          }),
+        ],
+      }));
+
+      mockPerformanceNow = 1200;
+      stateSync.applySnapshot(createMockSnapshot(106, {
+        players: [
+          createMockPlayerSnapshot({
+            id: 'local-player',
+            spawnTick: 50,
+            alive: true,
+          }),
+        ],
+      }));
+
+      // Verify we have multiple snapshots
+      let state = stateSync.getInterpolatedState();
+      expect(state).not.toBeNull();
+
+      // Now local player respawns (spawnTick changes)
+      mockPerformanceNow = 2000;
+      stateSync.applySnapshot(createMockSnapshot(200, {
+        players: [
+          createMockPlayerSnapshot({
+            id: 'local-player',
+            spawnTick: 198, // Changed spawnTick = respawn
+            alive: true,
+          }),
+          createMockPlayerSnapshot({
+            id: 'new-player-in-aoi',
+            spawnTick: 10,
+            alive: true,
+          }),
+        ],
+      }));
+
+      // After respawn detection, buffer is reset
+      // New player should appear immediately
+      state = stateSync.getInterpolatedState();
+      expect(state?.players.has('new-player-in-aoi')).toBe(true);
+    });
+
+    it('should NOT reset when local player is just moving normally', () => {
+      // First snapshot
+      mockPerformanceNow = 1000;
+      stateSync.applySnapshot(createMockSnapshot(100, {
+        players: [
+          createMockPlayerSnapshot({
+            id: 'local-player',
+            spawnTick: 50,
+            alive: true,
+            position: new Vec2(0, 0),
+          }),
+        ],
+      }));
+
+      // Second snapshot - player moved but same spawn
+      mockPerformanceNow = 1100;
+      stateSync.applySnapshot(createMockSnapshot(103, {
+        players: [
+          createMockPlayerSnapshot({
+            id: 'local-player',
+            spawnTick: 50, // Same spawnTick
+            alive: true,
+            position: new Vec2(100, 100),
+          }),
+        ],
+      }));
+
+      // Third snapshot
+      mockPerformanceNow = 1200;
+      stateSync.applySnapshot(createMockSnapshot(106, {
+        players: [
+          createMockPlayerSnapshot({
+            id: 'local-player',
+            spawnTick: 50, // Same spawnTick
+            alive: true,
+            position: new Vec2(200, 200),
+          }),
+        ],
+      }));
+
+      // Should have built up interpolation buffer (not reset)
+      // and interpolation should work
+      mockPerformanceNow = 1150;
+      const state = stateSync.getInterpolatedState();
+      expect(state).not.toBeNull();
+      // Should have tick from interpolated range
+      expect(state?.tick).toBeGreaterThanOrEqual(100);
+    });
+  });
+
   describe('gravity well birth animations', () => {
     it('should skip birth animation for wells in first snapshot', () => {
       mockPerformanceNow = 1000;

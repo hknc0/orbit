@@ -127,6 +127,10 @@ export class StateSync {
   // At 30 TPS, 15 ticks = 0.5 seconds
   private static readonly BIRTH_ANIMATION_TICKS = 15;
 
+  // Track local player's last known state for respawn detection
+  private localPlayerLastAlive: boolean = false;
+  private localPlayerLastSpawnTick: number = 0;
+
   setLocalPlayerId(id: PlayerId): void {
     this.localPlayerId = id;
   }
@@ -145,6 +149,33 @@ export class StateSync {
   // Apply a full snapshot from server
   applySnapshot(snapshot: GameSnapshot): void {
     const now = performance.now();
+
+    // Detect local player respawn - if respawned, reset interpolation state
+    // This prevents other players from appearing delayed after respawn
+    if (this.localPlayerId) {
+      const localPlayer = snapshot.players.find((p) => p.id === this.localPlayerId);
+      if (localPlayer) {
+        const justRespawned =
+          // Was dead, now alive
+          (!this.localPlayerLastAlive && localPlayer.alive) ||
+          // Spawn tick changed (respawned)
+          (localPlayer.spawnTick !== this.localPlayerLastSpawnTick && this.localPlayerLastSpawnTick > 0);
+
+        if (justRespawned) {
+          // Reset interpolation state - similar to fresh join
+          // This makes other players appear immediately instead of waiting for interpolation buffer
+          this.snapshots = [];
+          this.playerBornTimes.clear();
+          this.wellBornTimes.clear();
+          this.hasReceivedFirstSnapshot = false;
+          // Don't reset adaptiveDelay - keep the learned rate
+        }
+
+        // Update tracking
+        this.localPlayerLastAlive = localPlayer.alive;
+        this.localPlayerLastSpawnTick = localPlayer.spawnTick;
+      }
+    }
 
     // Track snapshot arrival rate for adaptive interpolation
     if (this.lastSnapshotTime > 0) {
@@ -718,5 +749,8 @@ export class StateSync {
     this.snapshotIntervalAvg = PHYSICS.DT * 1000;
     this.playerBornTimes.clear();
     this.hasReceivedFirstSnapshot = false;
+    // Reset respawn detection tracking
+    this.localPlayerLastAlive = false;
+    this.localPlayerLastSpawnTick = 0;
   }
 }
