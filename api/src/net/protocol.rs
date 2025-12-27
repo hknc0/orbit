@@ -42,6 +42,25 @@ pub enum ClientMessage {
     },
 }
 
+/// Reason for rejecting a join request
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub enum RejectionReason {
+    /// Server is at player capacity
+    ServerFull { current_players: u32 },
+    /// Server is at capacity and cannot accept spectators
+    SpectatorsFull,
+    /// Player name is invalid
+    InvalidName,
+    /// Too many connection attempts
+    RateLimited,
+    /// Player is banned/blocked
+    Banned,
+    /// Server is in maintenance
+    Maintenance,
+    /// Other reason with custom message
+    Other { message: String },
+}
+
 /// Messages from server to client
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum ServerMessage {
@@ -53,7 +72,7 @@ pub enum ServerMessage {
         is_spectator: bool,
     },
     /// Join was rejected
-    JoinRejected { reason: String },
+    JoinRejected { reason: RejectionReason },
     /// Full game state snapshot
     Snapshot(GameSnapshot),
     /// Delta update (only changed entities)
@@ -853,7 +872,7 @@ mod encoding_tests {
         
         // Test JoinRejected
         let msg2 = ServerMessage::JoinRejected {
-            reason: "Test".to_string(),
+            reason: RejectionReason::ServerFull { current_players: 1500 },
         };
         let encoded2 = encode(&msg2).unwrap();
         println!("\n=== JoinRejected ===");

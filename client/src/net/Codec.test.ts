@@ -246,27 +246,59 @@ describe('Codec', () => {
     });
 
     describe('JoinRejected decoding', () => {
-      it('should decode JoinRejected message', () => {
+      it('should decode JoinRejected with ServerFull reason', () => {
         const writer = new TestBinaryWriter();
         writer.writeU32(1); // JoinRejected variant
-        writer.writeString('Game is full');
+        writer.writeU32(0); // ServerFull reason variant
+        writer.writeU32(1500); // currentPlayers
 
         const result = decodeServerMessage(writer.getBuffer());
         expect(result.type).toBe('JoinRejected');
         if (result.type === 'JoinRejected') {
-          expect(result.reason).toBe('Game is full');
+          expect(result.reason.type).toBe('ServerFull');
+          if (result.reason.type === 'ServerFull') {
+            expect(result.reason.currentPlayers).toBe(1500);
+          }
         }
       });
 
-      it('should decode JoinRejected with empty reason', () => {
+      it('should decode JoinRejected with SpectatorsFull reason', () => {
         const writer = new TestBinaryWriter();
-        writer.writeU32(1);
-        writer.writeString('');
+        writer.writeU32(1); // JoinRejected variant
+        writer.writeU32(1); // SpectatorsFull reason variant
 
         const result = decodeServerMessage(writer.getBuffer());
         expect(result.type).toBe('JoinRejected');
         if (result.type === 'JoinRejected') {
-          expect(result.reason).toBe('');
+          expect(result.reason.type).toBe('SpectatorsFull');
+        }
+      });
+
+      it('should decode JoinRejected with InvalidName reason', () => {
+        const writer = new TestBinaryWriter();
+        writer.writeU32(1); // JoinRejected variant
+        writer.writeU32(2); // InvalidName reason variant
+
+        const result = decodeServerMessage(writer.getBuffer());
+        expect(result.type).toBe('JoinRejected');
+        if (result.type === 'JoinRejected') {
+          expect(result.reason.type).toBe('InvalidName');
+        }
+      });
+
+      it('should decode JoinRejected with Other reason', () => {
+        const writer = new TestBinaryWriter();
+        writer.writeU32(1); // JoinRejected variant
+        writer.writeU32(6); // Other reason variant
+        writer.writeString('Custom error message');
+
+        const result = decodeServerMessage(writer.getBuffer());
+        expect(result.type).toBe('JoinRejected');
+        if (result.type === 'JoinRejected') {
+          expect(result.reason.type).toBe('Other');
+          if (result.reason.type === 'Other') {
+            expect(result.reason.message).toBe('Custom error message');
+          }
         }
       });
     });
