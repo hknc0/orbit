@@ -566,23 +566,25 @@ pub enum GravityWaveEvent {
 /// Update explosion timers and create waves when wells explode
 /// Returns events for charging and explosions
 /// Config controls all timing and force parameters
-/// `target_wells` is the desired number of orbital wells - excess wells are removed on explosion
-/// `escape_radius` is the current arena boundary - wells outside are always removed
+///
+/// Wells are ALWAYS destroyed when their timer expires. This keeps the arena dynamic:
+/// - Old wells explode and are removed
+/// - `scale_for_simulation()` adds new wells at DIFFERENT positions (golden angle distribution)
+/// - Wells naturally cycle through new locations over time
+///
+/// Note: `_target_wells` and `_escape_radius` are kept for API compatibility but no longer used
 pub fn update_explosions(
     state: &mut GameState,
     config: &GravityWaveConfig,
     dt: f32,
-    target_wells: usize,
-    escape_radius: f32,
+    _target_wells: usize,
+    _escape_radius: f32,
 ) -> Vec<GravityWaveEvent> {
     use crate::game::state::GravityWave;
 
     let mut events = Vec::new();
     let mut new_waves = Vec::new();
     let mut wells_to_remove: Vec<WellId> = Vec::new();
-
-    // Current orbital well count (excluding central supermassive)
-    let current_orbital_wells = state.arena.gravity_wells.len().saturating_sub(1);
 
     // Skip central well (ID 0 - supermassive black hole, too stable to explode)
     for well in state.arena.gravity_wells.values_mut() {
@@ -616,30 +618,17 @@ pub fn update_explosions(
                 strength,
             });
 
-            // Create the wave
+            // Create the gravity wave
             new_waves.push(GravityWave::new(well.position, strength));
 
-            // Determine if well should be removed:
-            // 1. Always remove wells outside escape_radius (they're inaccessible to players)
-            // 2. Remove wells at or above target count (let scale_for_simulation add new ones)
-            // 3. Keep wells only if below target AND inside arena (arena is growing)
-            let well_dist = well.position.length();
-            let is_out_of_bounds = well_dist > escape_radius;
-            let remaining_wells = current_orbital_wells.saturating_sub(wells_to_remove.len());
-
-            if is_out_of_bounds || remaining_wells >= target_wells {
-                // Remove: either out-of-bounds or at/above target count
-                wells_to_remove.push(well.id);
-                events.push(GravityWaveEvent::WellDestroyed {
-                    well_id: well.id,
-                    position: well.position,
-                });
-            } else {
-                // Keep: below target AND inside arena (arena is growing, needs more wells)
-                // Reset timer for next explosion
-                well.explosion_timer = config.random_explosion_delay();
-                well.is_charging = false;
-            }
+            // ALWAYS destroy the well - scale_for_simulation will add new ones at DIFFERENT positions
+            // This keeps the arena dynamic: wells cycle through new locations over time
+            // The golden angle distribution ensures new wells appear at different angles
+            wells_to_remove.push(well.id);
+            events.push(GravityWaveEvent::WellDestroyed {
+                well_id: well.id,
+                position: well.position,
+            });
         }
     }
 
@@ -1431,14 +1420,16 @@ mod tests {
     }
 
     #[test]
-    fn test_well_not_removed_when_below_target() {
+    fn test_well_always_destroyed_on_explosion() {
+        // Wells are ALWAYS destroyed when their timer expires
+        // This keeps the arena dynamic - new wells spawn at different positions
         use crate::game::constants::arena::CORE_RADIUS;
         use crate::game::constants::physics::CENTRAL_MASS;
 
         let mut state = GameState::new();
         let config = GravityWaveConfig::default();
 
-        // Add 1 orbital well
+        // Add an orbital well
         let well_id = state.arena.alloc_well_id();
         let mut well = GravityWell::new(
             well_id,
@@ -1452,90 +1443,46 @@ mod tests {
 
         let initial_count = state.arena.gravity_wells.len(); // 2 (central + 1 orbital)
 
-        // Update with target = 3 (we only have 1 orbital, below target)
-        // Use large escape_radius so well is in bounds (testing target count logic)
-        let events = update_explosions(&mut state, &config, DT, 3, 10000.0);
+        // Update - well should ALWAYS be destroyed regardless of target_wells
+        let events = update_explosions(&mut state, &config, DT, 10, 10000.0);
 
-        // Should explode but NOT destroy (below target, arena is growing)
-        assert!(events.iter().any(|e| matches!(e, GravityWaveEvent::WellExploded { .. })));
-        assert!(!events.iter().any(|e| matches!(e, GravityWaveEvent::WellDestroyed { .. })));
-
-        // Well count should stay the same (timer reset instead of removal)
-        assert_eq!(state.arena.gravity_wells.len(), initial_count);
-    }
-
-    #[test]
-    fn test_out_of_bounds_well_always_removed() {
-        // Wells outside escape_radius should ALWAYS be removed on explosion,
-        // even if below target_wells count (regression test for multiple waves bug)
-        use crate::game::constants::arena::CORE_RADIUS;
-        use crate::game::constants::physics::CENTRAL_MASS;
-
-        let mut state = GameState::new();
-        let config = GravityWaveConfig::default();
-
-        // Add a well outside the escape radius
-        let out_of_bounds_well_id = state.arena.alloc_well_id();
-        let mut well = GravityWell::new(
-            out_of_bounds_well_id,
-            Vec2::new(1500.0, 0.0), // At 1500 units - will be outside 1000 radius
-            CENTRAL_MASS,
-            CORE_RADIUS,
-        );
-        well.explosion_timer = 0.0; // Explode immediately
-        well.is_charging = true;
-        state.arena.gravity_wells.insert(out_of_bounds_well_id, well);
-
-        let initial_count = state.arena.gravity_wells.len();
-
-        // Update with HIGH target (10) but SMALL escape_radius (1000)
-        // Well is BELOW target (1 orbital vs 10 target) but OUTSIDE radius
-        // Should still be removed!
-        let events = update_explosions(&mut state, &config, DT, 10, 1000.0);
-
-        // Should explode AND destroy (out-of-bounds overrides below-target)
+        // Should explode AND destroy
         assert!(events.iter().any(|e| matches!(e, GravityWaveEvent::WellExploded { .. })));
         assert!(events.iter().any(|e| matches!(e, GravityWaveEvent::WellDestroyed { .. })),
-            "Out-of-bounds wells should ALWAYS be removed, even when below target count");
+            "Wells should always be destroyed on explosion");
 
         // Well count should decrease
         assert_eq!(state.arena.gravity_wells.len(), initial_count - 1);
     }
 
     #[test]
-    fn test_in_bounds_well_kept_when_below_target() {
-        // Contrast test: wells INSIDE escape_radius and below target should be kept
+    fn test_explosion_creates_gravity_wave() {
+        // Verify that explosion creates a gravity wave
         use crate::game::constants::arena::CORE_RADIUS;
         use crate::game::constants::physics::CENTRAL_MASS;
 
         let mut state = GameState::new();
         let config = GravityWaveConfig::default();
 
-        // Add a well inside the escape radius
-        let in_bounds_well_id = state.arena.alloc_well_id();
+        // Add an orbital well
+        let well_id = state.arena.alloc_well_id();
         let mut well = GravityWell::new(
-            in_bounds_well_id,
-            Vec2::new(500.0, 0.0), // At 500 units - inside 1000 radius
+            well_id,
+            Vec2::new(500.0, 0.0),
             CENTRAL_MASS,
             CORE_RADIUS,
         );
         well.explosion_timer = 0.0;
         well.is_charging = true;
-        state.arena.gravity_wells.insert(in_bounds_well_id, well);
+        state.arena.gravity_wells.insert(well_id, well);
 
-        let initial_count = state.arena.gravity_wells.len();
+        assert!(state.gravity_waves.is_empty());
 
-        // Update with HIGH target (10) and LARGE escape_radius (1000)
-        // Well is BELOW target and INSIDE radius - should be kept
-        let events = update_explosions(&mut state, &config, DT, 10, 1000.0);
+        update_explosions(&mut state, &config, DT, 1, 10000.0);
 
-        // Should explode but NOT destroy
-        assert!(events.iter().any(|e| matches!(e, GravityWaveEvent::WellExploded { .. })));
-        assert!(!events.iter().any(|e| matches!(e, GravityWaveEvent::WellDestroyed { .. })),
-            "In-bounds wells below target should be kept");
-
-        // Well count should stay the same
-        assert_eq!(state.arena.gravity_wells.len(), initial_count);
+        // Should have created a gravity wave
+        assert_eq!(state.gravity_waves.len(), 1);
+        assert_eq!(state.gravity_waves[0].position, Vec2::new(500.0, 0.0));
     }
 
     // === WELL POSITION CACHE TESTS ===
