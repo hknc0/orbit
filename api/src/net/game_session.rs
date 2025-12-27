@@ -373,9 +373,10 @@ impl GameSession {
         // CRITICAL: Initialize arena with area-based well scaling BEFORE spawning bots
         // Uses scale_for_simulation for consistent area-based well calculation
         // Growth is instant so arena is immediately sized for player count
+        // At startup, always allow growth (can_grow = true)
         {
             let config = arena_config.read();
-            game_loop.state_mut().arena.scale_for_simulation(bot_count, &config);
+            game_loop.state_mut().arena.scale_for_simulation(bot_count, &config, true);
         }
         info!(
             "Arena configured: {} gravity wells, escape_radius={:.0}",
@@ -558,7 +559,7 @@ impl GameSession {
                 is_spectator: true,
                 spectate_target: None, // Full view by default
                 last_activity: Instant::now(),
-                viewport_zoom: 0.1, // Spectators start zoomed out
+                viewport_zoom: 0.05, // Spectators start fully zoomed out (supports 10x+ arena)
                 net_state: Arc::new(tokio::sync::Mutex::new(ClientNetState::default())),
             },
         );
@@ -578,10 +579,14 @@ impl GameSession {
     }
 
     /// Set viewport zoom level for a connection (for entity filtering)
+    /// Uses dynamic minimum based on arena scale to support large arenas
     pub fn set_viewport_zoom(&mut self, player_id: PlayerId, zoom: f32) {
         if let Some(conn) = self.players.get_mut(&player_id) {
-            // Clamp zoom to valid range
-            conn.viewport_zoom = zoom.clamp(0.05, 1.0);
+            // Dynamic minimum: ensures spectators can see full arena at any scale
+            // At scale 10, min_zoom ≈ 0.05; at scale 50, min_zoom ≈ 0.01
+            let arena_scale = self.game_loop.state().arena.scale;
+            let min_zoom = (0.5 / arena_scale.max(1.0)).max(0.01);
+            conn.viewport_zoom = zoom.clamp(min_zoom, 1.0);
             conn.last_activity = Instant::now();
         }
     }
@@ -756,11 +761,16 @@ impl GameSession {
         let player_count = self.game_loop.state().players.len();
         let config = self.arena_config.read();
 
+        // Health-based arena growth control:
+        // Only grow if server health is Excellent/Good
+        // Shrinking is always allowed regardless of health
+        let can_grow = self.performance.can_grow_arena();
+
         // Use smooth scaling that only adds wells incrementally
         self.game_loop
             .state_mut()
             .arena
-            .scale_for_simulation(player_count, &config);
+            .scale_for_simulation(player_count, &config, can_grow);
 
         // Calculate target wells based on arena area (must be done after scaling)
         let escape_radius = self.game_loop.state().arena.escape_radius;
@@ -1106,12 +1116,14 @@ impl GameSession {
 
         // Scale arena based on ACTUAL player count (all modes)
         // Arena grows as players join, shrinks as they leave - natural scaling
+        // Health-based: only grow if server health allows
         let actual_player_count = self.game_loop.state().players.len();
         let config = self.arena_config.read();
+        let can_grow = self.performance.can_grow_arena();
         self.game_loop
             .state_mut()
             .arena
-            .scale_for_simulation(actual_player_count, &config);
+            .scale_for_simulation(actual_player_count, &config, can_grow);
     }
 
     /// Scale down bots if current count exceeds target (used during simulation scale-down phase)
@@ -1204,7 +1216,10 @@ impl GameSession {
             .map(|c| c.viewport_zoom)
             .unwrap_or(1.0);
 
-        self.aoi_manager.filter_for_player(player_id, player_position, player_velocity, viewport_zoom, &full_snapshot)
+        // Get arena scale for dynamic AOI radius calculation
+        let arena_scale = self.game_loop.state().arena.scale;
+
+        self.aoi_manager.filter_for_player(player_id, player_position, player_velocity, viewport_zoom, arena_scale, &full_snapshot)
     }
 
     /// Respawn dead players after respawn delay
@@ -1491,6 +1506,7 @@ pub async fn broadcast_filtered_snapshots(session: &GameSession, tick: u64) {
 
     // Pre-compute AOI snapshots for bots with spectator followers
     // Bots use default zoom=1.0 (they don't have viewport settings)
+    let arena_scale = session.game_loop.state().arena.scale;
     let mut bot_snapshot_cache: HashMap<PlayerId, Arc<Vec<u8>>> = HashMap::with_capacity(bot_targets.len());
     for &bot_id in &bot_targets {
         if let Some(bot) = session.game_loop.state().get_player(bot_id) {
@@ -1499,6 +1515,7 @@ pub async fn broadcast_filtered_snapshots(session: &GameSession, tick: u64) {
                 bot.position,
                 bot.velocity,
                 1.0, // Bots use default zoom
+                arena_scale,
                 &full_snapshot,
             );
             let message = ServerMessage::Snapshot(filtered);
@@ -1547,6 +1564,7 @@ pub async fn broadcast_filtered_snapshots(session: &GameSession, tick: u64) {
             player_position,
             player_velocity,
             conn.viewport_zoom,
+            arena_scale,
             &full_snapshot,
         );
 

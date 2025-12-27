@@ -40,8 +40,8 @@ const ORBITAL_WELL_CORE_FILTER_MULTIPLIER: f32 = 1.5;
 /// Multiplier for calculating safe spawn distance from central well
 const SAFE_SPAWN_RADIUS_MULTIPLIER: f32 = 4.0;
 
-/// Maximum spawn attempts near well before fallback
-const WELL_SPAWN_MAX_ATTEMPTS: u32 = 20;
+/// Maximum spawn attempts near well before fallback (increased for high bot counts)
+const WELL_SPAWN_MAX_ATTEMPTS: u32 = 40;
 
 /// Safety margin multiplier for spawn position distance from well cores
 const SPAWN_CORE_SAFETY_MARGIN: f32 = 1.5;
@@ -856,7 +856,7 @@ mod tests {
             // Use area-based scaling instead of legacy player-based
             // With slower lerp (0.05) and cap (30/tick), need more iterations
             for _ in 0..300 {
-                arena.scale_for_simulation(player_count, &config);
+                arena.scale_for_simulation(player_count, &config, true);
             }
 
             let safe_radius = arena.current_safe_radius();
@@ -890,7 +890,7 @@ mod tests {
 
         // Create wells where central well has SMALL core (would pass old property-based filter)
         // This tests that we filter by ID, not by core_radius
-        let orbital_pos = Vec2::new(800.0, 0.0);
+        let orbital_pos = Vec2::new(1200.0, 0.0); // Increased from 800 to avoid overlap with new ZONE_MAX
         let wells = vec![
             // Central well (ID 0) with small core - would wrongly pass old filter
             GravityWell::new(0, Vec2::ZERO, CENTRAL_MASS, CORE_RADIUS),
@@ -899,7 +899,7 @@ mod tests {
         ];
 
         // Spawns should be near the orbital well (ID 1), not the center
-        // Spawn zone is ZONE_MIN to ZONE_MAX (250-350) from well center
+        // Spawn zone is ZONE_MIN to ZONE_MAX from well center
         let spawn_tolerance = ZONE_MAX + 50.0; // Allow some margin
 
         let mut near_orbital = 0;

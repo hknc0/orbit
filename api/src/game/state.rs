@@ -672,11 +672,17 @@ impl Arena {
     }
 
     /// Smoothly scale arena based on player count
-    /// - GROW: Fast and immediate (players need space)
-    /// - SHRINK: Delayed and slow (don't trap players)
+    /// - GROW: Fast and immediate (players need space), but only if can_grow is true
+    /// - SHRINK: Delayed and slow (don't trap players), always allowed
     /// Uses ArenaScalingConfig for all tunable parameters
-    pub fn scale_for_simulation(&mut self, target_player_count: usize, config: &ArenaScalingConfig) {
+    ///
+    /// # Arguments
+    /// * `target_player_count` - Total players (humans + bots)
+    /// * `config` - Arena scaling configuration
+    /// * `can_grow` - If false, arena will not grow (used for health-based limiting)
+    pub fn scale_for_simulation(&mut self, target_player_count: usize, config: &ArenaScalingConfig, can_grow: bool) {
         let min_escape = config.min_escape_radius;
+        // Safety cap as emergency brake (default 50x = 40,000 units)
         let max_escape = config.min_escape_radius * config.max_escape_multiplier;
 
         // SQRT-BASED SCALING for constant player density
@@ -687,7 +693,7 @@ impl Arena {
         let target_area = players * config.area_per_player;
         let target_escape = (target_area / std::f32::consts::PI).sqrt()
             .max(min_escape)
-            .min(max_escape);
+            .min(max_escape); // Safety cap still applies
         let target_outer = target_escape - 200.0;
 
         // Calculate target number of wells based on CURRENT arena area (not target)
@@ -703,8 +709,9 @@ impl Arena {
         // Smooth lerp toward target (called every tick at 30Hz)
         let diff = target_escape - self.escape_radius;
 
-        if diff > 1.0 {
+        if diff > 1.0 && can_grow {
             // GROW: Lerp with cap for smooth expansion
+            // Only grow if health allows (can_grow = true)
             // Cap prevents large jumps that cause visual stepping when
             // client linearly interpolates between snapshots (sent at 10Hz)
             self.shrink_delay_ticks = config.shrink_delay_ticks;
@@ -712,6 +719,9 @@ impl Arena {
             let delta = lerp_delta.min(config.max_grow_per_tick);
             self.escape_radius = (self.escape_radius + delta).min(target_escape);
             self.outer_radius = (self.outer_radius + delta).min(target_outer);
+        } else if diff > 1.0 {
+            // Need to grow but can't (health degraded) - just reset shrink delay
+            self.shrink_delay_ticks = config.shrink_delay_ticks;
         } else if diff < -1.0 {
             // SHRINK: Only after delay expires, lerp slowly
             if self.shrink_delay_ticks > 0 {
@@ -760,8 +770,9 @@ impl Arena {
     }
 
     /// Legacy version without config for backwards compatibility
+    /// Always allows growth (can_grow = true)
     pub fn scale_for_simulation_default(&mut self, target_player_count: usize) {
-        self.scale_for_simulation(target_player_count, &ArenaScalingConfig::default());
+        self.scale_for_simulation(target_player_count, &ArenaScalingConfig::default(), true);
     }
 
     /// Trigger rapid collapse of excess wells with staggered timers
@@ -1121,7 +1132,7 @@ mod tests {
 
         // Scale arena to different sizes
         for _ in 0..50 {
-            arena.scale_for_simulation(500, &config);
+            arena.scale_for_simulation(500, &config, true);
         }
 
         let scaled_escape = arena.escape_radius;
@@ -1236,7 +1247,7 @@ mod tests {
 
         // Simulate scaling for 500 players (should grow arena)
         for _ in 0..50 {
-            arena.scale_for_simulation(500, &config);
+            arena.scale_for_simulation(500, &config, true);
         }
 
         // Arena should have expanded
@@ -1258,29 +1269,29 @@ mod tests {
         // First grow the arena
         // With max_grow_per_tick=30, need more iterations for large changes
         for _ in 0..200 {
-            arena.scale_for_simulation(500, &config);
+            arena.scale_for_simulation(500, &config, true);
         }
         let expanded_escape = arena.escape_radius;
         assert!(expanded_escape > 3000.0, "Should have grown significantly: got {}", expanded_escape);
 
         // Now request shrink to 10 players
         // First few calls should NOT shrink (delay period)
-        arena.scale_for_simulation(10, &config);
-        arena.scale_for_simulation(10, &config);
-        arena.scale_for_simulation(10, &config);
+        arena.scale_for_simulation(10, &config, true);
+        arena.scale_for_simulation(10, &config, true);
+        arena.scale_for_simulation(10, &config, true);
         assert!(arena.escape_radius >= expanded_escape - 10.0,
             "Should not shrink during delay period");
 
         // After delay (150+ ticks), should start shrinking slowly
         for _ in 0..200 {
-            arena.scale_for_simulation(10, &config);
+            arena.scale_for_simulation(10, &config, true);
         }
         assert!(arena.escape_radius < expanded_escape,
             "Should shrink after delay: {} < {}", arena.escape_radius, expanded_escape);
 
         // But should never go below minimum
         for _ in 0..500 {
-            arena.scale_for_simulation(10, &config);
+            arena.scale_for_simulation(10, &config, true);
         }
         assert!(arena.escape_radius >= config.min_escape_radius,
             "Should never shrink below minimum: {}", arena.escape_radius);
@@ -1296,7 +1307,7 @@ mod tests {
 
         // First grow arena and add wells via scale_for_simulation
         for _ in 0..150 {
-            arena.scale_for_simulation(100, &config);
+            arena.scale_for_simulation(100, &config, true);
         }
 
         // Record exact well positions after initial setup
@@ -1310,7 +1321,7 @@ mod tests {
 
         // Now scale up significantly
         for _ in 0..300 {
-            arena.scale_for_simulation(500, &config);
+            arena.scale_for_simulation(500, &config, true);
         }
 
         // Arena should have grown
@@ -1370,7 +1381,7 @@ mod tests {
 
         // Keep shrinking until we're below 1200 (outer well position)
         for _ in 0..200 {
-            arena.scale_for_simulation(1, &config);
+            arena.scale_for_simulation(1, &config, true);
             arena.shrink_delay_ticks = 0; // Keep delay exhausted
         }
 
@@ -1407,7 +1418,7 @@ mod tests {
             .min(config.min_escape_radius * config.max_escape_multiplier);
 
         // Single call should move toward target with lerp (not instant)
-        arena.scale_for_simulation(1000, &config);
+        arena.scale_for_simulation(1000, &config, true);
         let after_one = arena.escape_radius;
 
         // Should have moved but not reached target instantly
@@ -1418,7 +1429,7 @@ mod tests {
         // With max_grow_per_tick=30 and lerp=0.05, large changes take longer
         // For 7200 unit diff, linear phase takes ~240 ticks, then exponential
         for _ in 0..400 {
-            arena.scale_for_simulation(1000, &config);
+            arena.scale_for_simulation(1000, &config, true);
         }
         let after_many = arena.escape_radius;
 
@@ -1435,7 +1446,7 @@ mod tests {
 
         // Small stable player count to test min_wells
         for _ in 0..100 {
-            arena.scale_for_simulation(5, &config);
+            arena.scale_for_simulation(5, &config, true);
         }
 
         // -1 because central supermassive doesn't count toward the orbital wells
@@ -1448,7 +1459,7 @@ mod tests {
         // Now test with larger player count - wells should grow
         let wells_before = orbital_wells;
         for _ in 0..200 {
-            arena.scale_for_simulation(500, &config);
+            arena.scale_for_simulation(500, &config, true);
         }
 
         let wells_after = arena.gravity_wells.len() - 1;
@@ -1583,20 +1594,63 @@ mod tests {
 
         // Grow to large size
         for _ in 0..50 {
-            arena.scale_for_simulation(500, &config);
+            arena.scale_for_simulation(500, &config, true);
         }
 
         // Start shrink process
         for _ in 0..3 {
-            arena.scale_for_simulation(10, &config);
+            arena.scale_for_simulation(10, &config, true);
         }
 
         // Now request growth again
-        arena.scale_for_simulation(500, &config);
+        arena.scale_for_simulation(500, &config, true);
 
         // Shrink delay should be reset
         assert_eq!(arena.shrink_delay_ticks, config.shrink_delay_ticks,
             "Shrink delay should be reset on grow");
+    }
+
+    #[test]
+    fn test_health_based_arena_growth_limiting() {
+        use crate::config::ArenaScalingConfig;
+        let config = ArenaScalingConfig::default();
+        let mut arena = Arena::default();
+
+        // Record initial size
+        let initial_escape = arena.escape_radius;
+
+        // Try to grow with can_grow=false - should NOT grow
+        for _ in 0..50 {
+            arena.scale_for_simulation(1000, &config, false);
+        }
+
+        // Arena should NOT have grown
+        assert_eq!(arena.escape_radius, initial_escape,
+            "Arena should not grow when can_grow=false");
+
+        // Now allow growth with can_grow=true
+        for _ in 0..100 {
+            arena.scale_for_simulation(1000, &config, true);
+        }
+
+        // Arena should have grown
+        assert!(arena.escape_radius > initial_escape + 100.0,
+            "Arena should grow when can_grow=true: {} > {}",
+            arena.escape_radius, initial_escape);
+
+        // Record size after growth
+        let grown_escape = arena.escape_radius;
+
+        // Shrinking should ALWAYS work regardless of can_grow
+        // First exhaust shrink delay
+        for _ in 0..160 {
+            arena.scale_for_simulation(10, &config, false);
+        }
+
+        // Arena should have shrunk even with can_grow=false
+        assert!(arena.escape_radius < grown_escape,
+            "Arena should shrink even when can_grow=false: {} < {}",
+            arena.escape_radius, grown_escape);
     }
 
     #[test]
@@ -1723,7 +1777,7 @@ mod tests {
         // Call scale_for_simulation with large player count
         // After ONE call, arena hasn't reached target yet (lerping)
         // Wells should be placed based on CURRENT arena size (progressive growth)
-        arena.scale_for_simulation(1000, &config);
+        arena.scale_for_simulation(1000, &config, true);
 
         let after_one_escape = arena.escape_radius;
         // Calculate target using sqrt-based formula
@@ -2298,7 +2352,7 @@ mod tests {
 
         // Scale arena to add multiple wells
         for _ in 0..100 {
-            arena.scale_for_simulation(100, &config);
+            arena.scale_for_simulation(100, &config, true);
         }
 
         // Collect explosion timers from orbital wells

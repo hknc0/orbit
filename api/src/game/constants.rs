@@ -108,14 +108,14 @@ pub mod spawn {
     pub const PROTECTION_DURATION: f32 = 3.0;
     /// Minimum spawn distance from center
     pub const ZONE_MIN: f32 = 250.0;
-    /// Maximum spawn distance from center
-    pub const ZONE_MAX: f32 = 350.0;
+    /// Maximum spawn distance from center (increased from 350 for more spawn area)
+    pub const ZONE_MAX: f32 = 500.0;
     /// Initial spawn velocity (fixed, like orbit-poc)
     pub const INITIAL_VELOCITY: f32 = 50.0;
     /// Minimum distance from other players when spawning
     pub const SAFE_DISTANCE: f32 = 80.0;
-    /// Maximum attempts to find safe spawn position
-    pub const MAX_SPAWN_ATTEMPTS: u32 = 10;
+    /// Maximum attempts to find safe spawn position (increased from 10 for high bot counts)
+    pub const MAX_SPAWN_ATTEMPTS: u32 = 30;
     /// Delay before respawning after death (seconds)
     pub const RESPAWN_DELAY: f32 = 2.0;
 }
@@ -371,9 +371,9 @@ mod tests {
 
     #[test]
     fn test_spawn_zone_in_safe_area() {
-        // Spawn zone should be between inner and middle radius
+        // Spawn zone should be outside inner radius and within outer radius
         assert!(spawn::ZONE_MIN > arena::INNER_RADIUS);
-        assert!(spawn::ZONE_MAX < arena::MIDDLE_RADIUS);
+        assert!(spawn::ZONE_MAX < arena::OUTER_RADIUS);
     }
 
     // === SPEED SCALING TESTS ===

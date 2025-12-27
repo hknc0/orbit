@@ -168,13 +168,13 @@ describe('Constants', () => {
 
     it('should have zone min less than max', () => {
       expect(SPAWN.ZONE_MIN).toBe(250);
-      expect(SPAWN.ZONE_MAX).toBe(350);
+      expect(SPAWN.ZONE_MAX).toBe(500);
       expect(SPAWN.ZONE_MIN).toBeLessThan(SPAWN.ZONE_MAX);
     });
 
-    it('should spawn within inner and middle zones', () => {
+    it('should spawn outside inner zone but within outer zone', () => {
       expect(SPAWN.ZONE_MIN).toBeGreaterThan(ARENA.INNER_RADIUS);
-      expect(SPAWN.ZONE_MAX).toBeLessThan(ARENA.MIDDLE_RADIUS);
+      expect(SPAWN.ZONE_MAX).toBeLessThan(ARENA.OUTER_RADIUS);
     });
   });
 

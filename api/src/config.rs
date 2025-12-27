@@ -691,14 +691,14 @@ impl Default for ArenaScalingConfig {
             shrink_lerp: 0.005,
             shrink_delay_ticks: 150,
             min_escape_radius: 800.0,
-            max_escape_multiplier: 10.0,
+            max_escape_multiplier: 50.0, // Safety cap: 800 * 50 = 40,000 units max (health-based limiting is primary control)
             // Sqrt scaling: radius = min_radius * sqrt(players / base_players)
             // 10 players at 800 radius = ~2M sq units = 200K per player
             base_player_count: 10.0,
             area_per_player: 200_000.0,  // 200K sq units per player (constant density)
             well_min_ratio: 0.20,
             well_max_ratio: 0.85,
-            wells_per_area: 5_000_000.0, // 1 well per 5M square units (sparse wells)
+            wells_per_area: 2_000_000.0, // 1 well per 2M square units (denser well distribution)
             min_wells: 1, // Only 1 minimum for small arenas
             ring_inner_min: 0.25,
             ring_inner_max: 0.40,
@@ -709,7 +709,7 @@ impl Default for ArenaScalingConfig {
             supermassive_mass_mult: 3.0,
             supermassive_core_mult: 2.5,
             // Golden angle distribution
-            max_wells: 20,                // Hard cap for performance and gameplay
+            max_wells: 50,                // Hard cap for performance and gameplay (increased for high bot counts)
             center_exclusion_ratio: 0.25, // Wells stay 25%+ from center (safe from supermassive)
         }
     }
@@ -764,10 +764,10 @@ impl ArenaScalingConfig {
 
         if let Ok(val) = std::env::var("ARENA_MAX_MULTIPLIER") {
             if let Ok(parsed) = val.parse::<f32>() {
-                if parsed >= 5.0 && parsed <= 20.0 {
+                if parsed >= 5.0 && parsed <= 100.0 {
                     config.max_escape_multiplier = parsed;
                 } else {
-                    tracing::warn!("ARENA_MAX_MULTIPLIER must be 5-20, using default");
+                    tracing::warn!("ARENA_MAX_MULTIPLIER must be 5-100, using default");
                 }
             }
         }
@@ -1121,7 +1121,8 @@ mod tests {
         assert_eq!(config.shrink_lerp, 0.005);
         assert_eq!(config.shrink_delay_ticks, 150);
         assert_eq!(config.min_escape_radius, 800.0);
-        assert_eq!(config.wells_per_area, 5_000_000.0);
+        assert_eq!(config.wells_per_area, 2_000_000.0);  // Increased density for better bot distribution
+        assert_eq!(config.max_wells, 50);  // Increased for high bot counts
         assert_eq!(config.min_wells, 1);
         assert_eq!(config.ring_inner_min, 0.25);
         assert_eq!(config.ring_outer_max, 0.90);

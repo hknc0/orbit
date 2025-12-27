@@ -43,6 +43,12 @@ impl PerformanceStatus {
     pub fn should_force_reduce(&self) -> bool {
         matches!(self, PerformanceStatus::Catastrophic)
     }
+
+    /// Should we allow arena to grow? Only when performance is healthy.
+    /// Arena growth is resource-intensive (more entities, larger spatial queries).
+    pub fn can_grow_arena(&self) -> bool {
+        matches!(self, PerformanceStatus::Excellent | PerformanceStatus::Good)
+    }
 }
 
 /// Performance monitor that tracks tick durations
@@ -182,6 +188,11 @@ impl PerformanceMonitor {
     /// Check if we need to forcibly reduce entities (catastrophic only)
     pub fn should_force_reduce(&self) -> bool {
         self.status.should_force_reduce()
+    }
+
+    /// Check if we should allow arena to grow
+    pub fn can_grow_arena(&self) -> bool {
+        self.status.can_grow_arena()
     }
 
     /// Get last known entity count
@@ -373,5 +384,65 @@ mod tests {
         // Over budget = reduce by 25%
         let budget = monitor.calculate_entity_budget(10);
         assert_eq!(budget, Some(7)); // 10 * 0.75 = 7.5 -> 7
+    }
+
+    #[test]
+    fn test_can_grow_arena_excellent() {
+        let mut monitor = PerformanceMonitor::new(60);
+        for _ in 0..20 {
+            monitor.record_tick(Duration::from_millis(3));
+        }
+        assert_eq!(monitor.status(), PerformanceStatus::Excellent);
+        assert!(monitor.can_grow_arena());
+    }
+
+    #[test]
+    fn test_can_grow_arena_good() {
+        let mut monitor = PerformanceMonitor::new(60);
+        for _ in 0..20 {
+            monitor.record_tick(Duration::from_millis(8));
+        }
+        assert_eq!(monitor.status(), PerformanceStatus::Good);
+        assert!(monitor.can_grow_arena());
+    }
+
+    #[test]
+    fn test_can_grow_arena_warning() {
+        let mut monitor = PerformanceMonitor::new(60);
+        for _ in 0..20 {
+            monitor.record_tick(Duration::from_millis(13));
+        }
+        assert_eq!(monitor.status(), PerformanceStatus::Warning);
+        assert!(!monitor.can_grow_arena(), "Arena should not grow at Warning");
+    }
+
+    #[test]
+    fn test_can_grow_arena_critical() {
+        let mut monitor = PerformanceMonitor::new(60);
+        for _ in 0..20 {
+            monitor.record_tick(Duration::from_millis(16));
+        }
+        assert_eq!(monitor.status(), PerformanceStatus::Critical);
+        assert!(!monitor.can_grow_arena(), "Arena should not grow at Critical");
+    }
+
+    #[test]
+    fn test_can_grow_arena_catastrophic() {
+        let mut monitor = PerformanceMonitor::new(60);
+        for _ in 0..20 {
+            monitor.record_tick(Duration::from_millis(30));
+        }
+        assert_eq!(monitor.status(), PerformanceStatus::Catastrophic);
+        assert!(!monitor.can_grow_arena(), "Arena should not grow at Catastrophic");
+    }
+
+    #[test]
+    fn test_performance_status_can_grow_arena() {
+        // Direct tests on PerformanceStatus enum
+        assert!(PerformanceStatus::Excellent.can_grow_arena());
+        assert!(PerformanceStatus::Good.can_grow_arena());
+        assert!(!PerformanceStatus::Warning.can_grow_arena());
+        assert!(!PerformanceStatus::Critical.can_grow_arena());
+        assert!(!PerformanceStatus::Catastrophic.can_grow_arena());
     }
 }

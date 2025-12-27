@@ -53,9 +53,16 @@ const BASE_VISIBLE_RADIUS: f32 = 1200.0;
 /// Prevents pop-in during movement and scroll. 1.3 = 30% extra radius.
 const AOI_BUFFER_MULTIPLIER: f32 = 1.3;
 
-/// Minimum zoom clamp to prevent extreme radius values
-/// Even at 0.1 zoom: 1200/0.1*1.3 = 15,600 (reasonable for spectators)
-const MIN_ZOOM_CLAMP: f32 = 0.1;
+/// Safety floor for minimum zoom (absolute minimum regardless of arena size)
+const MIN_ZOOM_FLOOR: f32 = 0.01;
+
+/// Calculate dynamic minimum zoom based on arena scale
+/// Ensures AOI can cover full arena at any scale
+/// At scale 10, min_zoom ≈ 0.05; at scale 50, min_zoom ≈ 0.01
+#[inline(always)]
+fn min_zoom_for_arena(arena_scale: f32) -> f32 {
+    (0.5 / arena_scale.max(1.0)).max(MIN_ZOOM_FLOOR)
+}
 
 /// Lookahead time in seconds for velocity-based AOI expansion
 /// Prevents pop-in when moving fast by looking ahead this many seconds
@@ -81,26 +88,30 @@ const BASE_RADIUS_WITH_BUFFER: f32 = BASE_VISIBLE_RADIUS * AOI_BUFFER_MULTIPLIER
 // Inline Calculation Functions
 // ============================================================================
 
-/// Calculate effective AOI radius from viewport zoom
+/// Calculate effective AOI radius from viewport zoom and arena scale
 ///
 /// # Performance
-/// - Single division
+/// - Two divisions (one for min zoom, one for radius)
 /// - Inlined at all call sites
 /// - Branchless on common path
 ///
 /// # Formula
-/// `radius = (BASE_VISIBLE_RADIUS * BUFFER) / max(zoom, MIN_ZOOM)`
+/// `radius = (BASE_VISIBLE_RADIUS * BUFFER) / max(zoom, min_zoom_for_arena(scale))`
 ///
-/// # Examples
+/// # Examples (at scale 1.0)
 /// - zoom=1.0  → 1560 units
 /// - zoom=0.7  → 2229 units
 /// - zoom=0.45 → 3467 units
-/// - zoom=0.1  → 15600 units (spectator edge case)
+/// - zoom=0.1  → 15600 units
+/// - zoom=0.05 → 31200 units
+/// - zoom=0.01 → 156000 units (spectator full-view at 50x arena scale)
 #[inline(always)]
-fn calculate_base_radius(viewport_zoom: f32) -> f32 {
+fn calculate_base_radius(viewport_zoom: f32, arena_scale: f32) -> f32 {
+    // Dynamic minimum based on arena scale
+    let min_zoom = min_zoom_for_arena(arena_scale);
     // Branchless max using conditional move
     // Compiler optimizes this to a single MAXSS instruction on x86
-    let clamped_zoom = if viewport_zoom > MIN_ZOOM_CLAMP { viewport_zoom } else { MIN_ZOOM_CLAMP };
+    let clamped_zoom = if viewport_zoom > min_zoom { viewport_zoom } else { min_zoom };
     BASE_RADIUS_WITH_BUFFER / clamped_zoom
 }
 
@@ -166,7 +177,8 @@ impl AOIManager {
     /// - `player_id`: The player receiving this filtered snapshot
     /// - `player_position`: Player's world position (center of AOI)
     /// - `player_velocity`: Player's velocity (for predictive expansion)
-    /// - `viewport_zoom`: Camera zoom level (0.1-1.0, lower = zoomed out = larger AOI)
+    /// - `viewport_zoom`: Camera zoom level (0.01-1.0, lower = zoomed out = larger AOI)
+    /// - `arena_scale`: Current arena scale factor (1.0 = base, 10.0 = 10x, etc.)
     /// - `full_snapshot`: Complete game state to filter
     ///
     /// # Returns
@@ -190,10 +202,11 @@ impl AOIManager {
         player_position: Vec2,
         player_velocity: Vec2,
         viewport_zoom: f32,
+        arena_scale: f32,
         full_snapshot: &GameSnapshot,
     ) -> GameSnapshot {
-        // Calculate dynamic AOI radius from viewport zoom
-        let base_radius = calculate_base_radius(viewport_zoom);
+        // Calculate dynamic AOI radius from viewport zoom and arena scale
+        let base_radius = calculate_base_radius(viewport_zoom, arena_scale);
 
         // Expand AOI based on speed to prevent pop-in when moving fast
         let speed = player_velocity.length();
@@ -446,21 +459,55 @@ mod tests {
 
     #[test]
     fn test_calculate_base_radius_zoom_1() {
-        let radius = calculate_base_radius(1.0);
+        let radius = calculate_base_radius(1.0, 1.0);
         assert!((radius - 1560.0).abs() < 1.0, "At zoom=1.0, radius should be ~1560, got {}", radius);
     }
 
     #[test]
     fn test_calculate_base_radius_zoom_half() {
-        let radius = calculate_base_radius(0.5);
+        let radius = calculate_base_radius(0.5, 1.0);
         assert!((radius - 3120.0).abs() < 1.0, "At zoom=0.5, radius should be ~3120, got {}", radius);
     }
 
     #[test]
     fn test_calculate_base_radius_zoom_min_clamp() {
-        let radius_at_min = calculate_base_radius(MIN_ZOOM_CLAMP);
-        let radius_below_min = calculate_base_radius(0.01);
-        assert_eq!(radius_at_min, radius_below_min, "Zoom below MIN should be clamped");
+        // At scale 1.0, min zoom is 0.5 (from min_zoom_for_arena formula: 0.5/1.0)
+        let min_zoom = min_zoom_for_arena(1.0);
+        let radius_at_min = calculate_base_radius(min_zoom, 1.0);
+        let radius_below_min = calculate_base_radius(0.01, 1.0);
+        assert_eq!(radius_at_min, radius_below_min, "Zoom below min should be clamped");
+    }
+
+    #[test]
+    fn test_min_zoom_for_arena_scale_1() {
+        let min_zoom = min_zoom_for_arena(1.0);
+        assert!((min_zoom - 0.5).abs() < 0.001, "At scale 1.0, min zoom should be 0.5, got {}", min_zoom);
+    }
+
+    #[test]
+    fn test_min_zoom_for_arena_scale_10() {
+        let min_zoom = min_zoom_for_arena(10.0);
+        assert!((min_zoom - 0.05).abs() < 0.001, "At scale 10.0, min zoom should be 0.05, got {}", min_zoom);
+    }
+
+    #[test]
+    fn test_min_zoom_for_arena_scale_50() {
+        let min_zoom = min_zoom_for_arena(50.0);
+        assert!((min_zoom - 0.01).abs() < 0.001, "At scale 50.0, min zoom should be 0.01, got {}", min_zoom);
+    }
+
+    #[test]
+    fn test_min_zoom_for_arena_scale_100_floor() {
+        // At scale 100, formula gives 0.005, but floor is 0.01
+        let min_zoom = min_zoom_for_arena(100.0);
+        assert!((min_zoom - 0.01).abs() < 0.001, "At scale 100.0, min zoom should hit floor of 0.01, got {}", min_zoom);
+    }
+
+    #[test]
+    fn test_calculate_base_radius_large_arena() {
+        // At 50x arena scale with min zoom (0.01), radius should be huge for spectator view
+        let radius = calculate_base_radius(0.01, 50.0);
+        assert!(radius > 100000.0, "At large arena scale, spectator radius should be > 100k, got {}", radius);
     }
 
     #[test]
@@ -498,10 +545,10 @@ mod tests {
         };
 
         // Zoomed in (zoom=1.0): radius ~1560
-        let filtered_zoomed_in = aoi.filter_for_player(player_id, player_pos, Vec2::ZERO, 1.0, &snapshot);
+        let filtered_zoomed_in = aoi.filter_for_player(player_id, player_pos, Vec2::ZERO, 1.0, 1.0, &snapshot);
 
         // Zoomed out (zoom=0.45): radius ~3467
-        let filtered_zoomed_out = aoi.filter_for_player(player_id, player_pos, Vec2::ZERO, 0.45, &snapshot);
+        let filtered_zoomed_out = aoi.filter_for_player(player_id, player_pos, Vec2::ZERO, 0.45, 1.0, &snapshot);
 
         assert!(
             filtered_zoomed_in.players.len() < filtered_zoomed_out.players.len(),
@@ -536,7 +583,7 @@ mod tests {
         snapshot.total_players = 200;
         snapshot.total_alive = 200;
 
-        let filtered = aoi.filter_for_player(player_id, player_pos, Vec2::ZERO, 1.0, &snapshot);
+        let filtered = aoi.filter_for_player(player_id, player_pos, Vec2::ZERO, 1.0, 1.0, &snapshot);
 
         // ALL 200 players should be included (no cap!)
         assert_eq!(
@@ -564,7 +611,7 @@ mod tests {
             snapshot.projectiles.push(create_projectile_snapshot(i, pos));
         }
 
-        let filtered = aoi.filter_for_player(player_id, player_pos, Vec2::ZERO, 1.0, &snapshot);
+        let filtered = aoi.filter_for_player(player_id, player_pos, Vec2::ZERO, 1.0, 1.0, &snapshot);
 
         // ALL projectiles should be included
         assert_eq!(filtered.projectiles.len(), 100, "All projectiles within radius should be included");
@@ -584,7 +631,7 @@ mod tests {
         snapshot.players[0].id = player_id;
         snapshot.players[0].position = player_pos;
 
-        let filtered = aoi.filter_for_player(player_id, player_pos, Vec2::ZERO, 1.0, &snapshot);
+        let filtered = aoi.filter_for_player(player_id, player_pos, Vec2::ZERO, 1.0, 1.0, &snapshot);
 
         assert!(filtered.players.iter().any(|p| p.id == player_id));
     }
@@ -622,7 +669,7 @@ mod tests {
             ai_status: None,
         };
 
-        let filtered = aoi.filter_for_player(player_id, player_pos, Vec2::ZERO, 1.0, &snapshot);
+        let filtered = aoi.filter_for_player(player_id, player_pos, Vec2::ZERO, 1.0, 1.0, &snapshot);
 
         assert_eq!(filtered.players.len(), 2, "Should include self and nearby player only");
     }
@@ -660,7 +707,7 @@ mod tests {
             ai_status: None,
         };
 
-        let filtered = aoi.filter_for_player(player_id, player_pos, Vec2::ZERO, 1.0, &snapshot);
+        let filtered = aoi.filter_for_player(player_id, player_pos, Vec2::ZERO, 1.0, 1.0, &snapshot);
 
         assert_eq!(filtered.players.len(), 3);
     }
@@ -688,7 +735,7 @@ mod tests {
             },
         ];
 
-        let filtered = aoi.filter_for_player(player_id, player_pos, Vec2::ZERO, 1.0, &snapshot);
+        let filtered = aoi.filter_for_player(player_id, player_pos, Vec2::ZERO, 1.0, 1.0, &snapshot);
 
         assert_eq!(filtered.gravity_wells.len(), 2);
     }
@@ -727,11 +774,11 @@ mod tests {
         };
 
         let filtered_stationary = aoi.filter_for_player(
-            player_id, player_pos, Vec2::ZERO, 1.0, &snapshot
+            player_id, player_pos, Vec2::ZERO, 1.0, 1.0, &snapshot
         );
 
         let filtered_moving = aoi.filter_for_player(
-            player_id, player_pos, Vec2::new(300.0, 0.0), 1.0, &snapshot
+            player_id, player_pos, Vec2::new(300.0, 0.0), 1.0, 1.0, &snapshot
         );
 
         assert!(
@@ -754,7 +801,7 @@ mod tests {
         snapshot.players[0].position = player_pos;
         snapshot.players[0].kills = 1000;
 
-        let filtered = aoi.filter_for_player(player_id, player_pos, Vec2::ZERO, 1.0, &snapshot);
+        let filtered = aoi.filter_for_player(player_id, player_pos, Vec2::ZERO, 1.0, 1.0, &snapshot);
 
         let self_count = filtered.players.iter().filter(|p| p.id == player_id).count();
         assert_eq!(self_count, 1, "Local player should appear exactly once");
@@ -788,12 +835,62 @@ mod tests {
         }
 
         for i in 0..100 {
-            let filtered = aoi.filter_for_player(player_id, player_pos, Vec2::ZERO, 1.0, &snapshot);
+            let filtered = aoi.filter_for_player(player_id, player_pos, Vec2::ZERO, 1.0, 1.0, &snapshot);
             assert!(
                 filtered.players.iter().any(|p| p.id == player_id),
                 "Local player should be included on iteration {}",
                 i
             );
         }
+    }
+
+    // ========================================================================
+    // Dynamic Arena Scale Tests
+    // ========================================================================
+
+    #[test]
+    fn test_aoi_filter_large_arena_spectator_view() {
+        // Test that at large arena scale, spectator with min zoom can see everything
+        let aoi = AOIManager::new(AOIConfig {
+            always_include_top_n: 0,
+        });
+
+        let player_id = Uuid::new_v4();
+        let player_pos = Vec2::new(0.0, 0.0);
+        let arena_scale = 50.0;
+
+        // Create players spread across large arena (50x scale = 40,000 unit radius)
+        let mut snapshot = create_test_snapshot(0);
+        snapshot.players.push(create_player_snapshot(player_id, player_pos, 0));
+        // Add player at edge of 50x arena
+        snapshot.players.push(create_player_snapshot(Uuid::new_v4(), Vec2::new(30000.0, 0.0), 1));
+        snapshot.players.push(create_player_snapshot(Uuid::new_v4(), Vec2::new(0.0, 30000.0), 2));
+        snapshot.total_players = 3;
+        snapshot.total_alive = 3;
+        snapshot.arena_scale = arena_scale;
+
+        // Spectator with minimum zoom (0.01) should see entire arena
+        let filtered = aoi.filter_for_player(player_id, player_pos, Vec2::ZERO, 0.01, arena_scale, &snapshot);
+
+        assert_eq!(
+            filtered.players.len(), 3,
+            "Spectator at min zoom should see all players in large arena. Got {}",
+            filtered.players.len()
+        );
+    }
+
+    #[test]
+    fn test_aoi_dynamic_radius_scales_with_arena() {
+        // Verify that radius calculation properly accounts for arena scale
+        let base_radius_scale_1 = calculate_base_radius(0.1, 1.0);
+        let base_radius_scale_10 = calculate_base_radius(0.1, 10.0);
+
+        // At scale 1.0, 0.1 zoom is above min (0.5), so it gets clamped to 0.5
+        // At scale 10.0, min zoom is 0.05, so 0.1 is used as-is
+        assert!(
+            base_radius_scale_1 < base_radius_scale_10,
+            "At scale 10x, same zoom should give larger radius. Scale 1: {}, Scale 10: {}",
+            base_radius_scale_1, base_radius_scale_10
+        );
     }
 }

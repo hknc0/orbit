@@ -102,7 +102,8 @@ export class RenderSystem {
   private readonly SPEED_FOR_MAX_ZOOM_OUT = 250; // Speed at which max zoom out is reached
 
   // Spectator mode zoom settings
-  private readonly SPECTATOR_ZOOM_MIN = 0.1; // Minimum zoom for full map view
+  // Safety floor only - actual zoom is calculated dynamically from arena size
+  private readonly SPECTATOR_ZOOM_MIN = 0.01; // Safety floor (supports 50x+ arena scale)
   private readonly SPECTATOR_ARENA_PADDING = 2.5; // How much arena padding for full view
 
   // Smooth zoom transitions for large changes (spectator follow mode switch)

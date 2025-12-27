@@ -957,7 +957,7 @@ describe('Motion Effects Configuration', () => {
   it('should have valid zoom bounds', () => {
     const ZOOM_MIN = 0.45;
     const ZOOM_MAX = 1.0;
-    const SPECTATOR_ZOOM_MIN = 0.1;
+    const SPECTATOR_ZOOM_MIN = 0.01; // Safety floor (supports 50x+ arena scale)
 
     expect(SPECTATOR_ZOOM_MIN).toBeLessThan(ZOOM_MIN);
     expect(ZOOM_MIN).toBeLessThan(ZOOM_MAX);

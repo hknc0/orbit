@@ -436,7 +436,7 @@ enum MatchPhase {
 |----------|-------|-------------|
 | PROTECTION_DURATION | 3s | Invulnerability period |
 | SPAWN_ZONE_MIN | 250 | Minimum spawn distance |
-| SPAWN_ZONE_MAX | 350 | Maximum spawn distance |
+| SPAWN_ZONE_MAX | 500 | Maximum spawn distance (increased for better distribution) |
 | SAFE_DISTANCE | 80 | Minimum from other players |
 | RESPAWN_DELAY | 2s | Time until respawn allowed |
 

@@ -73,7 +73,7 @@ export const ARENA = {
 export const SPAWN = {
   PROTECTION_DURATION: 3,
   ZONE_MIN: 250,
-  ZONE_MAX: 350,
+  ZONE_MAX: 500, // Increased from 350 for more spawn area
 } as const;
 
 export const MATCH = {
