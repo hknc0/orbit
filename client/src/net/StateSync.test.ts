@@ -1608,4 +1608,153 @@ describe('StateSync adaptive interpolation', () => {
       expect(stateSync.interpolationDelay).toBe(NETWORK.INTERPOLATION_DELAY_MS);
     });
   });
+
+  // Player Name Caching Tests
+  // These tests verify that player names are cached on first appearance
+  // and reused when subsequent snapshots omit the name (bandwidth optimization)
+  describe('Player Name Caching', () => {
+    it('should cache player name on first appearance', () => {
+      const player = createMockPlayerSnapshot({
+        id: 'player-1',
+        name: 'FirstPlayer',
+      });
+
+      stateSync.applySnapshot(createSnapshot(1, { players: [player] }));
+      mockNow += 66;
+      stateSync.applySnapshot(createSnapshot(2, { players: [player] }));
+
+      const state = stateSync.getInterpolatedState();
+      const playerState = state?.players.get('player-1');
+      expect(playerState?.name).toBe('FirstPlayer');
+    });
+
+    it('should use cached name when name is undefined in subsequent snapshot', () => {
+      // First snapshot with name
+      const playerWithName = createMockPlayerSnapshot({
+        id: 'player-1',
+        name: 'CachedName',
+      });
+      stateSync.applySnapshot(createSnapshot(1, { players: [playerWithName] }));
+
+      mockNow += 66;
+
+      // Second snapshot without name (simulating server optimization)
+      const playerWithoutName = { ...playerWithName, name: undefined as unknown as string };
+      stateSync.applySnapshot(createSnapshot(2, { players: [playerWithoutName] }));
+
+      mockNow += 66;
+      stateSync.applySnapshot(createSnapshot(3, { players: [playerWithoutName] }));
+
+      const state = stateSync.getInterpolatedState();
+      const playerState = state?.players.get('player-1');
+      expect(playerState?.name).toBe('CachedName');
+    });
+
+    it('should update cached name when new name is provided', () => {
+      // First snapshot with original name
+      const player1 = createMockPlayerSnapshot({
+        id: 'player-1',
+        name: 'OriginalName',
+      });
+      stateSync.applySnapshot(createSnapshot(1, { players: [player1] }));
+
+      mockNow += 66;
+
+      // Second snapshot with new name (player changed name)
+      const player2 = createMockPlayerSnapshot({
+        id: 'player-1',
+        name: 'NewName',
+      });
+      stateSync.applySnapshot(createSnapshot(2, { players: [player2] }));
+
+      mockNow += 66;
+      stateSync.applySnapshot(createSnapshot(3, { players: [player2] }));
+
+      const state = stateSync.getInterpolatedState();
+      const playerState = state?.players.get('player-1');
+      expect(playerState?.name).toBe('NewName');
+    });
+
+    it('should maintain separate caches for different players', () => {
+      const player1 = createMockPlayerSnapshot({
+        id: 'player-1',
+        name: 'Player1Name',
+      });
+      const player2 = createMockPlayerSnapshot({
+        id: 'player-2',
+        name: 'Player2Name',
+      });
+
+      stateSync.applySnapshot(createSnapshot(1, { players: [player1, player2] }));
+      mockNow += 66;
+      stateSync.applySnapshot(createSnapshot(2, { players: [player1, player2] }));
+
+      const state = stateSync.getInterpolatedState();
+      expect(state?.players.get('player-1')?.name).toBe('Player1Name');
+      expect(state?.players.get('player-2')?.name).toBe('Player2Name');
+    });
+
+    it('should clean up cache entries when players leave', () => {
+      const player1 = createMockPlayerSnapshot({
+        id: 'player-1',
+        name: 'Player1Name',
+      });
+      const player2 = createMockPlayerSnapshot({
+        id: 'player-2',
+        name: 'Player2Name',
+      });
+
+      // Both players present
+      stateSync.applySnapshot(createSnapshot(1, { players: [player1, player2] }));
+      mockNow += 66;
+
+      // Player 1 leaves
+      stateSync.applySnapshot(createSnapshot(2, { players: [player2] }));
+      mockNow += 66;
+      stateSync.applySnapshot(createSnapshot(3, { players: [player2] }));
+
+      const state = stateSync.getInterpolatedState();
+      expect(state?.players.has('player-1')).toBe(false);
+      expect(state?.players.get('player-2')?.name).toBe('Player2Name');
+    });
+
+    it('should clear name cache on reset', () => {
+      const player = createMockPlayerSnapshot({
+        id: 'player-1',
+        name: 'OriginalName',
+      });
+
+      stateSync.applySnapshot(createSnapshot(1, { players: [player] }));
+
+      // Reset clears all state including name cache
+      stateSync.reset();
+
+      // After reset, need new snapshot
+      const playerNoName = { ...player, name: undefined as unknown as string };
+      stateSync.applySnapshot(createSnapshot(1, { players: [playerNoName] }));
+      mockNow += 66;
+      stateSync.applySnapshot(createSnapshot(2, { players: [playerNoName] }));
+
+      const state = stateSync.getInterpolatedState();
+      const playerState = state?.players.get('player-1');
+      // Without cached name, should fallback to empty string or undefined
+      expect(playerState?.name).toBe('');
+    });
+
+    it('should use empty string for player that never had a name', () => {
+      // Player appears without ever having a name sent
+      const playerNoName = {
+        ...createMockPlayerSnapshot({ id: 'new-player' }),
+        name: undefined as unknown as string,
+      };
+
+      stateSync.applySnapshot(createSnapshot(1, { players: [playerNoName] }));
+      mockNow += 66;
+      stateSync.applySnapshot(createSnapshot(2, { players: [playerNoName] }));
+
+      const state = stateSync.getInterpolatedState();
+      const playerState = state?.players.get('new-player');
+      expect(playerState?.name).toBe('');
+    });
+  });
 });

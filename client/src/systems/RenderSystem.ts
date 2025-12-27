@@ -13,6 +13,14 @@ interface InputState {
   isBoosting: boolean;
 }
 
+// Viewport bounds for culling (in world space)
+interface ViewportBounds {
+  minX: number;
+  maxX: number;
+  minY: number;
+  maxY: number;
+}
+
 interface RenderState {
   phase: GamePhase;
   matchTime: number;
@@ -138,6 +146,15 @@ export class RenderSystem {
   // Performance: Cache parsed RGB values to avoid repeated hex parsing
   private colorCache: Map<string, { r: number; g: number; b: number }> = new Map();
 
+  // Performance: Cache text metrics to avoid repeated measureText() calls
+  // Key format: "font::text" -> TextMetrics
+  private textMetricsCache: Map<string, TextMetrics> = new Map();
+  private readonly TEXT_METRICS_CACHE_MAX_SIZE = 500;
+
+  // Performance: Viewport culling to skip rendering off-screen entities
+  private viewportBounds: ViewportBounds | null = null;
+  private readonly VIEWPORT_CULL_MARGIN = 100; // Extra margin for effects that extend beyond entity
+
   // Stellar flicker: reusable result object to avoid allocation per well
   private flickerResult = { glow: 1.0, core: 1.0, tempR: 0, tempB: 0 };
 
@@ -215,6 +232,78 @@ export class RenderSystem {
       this.colorCache.set(color, rgb);
     }
     return rgb;
+  }
+
+  // Performance: Cache text metrics to avoid repeated measureText() calls
+  // measureText() is expensive as it calculates font metrics each time
+  private measureTextCached(text: string, font?: string): TextMetrics {
+    const effectiveFont = font || this.ctx.font;
+    const key = `${effectiveFont}::${text}`;
+
+    let metrics = this.textMetricsCache.get(key);
+    if (metrics) {
+      return metrics;
+    }
+
+    // Cache miss - need to measure
+    const originalFont = this.ctx.font;
+    if (font && font !== this.ctx.font) {
+      this.ctx.font = font;
+    }
+    metrics = this.ctx.measureText(text);
+    if (font && font !== originalFont) {
+      this.ctx.font = originalFont;
+    }
+
+    // Limit cache size to avoid memory issues
+    if (this.textMetricsCache.size > this.TEXT_METRICS_CACHE_MAX_SIZE) {
+      // Clear oldest half
+      const keys = Array.from(this.textMetricsCache.keys());
+      keys.slice(0, Math.floor(this.TEXT_METRICS_CACHE_MAX_SIZE / 2)).forEach(k => this.textMetricsCache.delete(k));
+    }
+
+    this.textMetricsCache.set(key, metrics);
+    return metrics;
+  }
+
+  // Performance: Calculate viewport bounds for entity culling
+  // Call at start of render() after camera/zoom updates
+  private calculateViewportBounds(): ViewportBounds {
+    const canvas = this.ctx.canvas;
+    const margin = this.VIEWPORT_CULL_MARGIN;
+
+    // Safeguard against invalid zoom
+    const zoom = this.currentZoom > 0.001 ? this.currentZoom : 0.1;
+
+    const halfWidth = (canvas.width / 2 + margin) / zoom;
+    const halfHeight = (canvas.height / 2 + margin) / zoom;
+
+    // Camera offset is what we ADD to go from screen center to world center
+    const centerX = canvas.width / 2;
+    const centerY = canvas.height / 2;
+    const worldCenterX = centerX - this.cameraOffset.x;
+    const worldCenterY = centerY - this.cameraOffset.y;
+
+    return {
+      minX: worldCenterX - halfWidth,
+      maxX: worldCenterX + halfWidth,
+      minY: worldCenterY - halfHeight,
+      maxY: worldCenterY + halfHeight,
+    };
+  }
+
+  // Performance: Check if entity is within visible viewport
+  // Uses margin to include entities with effects that extend beyond their position
+  private isInViewport(x: number, y: number, entityRadius: number = 0): boolean {
+    if (!this.viewportBounds) return true; // No culling if bounds not calculated
+
+    const bounds = this.viewportBounds;
+    return (
+      x + entityRadius >= bounds.minX &&
+      x - entityRadius <= bounds.maxX &&
+      y + entityRadius >= bounds.minY &&
+      y - entityRadius <= bounds.maxY
+    );
   }
 
   private updatePlayerTrails(world: World): void {
@@ -322,6 +411,9 @@ export class RenderSystem {
       // Render trail points from oldest to newest for proper layering
       for (let i = 0; i < trail.length; i++) {
         const point = trail[i];
+
+        // Viewport culling - skip trail points outside visible area
+        if (!this.isInViewport(point.x, point.y, currentRadius * 1.5)) continue;
 
         // Skip trail points too close to player (avoids flickering through hollow center)
         const dx = point.x - playerX;
@@ -482,6 +574,9 @@ export class RenderSystem {
 
     // Smooth zoom interpolation with cinematic transitions for large changes
     this.updateZoom();
+
+    // Calculate viewport bounds for entity culling (after camera/zoom updates)
+    this.viewportBounds = this.calculateViewportBounds();
 
     // Update trails for all players
     this.updatePlayerTrails(world);
@@ -1162,6 +1257,8 @@ export class RenderSystem {
 
       for (const d of debris.values()) {
         if (d.size !== size) continue;
+        // Viewport culling - skip debris outside visible area
+        if (!this.isInViewport(d.position.x, d.position.y, radius)) continue;
         // Draw debris as small filled circle
         this.ctx.moveTo(d.position.x + radius, d.position.y);
         this.ctx.arc(d.position.x, d.position.y, radius, 0, Math.PI * 2);
@@ -1173,11 +1270,15 @@ export class RenderSystem {
 
   private renderProjectiles(world: World): void {
     for (const proj of world.getProjectiles().values()) {
+      const radius = world.massToRadius(proj.mass);
+
+      // Viewport culling - skip projectiles outside visible area
+      if (!this.isInViewport(proj.position.x, proj.position.y, radius * 1.3)) continue;
+
       const ownerPlayer = world.getPlayer(proj.ownerId);
       const color = ownerPlayer
         ? world.getPlayerColor(ownerPlayer.colorIndex)
         : '#ffffff';
-      const radius = world.massToRadius(proj.mass);
 
       // Outer glow
       this.ctx.fillStyle = this.colorWithAlpha(color, 0.3);
@@ -1212,6 +1313,11 @@ export class RenderSystem {
       if (!player.alive) continue;
 
       const radius = world.massToRadius(player.mass);
+
+      // Viewport culling - skip players outside visible area
+      // Use larger margin for flame effects that trail behind player
+      if (!this.isInViewport(player.position.x, player.position.y, radius * 3)) continue;
+
       const isLocal = player.id === world.localPlayerId;
 
       // Determine if flame should show
@@ -1245,6 +1351,11 @@ export class RenderSystem {
       if (!player.alive) continue;
 
       const radius = world.massToRadius(player.mass);
+
+      // Viewport culling - skip players outside visible area
+      // Use larger margin for birth/kill effects that extend beyond player radius
+      if (!this.isInViewport(player.position.x, player.position.y, radius * 2)) continue;
+
       const color = world.getPlayerColor(player.colorIndex);
       const isLocal = player.id === world.localPlayerId;
 
@@ -1339,7 +1450,7 @@ export class RenderSystem {
         } else if (!isLocal) {
           // Other human player: cyan dot + name
           this.ctx.fillStyle = '#22d3ee';
-          this.ctx.fillText('•', player.position.x - this.ctx.measureText(playerName).width / 2 - 8, nameY);
+          this.ctx.fillText('•', player.position.x - this.measureTextCached(playerName).width / 2 - 8, nameY);
           this.ctx.fillStyle = '#ffffff';
           this.ctx.fillText(playerName, player.position.x, nameY);
         } else {
@@ -1455,6 +1566,9 @@ export class RenderSystem {
       const { position, color, radius } = effect;
       const progress = Math.max(0.001, effect.progress);
       if (progress <= 0) continue;
+
+      // Viewport culling - death effects expand up to radius * 3 (ringRadius + particles)
+      if (!this.isInViewport(position.x, position.y, radius * 3)) continue;
 
       const rgb = this.getRGB(color);
       const invProgress = 1 - progress;
@@ -1703,6 +1817,9 @@ export class RenderSystem {
       // Skip if too faded
       if (progress < 0.05) continue;
 
+      // Viewport culling - collision effects have ring up to ~60 radius and particles up to ~40
+      if (!this.isInViewport(position.x, position.y, 70)) continue;
+
       const baseAlpha = progress * intensity;
       const ctx = this.ctx;
 
@@ -1772,6 +1889,9 @@ export class RenderSystem {
       const position = wellData.position;
       const coreRadius = wellData.coreRadius;
 
+      // Viewport culling - charging effect extends to ~2x core radius
+      if (!this.isInViewport(position.x, position.y, coreRadius * 2)) continue;
+
       // Pulsing intensity increases as explosion approaches
       const pulseSpeed = 5 + progress * 15; // Faster as it gets closer
       const pulse = 0.5 + 0.5 * Math.sin(Date.now() / (1000 / pulseSpeed));
@@ -1815,6 +1935,9 @@ export class RenderSystem {
 
       // Current wave radius
       const radius = progress * WAVE_MAX_RADIUS;
+
+      // Viewport culling - check if wave circle intersects viewport
+      if (!this.isInViewport(position.x, position.y, radius + WAVE_FRONT_THICKNESS)) continue;
 
       // Alpha decreases as wave expands
       const alpha = (1 - progress) * strength;
@@ -1999,7 +2122,7 @@ export class RenderSystem {
           this.ctx.fillText(rankText, Math.round(panelX + 14), Math.round(panelY + 32));
         }
 
-        const rankWidth = this.ctx.measureText(rankText).width;
+        const rankWidth = this.measureTextCached(rankText).width;
         this.ctx.fillStyle = '#64748b';
         this.ctx.font = '11px Inter, system-ui, sans-serif';
         this.ctx.fillText(`of ${aliveCount}`, Math.round(panelX + 18 + rankWidth), Math.round(panelY + 32));
@@ -2009,7 +2132,7 @@ export class RenderSystem {
         this.ctx.font = 'bold 20px Inter, system-ui, sans-serif';
         this.ctx.textAlign = 'left';
         this.drawGlowText('DEAD', Math.round(panelX + 14), Math.round(panelY + 32), `rgba(239, 68, 68, ${pulse})`, 1);
-        const deadWidth = this.ctx.measureText('DEAD').width;
+        const deadWidth = this.measureTextCached('DEAD').width;
         this.ctx.fillStyle = '#64748b';
         this.ctx.font = '11px Inter, system-ui, sans-serif';
         this.ctx.fillText(`${aliveCount} alive`, Math.round(panelX + 18 + deadWidth), Math.round(panelY + 32));
@@ -2271,7 +2394,7 @@ export class RenderSystem {
       const ai = world.aiStatus;
       const statusText = `AI: ${ai.decisionsTotal} decisions  •  ${ai.successRate}% success  •  ${ai.confidence}% confidence`;
       this.ctx.font = '10px Inter, system-ui, sans-serif';
-      const textWidth = this.ctx.measureText(statusText).width;
+      const textWidth = this.measureTextCached(statusText).width;
       const pillW = textWidth + 32;
       const pillH = 22;
       const pillX = Math.round((canvas.width - pillW) / 2);
@@ -3155,6 +3278,7 @@ export class RenderSystem {
     this.shakeOffset = { x: 0, y: 0 };
     this.scaleHistory = [];
     this.scaleDirection = 'stable';
+    this.textMetricsCache.clear();
   }
 
   /** Get current zoom level (for viewport info reporting to server) */

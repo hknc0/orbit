@@ -120,6 +120,10 @@ export class StateSync {
   // bornTime > 0 means show birth animation (actually just spawned/respawned)
   private playerBornTimes: Map<PlayerId, number> = new Map();
 
+  // Cache player names for bandwidth optimization
+  // Server may omit names for players the client has already seen
+  private playerNameCache: Map<PlayerId, string> = new Map();
+
   // Track if we've received the first snapshot (entities in first snapshot may skip animation)
   private hasReceivedFirstSnapshot: boolean = false;
 
@@ -174,6 +178,14 @@ export class StateSync {
         // Update tracking
         this.localPlayerLastAlive = localPlayer.alive;
         this.localPlayerLastSpawnTick = localPlayer.spawnTick;
+      }
+    }
+
+    // Cache player names immediately when snapshot is received
+    // This ensures names are available even if the snapshot is evicted before interpolation
+    for (const player of snapshot.players) {
+      if (player.name !== undefined && player.name !== null) {
+        this.playerNameCache.set(player.id, player.name);
       }
     }
 
@@ -442,6 +454,11 @@ export class StateSync {
         // Player respawned - update birth time to animate
         this.playerBornTimes.set(player.id, now);
       }
+
+      // Cache player name if provided (server may omit after first appearance)
+      if (player.name !== undefined && player.name !== null) {
+        this.playerNameCache.set(player.id, player.name);
+      }
     }
 
     // Cleanup: remove tracking for players who left our AOI (prevents memory leak)
@@ -449,13 +466,20 @@ export class StateSync {
     for (const trackedId of this.playerBornTimes.keys()) {
       if (!currentPlayerIds.has(trackedId)) {
         this.playerBornTimes.delete(trackedId);
+        this.playerNameCache.delete(trackedId);
       }
     }
 
     const players = new Map<PlayerId, InterpolatedPlayer>();
     for (const player of snapshot.players) {
+      // Use cached name if player.name is not provided
+      const name = (player.name !== undefined && player.name !== null)
+        ? player.name
+        : (this.playerNameCache.get(player.id) ?? '');
+
       players.set(player.id, {
         ...player,
+        name,
         position: player.position.clone(),
         velocity: player.velocity.clone(),
         bornTime: this.playerBornTimes.get(player.id) ?? 0,
@@ -560,6 +584,11 @@ export class StateSync {
         // Player respawned - update birth time to animate
         this.playerBornTimes.set(afterPlayer.id, now);
       }
+
+      // Cache player name if provided (server may omit after first appearance)
+      if (afterPlayer.name !== undefined && afterPlayer.name !== null) {
+        this.playerNameCache.set(afterPlayer.id, afterPlayer.name);
+      }
     }
 
     // Cleanup: remove tracking for players who left our AOI (prevents memory leak)
@@ -567,6 +596,7 @@ export class StateSync {
     for (const trackedId of this.playerBornTimes.keys()) {
       if (!currentPlayerIds.has(trackedId)) {
         this.playerBornTimes.delete(trackedId);
+        this.playerNameCache.delete(trackedId);
       }
     }
 
@@ -574,6 +604,11 @@ export class StateSync {
     for (const afterPlayer of after.players) {
       const beforePlayer = beforePlayerMap.get(afterPlayer.id);
       const bornTime = this.playerBornTimes.get(afterPlayer.id) ?? 0;
+
+      // Use cached name if player.name is not provided
+      const name = (afterPlayer.name !== undefined && afterPlayer.name !== null)
+        ? afterPlayer.name
+        : (this.playerNameCache.get(afterPlayer.id) ?? '');
 
       if (beforePlayer) {
         // Check if player just respawned (was dead, now alive with spawn protection)
@@ -585,6 +620,7 @@ export class StateSync {
           // Snap to new position - no interpolation
           players.set(afterPlayer.id, {
             ...afterPlayer,
+            name,
             position: afterPlayer.position.clone(),
             velocity: afterPlayer.velocity.clone(),
             bornTime,
@@ -593,7 +629,7 @@ export class StateSync {
           // Normal interpolation
           players.set(afterPlayer.id, {
             id: afterPlayer.id,
-            name: afterPlayer.name,
+            name,
             position: vec2Lerp(beforePlayer.position, afterPlayer.position, t),
             velocity: vec2Lerp(beforePlayer.velocity, afterPlayer.velocity, t),
             rotation: this.lerpAngle(beforePlayer.rotation, afterPlayer.rotation, t),
@@ -611,6 +647,7 @@ export class StateSync {
         // New player, no interpolation
         players.set(afterPlayer.id, {
           ...afterPlayer,
+          name,
           position: afterPlayer.position.clone(),
           velocity: afterPlayer.velocity.clone(),
           bornTime,
@@ -753,6 +790,7 @@ export class StateSync {
     this.lastSnapshotTime = 0;
     this.snapshotIntervalAvg = PHYSICS.DT * 1000;
     this.playerBornTimes.clear();
+    this.playerNameCache.clear();
     this.hasReceivedFirstSnapshot = false;
     // Reset respawn detection tracking
     this.localPlayerLastAlive = false;

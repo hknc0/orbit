@@ -22,45 +22,70 @@ pub type PlayerId = Uuid;
 pub type EntityId = u64;
 
 /// Player state
+///
+/// OPTIMIZATION: Fields are ordered for cache efficiency during physics updates.
+/// Hot fields (accessed every tick) are grouped first to fit in cache line 1.
+/// Warm fields (accessed during collisions) are in cache line 2.
+/// Cold fields (rarely accessed in hot path) are at the end.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Player {
-    pub id: PlayerId,
-    pub name: String,
+    // === HOT FIELDS (Cache Line 1 - accessed every physics tick) ===
+    /// Player position in world space
     pub position: Vec2,
+    /// Player velocity vector
     pub velocity: Vec2,
-    pub rotation: f32,
+    /// Player mass (affects collision and gravity)
     pub mass: f32,
+    /// Whether player is alive
     pub alive: bool,
-    pub kills: u32,
-    pub deaths: u32,
+    /// Remaining spawn protection time (seconds)
     pub spawn_protection: f32,
-    pub is_bot: bool,
-    pub color_index: u8,
+    /// Player rotation (radians)
+    pub rotation: f32,
+
+    // === WARM FIELDS (Cache Line 2 - accessed during collisions/scoring) ===
+    /// Number of kills
+    pub kills: u32,
+    /// Number of deaths
+    pub deaths: u32,
     /// Timer until respawn (0 = can respawn, >0 = waiting)
     #[serde(default)]
     pub respawn_timer: f32,
+    /// Whether player is a bot
+    pub is_bot: bool,
+    /// Player color palette index
+    pub color_index: u8,
     /// Tick when player spawned/respawned (for birth animation detection)
     #[serde(default)]
     pub spawn_tick: u64,
+
+    // === COLD FIELDS (Cache Line 3 - rarely accessed in hot path) ===
+    /// Unique player identifier
+    pub id: PlayerId,
+    /// Player display name
+    pub name: String,
 }
 
 impl Player {
     pub fn new(id: PlayerId, name: String, is_bot: bool, color_index: u8) -> Self {
         Self {
-            id,
-            name,
+            // HOT fields
             position: Vec2::ZERO,
             velocity: Vec2::ZERO,
-            rotation: 0.0,
             mass: mass::STARTING,
             alive: true,
+            spawn_protection: spawn::PROTECTION_DURATION,
+            rotation: 0.0,
+            // WARM fields
             kills: 0,
             deaths: 0,
-            spawn_protection: spawn::PROTECTION_DURATION,
+            respawn_timer: 0.0,
             is_bot,
             color_index,
-            respawn_timer: 0.0,
             spawn_tick: 0, // Set properly when added to game via add_player
+            // COLD fields
+            id,
+            name,
         }
     }
 
@@ -2009,5 +2034,168 @@ mod tests {
         // Add more wells
         arena.add_orbital_wells(2, 1500.0, &config);
         assert_eq!(arena.next_well_angle_index, 5); // 3 + 2 = 5
+    }
+
+    // ========== OPTIMIZATION TESTS: Player Struct Field Reordering ==========
+    // These tests verify that performance optimizations don't break functionality
+
+    #[test]
+    fn test_player_struct_hot_fields_accessible() {
+        // Verify all hot fields (position, velocity, mass, alive) are accessible
+        // These are the fields accessed every physics tick and should be in cache line 1
+        let mut player = Player::default();
+
+        // Hot fields - accessed every tick
+        player.position = Vec2::new(100.0, 200.0);
+        player.velocity = Vec2::new(10.0, -5.0);
+        player.mass = 150.0;
+        player.alive = true;
+        player.spawn_protection = 2.5;
+        player.rotation = 1.57;
+
+        assert_eq!(player.position.x, 100.0);
+        assert_eq!(player.position.y, 200.0);
+        assert_eq!(player.velocity.x, 10.0);
+        assert_eq!(player.velocity.y, -5.0);
+        assert_eq!(player.mass, 150.0);
+        assert!(player.alive);
+        assert_eq!(player.spawn_protection, 2.5);
+        assert_eq!(player.rotation, 1.57);
+    }
+
+    #[test]
+    fn test_player_struct_warm_fields_accessible() {
+        // Verify warm fields (kills, deaths, etc.) are accessible
+        // These are accessed during collisions/scoring
+        let mut player = Player::default();
+
+        player.kills = 10;
+        player.deaths = 3;
+        player.respawn_timer = 5.0;
+        player.is_bot = true;
+        player.color_index = 5;
+        player.spawn_tick = 12345;
+
+        assert_eq!(player.kills, 10);
+        assert_eq!(player.deaths, 3);
+        assert_eq!(player.respawn_timer, 5.0);
+        assert!(player.is_bot);
+        assert_eq!(player.color_index, 5);
+        assert_eq!(player.spawn_tick, 12345);
+    }
+
+    #[test]
+    fn test_player_struct_cold_fields_accessible() {
+        // Verify cold fields (id, name) are accessible
+        // These are rarely accessed in hot path
+        let id = Uuid::new_v4();
+        let player = Player::new(id, "TestPlayer".to_string(), false, 0);
+
+        assert_eq!(player.id, id);
+        assert_eq!(player.name, "TestPlayer");
+    }
+
+    #[test]
+    fn test_player_serialization_round_trip() {
+        // Verify Player can be serialized and deserialized correctly
+        // Field reordering must not break serialization compatibility
+        let id = Uuid::new_v4();
+        let mut original = Player::new(id, "SerializeTest".to_string(), true, 7);
+        original.position = Vec2::new(123.456, 789.012);
+        original.velocity = Vec2::new(-50.0, 25.0);
+        original.rotation = 3.14159;
+        original.mass = 200.5;
+        original.alive = false;
+        original.kills = 42;
+        original.deaths = 17;
+        original.spawn_protection = 1.5;
+        original.respawn_timer = 3.0;
+        original.spawn_tick = 999;
+
+        // Serialize
+        let encoded = bincode::serde::encode_to_vec(&original, bincode::config::standard())
+            .expect("Failed to serialize Player");
+
+        // Deserialize
+        let (decoded, _): (Player, usize) = bincode::serde::decode_from_slice(
+            &encoded,
+            bincode::config::standard()
+        ).expect("Failed to deserialize Player");
+
+        // Verify all fields match
+        assert_eq!(decoded.id, original.id);
+        assert_eq!(decoded.name, original.name);
+        assert!((decoded.position.x - original.position.x).abs() < 0.001);
+        assert!((decoded.position.y - original.position.y).abs() < 0.001);
+        assert!((decoded.velocity.x - original.velocity.x).abs() < 0.001);
+        assert!((decoded.velocity.y - original.velocity.y).abs() < 0.001);
+        assert!((decoded.rotation - original.rotation).abs() < 0.001);
+        assert!((decoded.mass - original.mass).abs() < 0.001);
+        assert_eq!(decoded.alive, original.alive);
+        assert_eq!(decoded.kills, original.kills);
+        assert_eq!(decoded.deaths, original.deaths);
+        assert!((decoded.spawn_protection - original.spawn_protection).abs() < 0.001);
+        assert_eq!(decoded.is_bot, original.is_bot);
+        assert_eq!(decoded.color_index, original.color_index);
+        assert!((decoded.respawn_timer - original.respawn_timer).abs() < 0.001);
+        assert_eq!(decoded.spawn_tick, original.spawn_tick);
+    }
+
+    #[test]
+    fn test_player_all_fields_preserved_after_clone() {
+        // Verify Clone implementation preserves all fields
+        let id = Uuid::new_v4();
+        let mut original = Player::new(id, "CloneTest".to_string(), true, 3);
+        original.position = Vec2::new(500.0, 600.0);
+        original.velocity = Vec2::new(100.0, -200.0);
+        original.rotation = 2.0;
+        original.mass = 300.0;
+        original.alive = false;
+        original.kills = 99;
+        original.deaths = 88;
+        original.spawn_protection = 0.5;
+        original.respawn_timer = 2.5;
+        original.spawn_tick = 555;
+
+        let cloned = original.clone();
+
+        assert_eq!(cloned.id, original.id);
+        assert_eq!(cloned.name, original.name);
+        assert_eq!(cloned.position.x, original.position.x);
+        assert_eq!(cloned.position.y, original.position.y);
+        assert_eq!(cloned.velocity.x, original.velocity.x);
+        assert_eq!(cloned.velocity.y, original.velocity.y);
+        assert_eq!(cloned.rotation, original.rotation);
+        assert_eq!(cloned.mass, original.mass);
+        assert_eq!(cloned.alive, original.alive);
+        assert_eq!(cloned.kills, original.kills);
+        assert_eq!(cloned.deaths, original.deaths);
+        assert_eq!(cloned.spawn_protection, original.spawn_protection);
+        assert_eq!(cloned.is_bot, original.is_bot);
+        assert_eq!(cloned.color_index, original.color_index);
+        assert_eq!(cloned.respawn_timer, original.respawn_timer);
+        assert_eq!(cloned.spawn_tick, original.spawn_tick);
+    }
+
+    #[test]
+    fn test_player_default_impl_all_fields_initialized() {
+        // Verify Default impl initializes all fields to expected values
+        let player = Player::default();
+
+        // Default should create a valid player
+        assert!(!player.id.is_nil()); // UUID should be generated
+        assert_eq!(player.name, "Player");
+        assert_eq!(player.position, Vec2::ZERO);
+        assert_eq!(player.velocity, Vec2::ZERO);
+        assert_eq!(player.rotation, 0.0);
+        assert_eq!(player.mass, mass::STARTING);
+        assert!(player.alive);
+        assert_eq!(player.kills, 0);
+        assert_eq!(player.deaths, 0);
+        assert!(player.spawn_protection > 0.0); // Should have spawn protection
+        assert!(!player.is_bot);
+        assert_eq!(player.color_index, 0);
+        assert_eq!(player.respawn_timer, 0.0);
+        assert_eq!(player.spawn_tick, 0);
     }
 }

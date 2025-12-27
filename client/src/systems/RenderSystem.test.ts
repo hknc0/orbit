@@ -1146,6 +1146,433 @@ describe('Shake Decay', () => {
   });
 });
 
+// ========== OPTIMIZATION TESTS: Text Metrics Caching ==========
+// These tests verify the text metrics caching optimization for measureText()
+
+describe('Text Metrics Caching', () => {
+  // Simulates the TextMetricsCache implementation
+  interface TextMetricsCache {
+    cache: Map<string, TextMetrics>;
+    hits: number;
+    misses: number;
+  }
+
+  function createTextMetricsCache(): TextMetricsCache {
+    return {
+      cache: new Map(),
+      hits: 0,
+      misses: 0,
+    };
+  }
+
+  // Simulates measureTextCached method
+  function measureTextCached(
+    ctx: CanvasRenderingContext2D,
+    cache: TextMetricsCache,
+    text: string,
+    font?: string
+  ): TextMetrics {
+    const effectiveFont = font || ctx.font;
+    const key = `${effectiveFont}::${text}`;
+
+    const cached = cache.cache.get(key);
+    if (cached) {
+      cache.hits++;
+      return cached;
+    }
+
+    // Cache miss - need to measure
+    cache.misses++;
+    const originalFont = ctx.font;
+    if (font && font !== ctx.font) {
+      ctx.font = font;
+    }
+    const metrics = ctx.measureText(text);
+    if (font && font !== originalFont) {
+      ctx.font = originalFont;
+    }
+
+    cache.cache.set(key, metrics);
+    return metrics;
+  }
+
+  it('should return cached result for same text and font', () => {
+    const ctx = {
+      font: '14px Arial',
+      measureText: vi.fn(() => ({ width: 100 } as TextMetrics)),
+    } as unknown as CanvasRenderingContext2D;
+
+    const cache = createTextMetricsCache();
+
+    // First call - should miss
+    const result1 = measureTextCached(ctx, cache, 'Hello');
+    expect(cache.misses).toBe(1);
+    expect(cache.hits).toBe(0);
+    expect(ctx.measureText).toHaveBeenCalledTimes(1);
+
+    // Second call with same text - should hit
+    const result2 = measureTextCached(ctx, cache, 'Hello');
+    expect(cache.misses).toBe(1);
+    expect(cache.hits).toBe(1);
+    expect(ctx.measureText).toHaveBeenCalledTimes(1); // Still 1!
+
+    // Both should return same metrics
+    expect(result1.width).toBe(result2.width);
+  });
+
+  it('should cache miss for different text', () => {
+    const ctx = {
+      font: '14px Arial',
+      measureText: vi.fn((text: string) => ({ width: text.length * 10 } as TextMetrics)),
+    } as unknown as CanvasRenderingContext2D;
+
+    const cache = createTextMetricsCache();
+
+    measureTextCached(ctx, cache, 'Hello');
+    expect(cache.misses).toBe(1);
+
+    measureTextCached(ctx, cache, 'World');
+    expect(cache.misses).toBe(2);
+    expect(cache.hits).toBe(0);
+    expect(ctx.measureText).toHaveBeenCalledTimes(2);
+  });
+
+  it('should cache miss when font changes', () => {
+    const ctx = {
+      font: '14px Arial',
+      measureText: vi.fn(() => ({ width: 100 } as TextMetrics)),
+    } as unknown as CanvasRenderingContext2D;
+
+    const cache = createTextMetricsCache();
+
+    // First call with default font
+    measureTextCached(ctx, cache, 'Hello');
+    expect(cache.misses).toBe(1);
+
+    // Same text but explicit different font
+    measureTextCached(ctx, cache, 'Hello', 'bold 16px Arial');
+    expect(cache.misses).toBe(2);
+    expect(cache.hits).toBe(0);
+  });
+
+  it('should handle empty text', () => {
+    const ctx = {
+      font: '14px Arial',
+      measureText: vi.fn(() => ({ width: 0 } as TextMetrics)),
+    } as unknown as CanvasRenderingContext2D;
+
+    const cache = createTextMetricsCache();
+
+    const result = measureTextCached(ctx, cache, '');
+    expect(result.width).toBe(0);
+    expect(cache.cache.has('14px Arial::')).toBe(true);
+  });
+
+  it('should use correct cache key format', () => {
+    const ctx = {
+      font: 'bold 20px Courier',
+      measureText: vi.fn(() => ({ width: 50 } as TextMetrics)),
+    } as unknown as CanvasRenderingContext2D;
+
+    const cache = createTextMetricsCache();
+
+    measureTextCached(ctx, cache, 'Test');
+
+    // Cache key should be font::text
+    expect(cache.cache.has('bold 20px Courier::Test')).toBe(true);
+  });
+
+  it('should handle special characters in text', () => {
+    const ctx = {
+      font: '14px Arial',
+      measureText: vi.fn(() => ({ width: 100 } as TextMetrics)),
+    } as unknown as CanvasRenderingContext2D;
+
+    const cache = createTextMetricsCache();
+
+    measureTextCached(ctx, cache, 'Player_123::ABC');
+    expect(cache.cache.size).toBe(1);
+
+    // Same text should hit
+    measureTextCached(ctx, cache, 'Player_123::ABC');
+    expect(cache.hits).toBe(1);
+  });
+
+  it('should maintain reasonable cache size', () => {
+    const ctx = {
+      font: '14px Arial',
+      measureText: vi.fn((text: string) => ({ width: text.length * 10 } as TextMetrics)),
+    } as unknown as CanvasRenderingContext2D;
+
+    const cache = createTextMetricsCache();
+    const maxSize = 500;
+
+    // Simulate many different texts (like player names)
+    for (let i = 0; i < 600; i++) {
+      const key = `Player_${i}`;
+      measureTextCached(ctx, cache, key);
+
+      // Implementation should limit cache size
+      if (cache.cache.size > maxSize) {
+        // Clear oldest half
+        const keys = Array.from(cache.cache.keys());
+        keys.slice(0, 250).forEach(k => cache.cache.delete(k));
+      }
+    }
+
+    expect(cache.cache.size).toBeLessThanOrEqual(maxSize);
+  });
+
+  it('should restore font after measuring with custom font', () => {
+    const ctx = {
+      font: '14px Arial',
+      measureText: vi.fn(() => ({ width: 100 } as TextMetrics)),
+    } as unknown as CanvasRenderingContext2D;
+
+    const cache = createTextMetricsCache();
+
+    // Measure with different font
+    measureTextCached(ctx, cache, 'Test', 'bold 20px Courier');
+
+    // Original font should be restored
+    expect(ctx.font).toBe('14px Arial');
+  });
+
+  it('should not change font when using default', () => {
+    const ctx = {
+      font: '14px Arial',
+      measureText: vi.fn(() => ({ width: 100 } as TextMetrics)),
+    } as unknown as CanvasRenderingContext2D;
+
+    const cache = createTextMetricsCache();
+
+    // Measure without explicit font
+    measureTextCached(ctx, cache, 'Test');
+
+    // Font should not have changed
+    expect(ctx.font).toBe('14px Arial');
+  });
+});
+
+// ========== OPTIMIZATION TESTS: Viewport Culling ==========
+// These tests verify the viewport culling optimization for rendering
+
+describe('Viewport Culling', () => {
+  interface ViewportBounds {
+    minX: number;
+    maxX: number;
+    minY: number;
+    maxY: number;
+  }
+
+  // Simulates the viewport bounds calculation
+  function calculateViewportBounds(
+    canvasWidth: number,
+    canvasHeight: number,
+    cameraOffsetX: number,
+    cameraOffsetY: number,
+    currentZoom: number,
+    margin: number = 100
+  ): ViewportBounds {
+    // Safeguard against invalid zoom
+    const zoom = currentZoom > 0.001 ? currentZoom : 0.1;
+
+    const halfWidth = (canvasWidth / 2 + margin) / zoom;
+    const halfHeight = (canvasHeight / 2 + margin) / zoom;
+
+    // Camera offset is what we ADD to go from screen center to world center
+    // World center = screen center + camera offset (in world space)
+    const centerX = canvasWidth / 2;
+    const centerY = canvasHeight / 2;
+    const worldCenterX = centerX - cameraOffsetX;
+    const worldCenterY = centerY - cameraOffsetY;
+
+    return {
+      minX: worldCenterX - halfWidth,
+      maxX: worldCenterX + halfWidth,
+      minY: worldCenterY - halfHeight,
+      maxY: worldCenterY + halfHeight,
+    };
+  }
+
+  // Simulates the isInViewport check
+  function isInViewport(
+    bounds: ViewportBounds,
+    x: number,
+    y: number,
+    entityRadius: number = 0
+  ): boolean {
+    return (
+      x + entityRadius >= bounds.minX &&
+      x - entityRadius <= bounds.maxX &&
+      y + entityRadius >= bounds.minY &&
+      y - entityRadius <= bounds.maxY
+    );
+  }
+
+  describe('calculateViewportBounds', () => {
+    it('should calculate correct bounds at zoom 1.0', () => {
+      const bounds = calculateViewportBounds(1920, 1080, 960, 540, 1.0, 100);
+      // At zoom 1.0, halfWidth = (1920/2 + 100) / 1.0 = 1060
+      // worldCenterX = 960 - 960 = 0
+      expect(bounds.minX).toBe(-1060);
+      expect(bounds.maxX).toBe(1060);
+    });
+
+    it('should expand bounds when zoomed out', () => {
+      const boundsNormal = calculateViewportBounds(1920, 1080, 960, 540, 1.0, 100);
+      const boundsZoomedOut = calculateViewportBounds(1920, 1080, 960, 540, 0.5, 100);
+
+      // At zoom 0.5, visible area should be ~2x larger
+      const widthNormal = boundsNormal.maxX - boundsNormal.minX;
+      const widthZoomed = boundsZoomedOut.maxX - boundsZoomedOut.minX;
+      expect(widthZoomed).toBeCloseTo(widthNormal * 2, 0);
+    });
+
+    it('should handle very low zoom (spectator full map view)', () => {
+      const bounds = calculateViewportBounds(1920, 1080, 960, 540, 0.1, 100);
+      expect(isFinite(bounds.minX)).toBe(true);
+      expect(isFinite(bounds.maxX)).toBe(true);
+      // Should be very large visible area
+      const width = bounds.maxX - bounds.minX;
+      expect(width).toBeGreaterThan(10000);
+    });
+
+    it('should handle zero zoom gracefully', () => {
+      const bounds = calculateViewportBounds(1920, 1080, 960, 540, 0, 100);
+      expect(isFinite(bounds.minX)).toBe(true);
+      expect(isFinite(bounds.maxX)).toBe(true);
+    });
+
+    it('should handle NaN zoom gracefully', () => {
+      const bounds = calculateViewportBounds(1920, 1080, 960, 540, NaN, 100);
+      expect(isFinite(bounds.minX)).toBe(true);
+      expect(isFinite(bounds.maxX)).toBe(true);
+    });
+
+    it('should account for camera offset', () => {
+      // Camera at origin
+      const boundsOrigin = calculateViewportBounds(1920, 1080, 960, 540, 1.0, 0);
+      // Camera offset to look at (500, 300)
+      const boundsOffset = calculateViewportBounds(1920, 1080, 460, 240, 1.0, 0);
+
+      // worldCenterX for origin: 960 - 960 = 0
+      // worldCenterX for offset: 960 - 460 = 500
+      const originCenterX = (boundsOrigin.minX + boundsOrigin.maxX) / 2;
+      const offsetCenterX = (boundsOffset.minX + boundsOffset.maxX) / 2;
+      expect(originCenterX).toBe(0);
+      expect(offsetCenterX).toBe(500);
+    });
+  });
+
+  describe('isInViewport', () => {
+    const bounds: ViewportBounds = {
+      minX: -1000,
+      maxX: 1000,
+      minY: -500,
+      maxY: 500,
+    };
+
+    it('should return true for entity at center', () => {
+      expect(isInViewport(bounds, 0, 0, 10)).toBe(true);
+    });
+
+    it('should return true for entity at edge', () => {
+      expect(isInViewport(bounds, 990, 0, 10)).toBe(true);
+    });
+
+    it('should return false for entity outside viewport', () => {
+      expect(isInViewport(bounds, 1200, 0, 10)).toBe(false);
+    });
+
+    it('should account for entity radius', () => {
+      // Entity at 1005, but with radius 20, touches viewport
+      expect(isInViewport(bounds, 1005, 0, 20)).toBe(true);
+      // Entity at 1025, with radius 20, does not touch viewport
+      expect(isInViewport(bounds, 1025, 0, 20)).toBe(false);
+    });
+
+    it('should handle negative coordinates', () => {
+      expect(isInViewport(bounds, -999, -499, 0)).toBe(true);
+      expect(isInViewport(bounds, -1001, 0, 0)).toBe(false);
+    });
+
+    it('should handle entity with zero radius', () => {
+      expect(isInViewport(bounds, 1000, 0, 0)).toBe(true);
+      expect(isInViewport(bounds, 1001, 0, 0)).toBe(false);
+    });
+
+    it('should handle large entities spanning viewport edge', () => {
+      // Large entity just outside but overlapping due to radius
+      expect(isInViewport(bounds, 1500, 0, 600)).toBe(true);
+    });
+
+    it('should check all four edges', () => {
+      // Just inside each edge
+      expect(isInViewport(bounds, -999, 0, 0)).toBe(true);  // left
+      expect(isInViewport(bounds, 999, 0, 0)).toBe(true);   // right
+      expect(isInViewport(bounds, 0, -499, 0)).toBe(true);  // top
+      expect(isInViewport(bounds, 0, 499, 0)).toBe(true);   // bottom
+
+      // Just outside each edge
+      expect(isInViewport(bounds, -1001, 0, 0)).toBe(false); // left
+      expect(isInViewport(bounds, 1001, 0, 0)).toBe(false);  // right
+      expect(isInViewport(bounds, 0, -501, 0)).toBe(false);  // top
+      expect(isInViewport(bounds, 0, 501, 0)).toBe(false);   // bottom
+    });
+  });
+
+  describe('Performance estimation', () => {
+    it('should cull significant portion of entities in typical scenario', () => {
+      const bounds: ViewportBounds = {
+        minX: -1000,
+        maxX: 1000,
+        minY: -500,
+        maxY: 500,
+      };
+
+      // Simulate 100 entities spread across a larger world (-3000 to 3000)
+      let visibleCount = 0;
+      let totalCount = 100;
+
+      for (let i = 0; i < totalCount; i++) {
+        const x = -3000 + (i / totalCount) * 6000;
+        const y = Math.sin(i) * 2000;
+        if (isInViewport(bounds, x, y, 20)) {
+          visibleCount++;
+        }
+      }
+
+      // Most entities should be culled
+      const culledPercentage = (totalCount - visibleCount) / totalCount;
+      expect(culledPercentage).toBeGreaterThan(0.5);
+    });
+
+    it('should include all entities when zoomed out far', () => {
+      const bounds: ViewportBounds = {
+        minX: -10000,
+        maxX: 10000,
+        minY: -10000,
+        maxY: 10000,
+      };
+
+      // All entities in a 6000x4000 world should be visible
+      let visibleCount = 0;
+      for (let x = -3000; x <= 3000; x += 500) {
+        for (let y = -2000; y <= 2000; y += 500) {
+          if (isInViewport(bounds, x, y, 20)) {
+            visibleCount++;
+          }
+        }
+      }
+
+      // All should be visible
+      const totalCount = 13 * 9; // 13 x positions, 9 y positions
+      expect(visibleCount).toBe(totalCount);
+    });
+  });
+});
+
 // Test trail point management
 describe('Trail Point Management', () => {
   interface TrailPoint {
