@@ -219,11 +219,16 @@ export class StateSync {
       this.currentTick = snapshot.tick;
     }
 
-    // Clean up destroyed wells tracking when server confirms removal
-    if (this.destroyedWellIds.size > 0) {
-      const serverWellIds = new Set(snapshot.gravityWells.map(w => w.id));
+    // Clean up destroyed wells tracking when OLDEST snapshot confirms removal
+    // We must check the oldest snapshot (not newest) because interpolation renders
+    // with ~100ms delay. If we clean up based on newest snapshot, the well will
+    // briefly reappear when interpolating between older snapshots that still have it.
+    if (this.destroyedWellIds.size > 0 && this.snapshots.length > 0) {
+      const oldestSnapshot = this.snapshots[0];
+      const oldestWellIds = new Set(oldestSnapshot.snapshot.gravityWells.map(w => w.id));
       for (const wellId of this.destroyedWellIds) {
-        if (!serverWellIds.has(wellId)) {
+        // Only remove from tracking if the oldest buffered snapshot doesn't have it
+        if (!oldestWellIds.has(wellId)) {
           this.destroyedWellIds.delete(wellId);
         }
       }
