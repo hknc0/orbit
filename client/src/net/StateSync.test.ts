@@ -176,6 +176,7 @@ describe('StateSync', () => {
         ],
         projectileUpdates: [],
         removedProjectiles: [],
+        debris: [],
       };
 
       mockPerformanceNow = 1500;
@@ -197,6 +198,7 @@ describe('StateSync', () => {
           },
         ],
         removedProjectiles: [],
+        debris: [],
       };
 
       mockPerformanceNow = 1500;
@@ -212,6 +214,7 @@ describe('StateSync', () => {
         playerUpdates: [],
         projectileUpdates: [],
         removedProjectiles: [1],
+        debris: [],
       };
 
       mockPerformanceNow = 1500;
@@ -227,6 +230,7 @@ describe('StateSync', () => {
         playerUpdates: [],
         projectileUpdates: [],
         removedProjectiles: [],
+        debris: [],
       };
 
       const tickBefore = stateSync.getCurrentTick();

@@ -44,16 +44,20 @@ const ROTATION_EPSILON: f32 = 0.01;
 const MASS_EPSILON: f32 = 0.1;
 
 // ============================================================================
-// Rate Limiting
+// Rate Limiting (currently disabled - kept for potential future use)
 // ============================================================================
 
 /// Determine the update interval (in ticks) for an entity based on its distance
 /// from the viewer. Uses the same LOD thresholds as the bot AI system.
 ///
+/// NOTE: Rate limiting is currently disabled as it caused visual jumping.
+/// All entities update at full rate (30Hz) for smooth interpolation.
+///
 /// Returns:
 /// - 1 for close entities (full rate, every tick = 30Hz)
 /// - 4 for medium distance (reduced rate = 7.5Hz)
 /// - 8 for far entities (dormant rate = 3.75Hz)
+#[allow(dead_code)]
 pub fn get_update_interval(distance: f32) -> u32 {
     if distance <= DEFAULT_LOD_FULL_RADIUS {
         1 // Every tick (30Hz)
@@ -66,6 +70,9 @@ pub fn get_update_interval(distance: f32) -> u32 {
 
 /// Check if an entity should be updated this tick based on distance-based rate limiting.
 ///
+/// NOTE: Rate limiting is currently disabled as it caused visual jumping.
+/// All entities update at full rate (30Hz) for smooth interpolation.
+///
 /// # Arguments
 /// - `entity_id`: The entity's unique ID
 /// - `distance`: Distance from the viewer
@@ -74,6 +81,7 @@ pub fn get_update_interval(distance: f32) -> u32 {
 ///
 /// # Returns
 /// `true` if the entity should be included in this update
+#[allow(dead_code)]
 pub fn should_update_entity(
     entity_id: &PlayerId,
     distance: f32,
@@ -124,8 +132,7 @@ pub struct DeltaStats {
 /// - `base`: The previous snapshot (used as reference)
 /// - `current`: The current snapshot
 /// - `viewer_position`: Position of the viewing player (for distance calculation)
-/// - `current_tick`: Current game tick
-/// - `last_updates`: Per-entity last update tick tracking (for rate limiting)
+/// - `current_tick`: Current game tick (used for delta metadata)
 ///
 /// # Returns
 /// - `Some((DeltaUpdate, DeltaStats))` if there are changes to send
@@ -134,8 +141,7 @@ pub fn generate_delta(
     base: &GameSnapshot,
     current: &GameSnapshot,
     viewer_position: Vec2,
-    current_tick: u64,
-    last_updates: &HashMap<PlayerId, u64>,
+    _current_tick: u64,
 ) -> Option<(DeltaUpdate, DeltaStats)> {
     let mut player_updates = Vec::with_capacity(current.players.len());
     let mut stats = DeltaStats::default();
@@ -145,22 +151,16 @@ pub fn generate_delta(
         base.players.iter().map(|p| (p.id, p)).collect();
 
     for player in &current.players {
+        // Track distance tier for metrics (no rate limiting - causes visual jumping)
         let distance = (player.position - viewer_position).length();
-
-        // Check rate limiting
-        if !should_update_entity(&player.id, distance, current_tick, last_updates) {
-            stats.players_skipped += 1;
-            continue;
-        }
-
-        // Track rate tier for metrics
         match get_rate_tier(distance) {
             0 => stats.full_rate_count += 1,
             1 => stats.reduced_rate_count += 1,
             _ => stats.dormant_rate_count += 1,
         }
 
-        // Generate delta
+        // Generate delta - compare against base snapshot
+        // Delta compression only sends changed fields, preserving smooth interpolation
         let delta = if let Some(base_player) = base_players.get(&player.id) {
             generate_player_delta(base_player, player)
         } else {
@@ -208,6 +208,8 @@ pub fn generate_delta(
             player_updates,
             projectile_updates,
             removed_projectiles,
+            // Include full debris list (debris moves slowly, full list is efficient)
+            debris: current.debris.clone(),
         },
         stats,
     ))
@@ -548,9 +550,8 @@ mod tests {
         let snapshot = create_snapshot(vec![
             create_player(Uuid::new_v4(), Vec2::new(100.0, 100.0), 5),
         ]);
-        let last_updates = HashMap::new();
 
-        let result = generate_delta(&snapshot, &snapshot, Vec2::ZERO, 100, &last_updates);
+        let result = generate_delta(&snapshot, &snapshot, Vec2::ZERO, 100);
         assert!(result.is_none());
     }
 
@@ -564,8 +565,7 @@ mod tests {
         current.tick = 101;
         current.players[0].position = Vec2::new(200.0, 200.0);
 
-        let last_updates = HashMap::new();
-        let (delta, stats) = generate_delta(&base, &current, Vec2::ZERO, 101, &last_updates).unwrap();
+        let (delta, stats) = generate_delta(&base, &current, Vec2::ZERO, 101).unwrap();
 
         assert_eq!(delta.tick, 101);
         assert_eq!(delta.base_tick, 100);
@@ -580,8 +580,7 @@ mod tests {
         let new_player = create_player(Uuid::new_v4(), Vec2::new(100.0, 100.0), 0);
         let current = create_snapshot(vec![new_player.clone()]);
 
-        let last_updates = HashMap::new();
-        let (delta, _) = generate_delta(&base, &current, Vec2::ZERO, 100, &last_updates).unwrap();
+        let (delta, _) = generate_delta(&base, &current, Vec2::ZERO, 100).unwrap();
 
         assert_eq!(delta.player_updates.len(), 1);
         // New player should have all fields set
@@ -595,7 +594,9 @@ mod tests {
     }
 
     #[test]
-    fn test_generate_delta_rate_limiting_skips_distant() {
+    fn test_generate_delta_includes_all_players_for_smooth_interpolation() {
+        // Rate limiting was removed to preserve smooth client-side interpolation
+        // All players are now included in every delta (only changed fields sent)
         let id = Uuid::new_v4();
         let base = create_snapshot(vec![
             create_player(id, Vec2::new(5000.0, 0.0), 5), // Far player
@@ -604,19 +605,10 @@ mod tests {
         current.tick = 101;
         current.players[0].position = Vec2::new(5010.0, 0.0); // Moved
 
-        // Last update was at tick 100, dormant rate is 8 ticks
-        let mut last_updates = HashMap::new();
-        last_updates.insert(id, 100);
-
-        // At tick 101, should be skipped (only 1 tick since last update, need 8)
-        let result = generate_delta(&base, &current, Vec2::ZERO, 101, &last_updates);
-        assert!(result.is_none());
-
-        // At tick 108, should be included
-        current.tick = 108;
-        let (delta, stats) = generate_delta(&base, &current, Vec2::ZERO, 108, &last_updates).unwrap();
+        // Even distant players are included (no rate limiting)
+        let (delta, stats) = generate_delta(&base, &current, Vec2::ZERO, 101).unwrap();
         assert_eq!(stats.players_included, 1);
-        assert_eq!(stats.dormant_rate_count, 1);
+        assert_eq!(stats.dormant_rate_count, 1); // Still tracks distance tier for metrics
         assert_eq!(delta.player_updates.len(), 1);
     }
 
@@ -635,8 +627,7 @@ mod tests {
             p.position.x += 10.0;
         }
 
-        let last_updates = HashMap::new();
-        let (_, stats) = generate_delta(&base, &current, Vec2::ZERO, 101, &last_updates).unwrap();
+        let (_, stats) = generate_delta(&base, &current, Vec2::ZERO, 101).unwrap();
 
         assert_eq!(stats.full_rate_count, 1);
         assert_eq!(stats.reduced_rate_count, 1);
@@ -678,13 +669,12 @@ mod tests {
         // Remove projectile 1
         current.projectiles = vec![create_projectile(2, Vec2::new(200.0, 0.0))];
 
-        let last_updates = HashMap::new();
         // Add a player to ensure delta is generated
         let id = Uuid::new_v4();
         base.players = vec![create_player(id, Vec2::new(0.0, 0.0), 0)];
         current.players = vec![create_player(id, Vec2::new(10.0, 0.0), 0)];
 
-        let (delta, _) = generate_delta(&base, &current, Vec2::ZERO, 101, &last_updates).unwrap();
+        let (delta, _) = generate_delta(&base, &current, Vec2::ZERO, 101).unwrap();
         assert!(delta.removed_projectiles.contains(&1));
         assert!(!delta.removed_projectiles.contains(&2));
     }
@@ -700,8 +690,7 @@ mod tests {
         let id = Uuid::new_v4();
         current.players = vec![create_player(id, Vec2::new(0.0, 0.0), 0)];
 
-        let last_updates = HashMap::new();
-        let (delta, _) = generate_delta(&base, &current, Vec2::ZERO, 101, &last_updates).unwrap();
+        let (delta, _) = generate_delta(&base, &current, Vec2::ZERO, 101).unwrap();
 
         assert_eq!(delta.projectile_updates.len(), 1);
         assert_eq!(delta.projectile_updates[0].id, 1);

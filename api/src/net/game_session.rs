@@ -160,8 +160,9 @@ const SPECTATOR_MIN_DEBRIS_SIZE: u8 = 1;
 // ============================================================================
 
 /// How often to send full snapshots (every N ticks)
-/// At 30 TPS: 300 ticks = 10 seconds between full snapshots
-const FULL_RESYNC_INTERVAL: u64 = 300;
+/// At 30 TPS: 30 ticks = 1 second between full snapshots
+/// Must fit within client's 32-snapshot buffer
+const FULL_RESYNC_INTERVAL: u64 = 30;
 
 // ============================================================================
 
@@ -238,15 +239,13 @@ impl SimulationConfig {
 // Delta Compression State
 // ============================================================================
 
-/// Per-client network state for delta compression and rate limiting
-/// Tracks the last sent snapshot to generate deltas, and per-entity update timing
+/// Per-client network state for delta compression
+/// Tracks the last sent FULL snapshot to generate deltas (pinned base strategy)
 pub struct ClientNetState {
-    /// Last full snapshot sent (used as delta base)
+    /// Last full snapshot sent (used as delta base - the "pinned base")
     pub last_snapshot: Option<GameSnapshot>,
     /// Tick of the last full snapshot sent
     pub last_full_tick: u64,
-    /// Per-entity last update tick (for distance-based rate limiting)
-    pub entity_last_update: HashMap<PlayerId, u64>,
     /// Whether this client needs a full resync (first message or error recovery)
     pub needs_full_resync: bool,
 }
@@ -256,7 +255,6 @@ impl Default for ClientNetState {
         Self {
             last_snapshot: None,
             last_full_tick: 0,
-            entity_last_update: HashMap::with_capacity(64),
             needs_full_resync: true, // First message is always full
         }
     }
@@ -1586,7 +1584,6 @@ pub async fn broadcast_filtered_snapshots(session: &GameSession, tick: u64) {
                     state.last_snapshot = Some(filtered);
                     state.last_full_tick = tick;
                     state.needs_full_resync = false;
-                    state.entity_last_update.clear();
 
                     #[cfg(feature = "metrics_extended")]
                     {
@@ -1608,7 +1605,6 @@ pub async fn broadcast_filtered_snapshots(session: &GameSession, tick: u64) {
                 &filtered,
                 player_position,
                 tick,
-                &state.entity_last_update,
             ) {
                 Some((delta, stats)) => {
                     let message = ServerMessage::Delta(delta);
@@ -1618,11 +1614,6 @@ pub async fn broadcast_filtered_snapshots(session: &GameSession, tick: u64) {
 
                             if let Err(e) = conn.sender.send(shared) {
                                 debug!("Delta broadcast to {}: channel closed ({})", player_id, e);
-                            }
-
-                            // Update entity_last_update for rate limiting (NOT last_snapshot!)
-                            for player in &filtered.players {
-                                state.entity_last_update.insert(player.id, tick);
                             }
 
                             // Cache for spectators ONLY if this player has followers (Bug #5 fix)
@@ -1653,12 +1644,6 @@ pub async fn broadcast_filtered_snapshots(session: &GameSession, tick: u64) {
                     // Don't update last_snapshot, don't send anything
                     // Client still has valid base from last full snapshot
                 }
-            }
-
-            // Periodic cleanup of stale entity entries (Bug #4 fix)
-            if tick % 300 == 0 {
-                let current_ids: std::collections::HashSet<_> = filtered.players.iter().map(|p| p.id).collect();
-                state.entity_last_update.retain(|id, _| current_ids.contains(id));
             }
         }
 
@@ -2646,7 +2631,6 @@ pub async fn start_ai_manager(session: Arc<RwLock<GameSession>>) {
 #[cfg(test)]
 mod client_net_state_tests {
     use super::*;
-    use uuid::Uuid;
 
     /// Create an empty test snapshot
     fn test_snapshot() -> GameSnapshot {
@@ -2676,14 +2660,14 @@ mod client_net_state_tests {
         let state = ClientNetState::default();
         assert!(state.last_snapshot.is_none());
         assert_eq!(state.last_full_tick, 0);
-        assert!(state.entity_last_update.is_empty());
         assert!(state.needs_full_resync);
     }
 
     #[test]
     fn test_full_resync_interval_constant() {
-        // Every 300 ticks = 10 seconds at 30 TPS
-        assert_eq!(FULL_RESYNC_INTERVAL, 300);
+        // Every 30 ticks = 1 second at 30 TPS
+        // Must fit within client's 32-snapshot buffer
+        assert_eq!(FULL_RESYNC_INTERVAL, 30);
     }
 
     #[test]
@@ -2699,7 +2683,6 @@ mod client_net_state_tests {
         let state = ClientNetState {
             last_snapshot: Some(test_snapshot()),
             last_full_tick: 0,
-            entity_last_update: HashMap::new(),
             needs_full_resync: false,
         };
 
@@ -2716,59 +2699,15 @@ mod client_net_state_tests {
         let state = ClientNetState {
             last_snapshot: Some(test_snapshot()),
             last_full_tick: 100,
-            entity_last_update: HashMap::new(),
             needs_full_resync: false,
         };
 
-        let current_tick = 200; // Only 100 ticks since last full, interval is 300
+        let current_tick = 115; // Only 15 ticks since last full, interval is 30
         let needs_full = state.needs_full_resync
             || state.last_snapshot.is_none()
             || current_tick - state.last_full_tick >= FULL_RESYNC_INTERVAL;
 
         assert!(!needs_full, "Should send delta within interval");
-    }
-
-    #[test]
-    fn test_entity_last_update_tracking() {
-        let mut state = ClientNetState::default();
-        let player_id = Uuid::new_v4();
-
-        // Initially empty
-        assert!(state.entity_last_update.get(&player_id).is_none());
-
-        // After update
-        state.entity_last_update.insert(player_id, 100);
-        assert_eq!(state.entity_last_update.get(&player_id), Some(&100));
-
-        // Update again
-        state.entity_last_update.insert(player_id, 200);
-        assert_eq!(state.entity_last_update.get(&player_id), Some(&200));
-    }
-
-    #[test]
-    fn test_entity_last_update_cleanup() {
-        // Bug #4 fix: entity_last_update should be cleaned up periodically
-        // to remove stale entries for entities no longer in AOI
-        let mut state = ClientNetState::default();
-        let player1 = Uuid::new_v4();
-        let player2 = Uuid::new_v4();
-        let player3 = Uuid::new_v4();
-
-        // Add entries for 3 players
-        state.entity_last_update.insert(player1, 100);
-        state.entity_last_update.insert(player2, 100);
-        state.entity_last_update.insert(player3, 100);
-        assert_eq!(state.entity_last_update.len(), 3);
-
-        // Simulate cleanup: only player1 and player2 are in current AOI
-        let current_ids: std::collections::HashSet<_> = [player1, player2].into_iter().collect();
-        state.entity_last_update.retain(|id, _| current_ids.contains(id));
-
-        // player3 should be removed
-        assert_eq!(state.entity_last_update.len(), 2);
-        assert!(state.entity_last_update.contains_key(&player1));
-        assert!(state.entity_last_update.contains_key(&player2));
-        assert!(!state.entity_last_update.contains_key(&player3));
     }
 
     #[test]
@@ -2783,19 +2722,12 @@ mod client_net_state_tests {
         state.last_snapshot = Some(base_snapshot.clone());
         state.last_full_tick = tick_at_full;
         state.needs_full_resync = false;
-        state.entity_last_update.clear();
 
         // After full resync, verify state
         assert!(state.last_snapshot.is_some());
         assert_eq!(state.last_full_tick, tick_at_full);
 
         // Simulate multiple delta sends - last_snapshot should NOT change
-        // Only entity_last_update should be updated
-        let player_id = Uuid::new_v4();
-        state.entity_last_update.insert(player_id, 150);
-        state.entity_last_update.insert(player_id, 200);
-        state.entity_last_update.insert(player_id, 250);
-
         // last_full_tick should still be the original tick
         assert_eq!(state.last_full_tick, tick_at_full);
 

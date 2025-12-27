@@ -213,6 +213,7 @@ export class StateSync {
     }
 
     // Create new snapshot from delta
+    // Note: debris comes from delta (full list), not from base
     const newSnapshot: GameSnapshot = {
       tick: delta.tick,
       matchPhase: baseEntry.snapshot.matchPhase,
@@ -220,7 +221,7 @@ export class StateSync {
       countdown: baseEntry.snapshot.countdown,
       players: [...baseEntry.snapshot.players],
       projectiles: [...baseEntry.snapshot.projectiles],
-      debris: [...baseEntry.snapshot.debris],
+      debris: delta.debris, // Use debris from delta (full list)
       arenaCollapsePhase: baseEntry.snapshot.arenaCollapsePhase,
       arenaSafeRadius: baseEntry.snapshot.arenaSafeRadius,
       arenaScale: baseEntry.snapshot.arenaScale,
@@ -247,15 +248,25 @@ export class StateSync {
       }
     }
 
-    // Apply projectile deltas
+    // Apply projectile deltas (update existing or add new)
     for (const projDelta of delta.projectileUpdates) {
       const projIndex = newSnapshot.projectiles.findIndex((p) => p.id === projDelta.id);
       if (projIndex >= 0) {
+        // Update existing projectile
         newSnapshot.projectiles[projIndex] = {
           ...newSnapshot.projectiles[projIndex],
           position: projDelta.position,
           velocity: projDelta.velocity,
         };
+      } else {
+        // New projectile - add it (wasn't in base snapshot)
+        newSnapshot.projectiles.push({
+          id: projDelta.id,
+          position: projDelta.position,
+          velocity: projDelta.velocity,
+          ownerId: '', // Owner unknown from delta, will be updated on next full snapshot
+          mass: 1, // Default mass, will be updated on next full snapshot
+        });
       }
     }
 

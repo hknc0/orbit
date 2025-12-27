@@ -704,6 +704,7 @@ describe('Codec', () => {
         writer.writeU64(0); // 0 player updates
         writer.writeU64(0); // 0 projectile updates
         writer.writeU64(0); // 0 removed projectiles
+        writer.writeU64(0); // 0 debris
 
         const result = decodeServerMessage(writer.getBuffer());
         expect(result.type).toBe('Delta');
@@ -711,6 +712,7 @@ describe('Codec', () => {
           expect(result.delta.tick).toBe(150);
           expect(result.delta.baseTick).toBe(100);
           expect(result.delta.playerUpdates).toHaveLength(0);
+          expect(result.delta.debris).toHaveLength(0);
         }
       });
 
@@ -736,8 +738,9 @@ describe('Codec', () => {
         writer.writeBool(true); // has kills
         writer.writeU32(5);
 
-        writer.writeU64(0);
-        writer.writeU64(0);
+        writer.writeU64(0); // 0 projectile updates
+        writer.writeU64(0); // 0 removed projectiles
+        writer.writeU64(0); // 0 debris
 
         const result = decodeServerMessage(writer.getBuffer());
         expect(result.type).toBe('Delta');

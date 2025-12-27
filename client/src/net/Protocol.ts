@@ -133,6 +133,7 @@ export interface DeltaUpdate {
   playerUpdates: PlayerDelta[];
   projectileUpdates: ProjectileDelta[];
   removedProjectiles: number[];
+  debris: DebrisSnapshot[]; // Full debris list (debris moves slowly)
 }
 
 // Delta for a single player

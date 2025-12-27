@@ -24,11 +24,11 @@ services:
       - HOST=0.0.0.0
       - PORT=4433
       - METRICS_PORT=9090
-      - BOT_COUNT=10
-      # Simulation mode (load testing)
-      - SIMULATION_MODE=true
-      - SIMULATION_MIN_BOTS=10
-      - SIMULATION_MAX_BOTS=5000
+      - BOT_COUNT=150
+      # Simulation mode (load testing) - disabled for stable benchmarking
+      - SIMULATION_MODE=false
+      - SIMULATION_MIN_BOTS=150
+      - SIMULATION_MAX_BOTS=150
       - SIMULATION_CYCLE_MINUTES=5
       #
       # Gravity wave explosions (wells randomly explode creating shockwaves)

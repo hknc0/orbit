@@ -466,12 +466,20 @@ function readDeltaUpdate(reader: BinaryReader): DeltaUpdate {
     removedProjectiles.push(reader.readU64());
   }
 
+  // Read full debris list (debris moves slowly, sent in full)
+  const debrisCount = reader.readU64();
+  const debris: DebrisSnapshot[] = [];
+  for (let i = 0; i < debrisCount; i++) {
+    debris.push(readDebrisSnapshot(reader));
+  }
+
   return {
     tick,
     baseTick,
     playerUpdates,
     projectileUpdates,
     removedProjectiles,
+    debris,
   };
 }
 

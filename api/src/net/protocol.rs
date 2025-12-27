@@ -486,6 +486,8 @@ pub struct DeltaUpdate {
     pub player_updates: Vec<PlayerDelta>,
     pub projectile_updates: Vec<ProjectileDelta>,
     pub removed_projectiles: Vec<u64>,
+    /// Full debris list (debris moves slowly, sending full list is efficient)
+    pub debris: Vec<DebrisSnapshot>,
 }
 
 /// Delta for a single player
@@ -813,6 +815,11 @@ mod tests {
             }],
             projectile_updates: vec![],
             removed_projectiles: vec![1, 2, 3],
+            debris: vec![DebrisSnapshot {
+                id: 1,
+                position: Vec2::new(100.0, 200.0),
+                size: 1,
+            }],
         };
 
         let encoded = encode(&delta).unwrap();
@@ -820,6 +827,7 @@ mod tests {
 
         assert_eq!(decoded.tick, 500);
         assert_eq!(decoded.removed_projectiles.len(), 3);
+        assert_eq!(decoded.debris.len(), 1);
     }
 
     #[test]
