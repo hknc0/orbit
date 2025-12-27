@@ -255,6 +255,9 @@ pub struct GravityWaveConfig {
     pub min_explosion_delay: f32,
     /// Maximum time between explosions per well (seconds)
     pub max_explosion_delay: f32,
+    /// Maximum wells that can be charging simultaneously
+    /// Prevents visual chaos from many explosions at once
+    pub max_concurrent_charging: usize,
 }
 
 impl Default for GravityWaveConfig {
@@ -268,6 +271,7 @@ impl Default for GravityWaveConfig {
             charge_duration: gravity_waves::CHARGE_DURATION,
             min_explosion_delay: gravity_waves::MIN_EXPLOSION_DELAY,
             max_explosion_delay: gravity_waves::MAX_EXPLOSION_DELAY,
+            max_concurrent_charging: gravity_waves::MAX_CONCURRENT_CHARGING,
         }
     }
 }
@@ -359,14 +363,26 @@ impl GravityWaveConfig {
             }
         }
 
+        // Maximum concurrent charging wells
+        if let Ok(val) = std::env::var("GRAVITY_WAVE_MAX_CONCURRENT_CHARGING") {
+            if let Ok(parsed) = val.parse::<usize>() {
+                if parsed >= 1 && parsed <= 20 {
+                    config.max_concurrent_charging = parsed;
+                } else {
+                    tracing::warn!("GRAVITY_WAVE_MAX_CONCURRENT_CHARGING must be 1-20, using default");
+                }
+            }
+        }
+
         // Log config if enabled
         if config.enabled {
             tracing::info!(
-                "Gravity waves enabled: speed={}, impulse={}, delay={}-{}s",
+                "Gravity waves enabled: speed={}, impulse={}, delay={}-{}s, max_charging={}",
                 config.wave_speed,
                 config.wave_base_impulse,
                 config.min_explosion_delay,
-                config.max_explosion_delay
+                config.max_explosion_delay,
+                config.max_concurrent_charging
             );
         } else {
             tracing::info!("Gravity waves disabled");

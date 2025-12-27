@@ -276,6 +276,12 @@ pub mod gravity_waves {
     /// Longer range = more unpredictable timing
     /// ENV: GRAVITY_WAVE_MAX_DELAY
     pub const MAX_EXPLOSION_DELAY: f32 = 90.0;
+
+    /// Maximum number of wells that can be charging (pre-explosion warning) at once
+    /// Prevents visual chaos and performance issues from many simultaneous explosions
+    /// Wells waiting to charge will queue until a slot opens
+    /// ENV: GRAVITY_WAVE_MAX_CONCURRENT_CHARGING
+    pub const MAX_CONCURRENT_CHARGING: usize = 3;
 }
 
 /// Calculate radius from mass

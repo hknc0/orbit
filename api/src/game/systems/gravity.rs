@@ -586,6 +586,16 @@ pub fn update_explosions(
     let mut new_waves = Vec::new();
     let mut wells_to_remove: Vec<WellId> = Vec::new();
 
+    // Count currently charging wells (before this tick's updates)
+    // This limits concurrent explosions to prevent visual chaos
+    let currently_charging: usize = state.arena.gravity_wells.values()
+        .filter(|w| w.id != crate::game::state::CENTRAL_WELL_ID && w.is_charging)
+        .count();
+
+    // Track how many new wells started charging this tick
+    let mut new_charging_this_tick: usize = 0;
+    let max_charging = config.max_concurrent_charging;
+
     // Skip central well (ID 0 - supermassive black hole, too stable to explode)
     for well in state.arena.gravity_wells.values_mut() {
         if well.id == crate::game::state::CENTRAL_WELL_ID {
@@ -596,15 +606,24 @@ pub fn update_explosions(
 
         // Check if entering charge phase (warning)
         if !well.is_charging && well.explosion_timer <= config.charge_duration && well.explosion_timer > 0.0 {
-            well.is_charging = true;
-            events.push(GravityWaveEvent::WellCharging {
-                well_id: well.id,
-                position: well.position,
-            });
+            // Only start charging if under the concurrent limit
+            let total_charging = currently_charging + new_charging_this_tick;
+            if total_charging < max_charging {
+                well.is_charging = true;
+                new_charging_this_tick += 1;
+                events.push(GravityWaveEvent::WellCharging {
+                    well_id: well.id,
+                    position: well.position,
+                });
+            } else {
+                // At limit - hold timer at charge_duration threshold (queued)
+                // Will start charging next tick when a slot opens
+                well.explosion_timer = config.charge_duration + 0.001;
+            }
         }
 
-        // Check for explosion
-        if well.explosion_timer <= 0.0 {
+        // Check for explosion (only charging wells can explode)
+        if well.is_charging && well.explosion_timer <= 0.0 {
             // Calculate strength using surface gravity (most realistic)
             // Formula: g = M / R² (surface gravity proportional to density)
             // Dense, compact wells produce stronger waves than diffuse ones
@@ -1680,5 +1699,187 @@ mod tests {
         let gravity_outside = cache.calculate_gravity(dist_outside, 0.0);
         assert_eq!(gravity_outside, Vec2::ZERO,
             "Gravity outside threshold should be zero (culled)");
+    }
+
+    // === CONCURRENT CHARGING LIMIT TESTS ===
+
+    #[test]
+    fn test_concurrent_charging_limit_enforced() {
+        use crate::game::constants::arena::CORE_RADIUS;
+        use crate::game::constants::physics::CENTRAL_MASS;
+
+        let mut state = GameState::new();
+        let mut config = GravityWaveConfig::default();
+        config.max_concurrent_charging = 2; // Limit to 2 concurrent
+
+        // Add 5 orbital wells all about to start charging
+        for i in 1..=5 {
+            let well_id = state.arena.alloc_well_id();
+            let mut well = GravityWell::new(
+                well_id,
+                Vec2::new(500.0 * i as f32, 0.0),
+                CENTRAL_MASS,
+                CORE_RADIUS,
+            );
+            // Set timer just above charge threshold - will try to start charging
+            well.explosion_timer = config.charge_duration - 0.01;
+            well.is_charging = false;
+            state.arena.gravity_wells.insert(well_id, well);
+        }
+
+        // Update - should only allow 2 wells to start charging
+        let events = update_explosions(&mut state, &config, DT, 100, 10000.0);
+
+        // Count charging events
+        let charging_events = events.iter()
+            .filter(|e| matches!(e, GravityWaveEvent::WellCharging { .. }))
+            .count();
+
+        assert_eq!(charging_events, 2, "Should only allow max_concurrent_charging wells to start charging");
+
+        // Verify only 2 wells are actually charging
+        let charging_wells: usize = state.arena.gravity_wells.values()
+            .filter(|w| w.id != crate::game::state::CENTRAL_WELL_ID && w.is_charging)
+            .count();
+        assert_eq!(charging_wells, 2, "Only 2 wells should be in charging state");
+    }
+
+    #[test]
+    fn test_concurrent_charging_queued_wells_wait() {
+        use crate::game::constants::arena::CORE_RADIUS;
+        use crate::game::constants::physics::CENTRAL_MASS;
+
+        let mut state = GameState::new();
+        let mut config = GravityWaveConfig::default();
+        config.max_concurrent_charging = 1; // Only 1 at a time
+
+        // Add 3 orbital wells all about to start charging
+        for i in 1..=3 {
+            let well_id = state.arena.alloc_well_id();
+            let mut well = GravityWell::new(
+                well_id,
+                Vec2::new(500.0 * i as f32, 0.0),
+                CENTRAL_MASS,
+                CORE_RADIUS,
+            );
+            well.explosion_timer = config.charge_duration - 0.01;
+            well.is_charging = false;
+            state.arena.gravity_wells.insert(well_id, well);
+        }
+
+        // First update - 1 well starts charging
+        let _ = update_explosions(&mut state, &config, DT, 100, 10000.0);
+
+        // Check that 2 wells are waiting (timer held at threshold)
+        let waiting_wells: Vec<_> = state.arena.gravity_wells.values()
+            .filter(|w| w.id != crate::game::state::CENTRAL_WELL_ID)
+            .filter(|w| !w.is_charging && w.explosion_timer > config.charge_duration)
+            .collect();
+
+        assert_eq!(waiting_wells.len(), 2, "2 wells should be queued/waiting");
+
+        // Their timers should be at charge_duration + small delta
+        for well in waiting_wells {
+            assert!(
+                (well.explosion_timer - config.charge_duration).abs() < 0.01,
+                "Waiting well timer should be at charge_duration threshold, got {}",
+                well.explosion_timer
+            );
+        }
+    }
+
+    #[test]
+    fn test_concurrent_charging_slot_opens_after_explosion() {
+        use crate::game::constants::arena::CORE_RADIUS;
+        use crate::game::constants::physics::CENTRAL_MASS;
+
+        let mut state = GameState::new();
+        let mut config = GravityWaveConfig::default();
+        config.max_concurrent_charging = 1;
+
+        // Add 2 wells - one about to explode, one waiting
+        let well1_id = state.arena.alloc_well_id();
+        let mut well1 = GravityWell::new(well1_id, Vec2::new(500.0, 0.0), CENTRAL_MASS, CORE_RADIUS);
+        well1.explosion_timer = 0.0; // Will explode this tick
+        well1.is_charging = true;
+        state.arena.gravity_wells.insert(well1_id, well1);
+
+        let well2_id = state.arena.alloc_well_id();
+        let mut well2 = GravityWell::new(well2_id, Vec2::new(1000.0, 0.0), CENTRAL_MASS, CORE_RADIUS);
+        well2.explosion_timer = config.charge_duration - 0.01; // Wants to start charging
+        well2.is_charging = false;
+        state.arena.gravity_wells.insert(well2_id, well2);
+
+        // Initial state: 1 charging (about to explode)
+        let charging_before = state.arena.gravity_wells.values()
+            .filter(|w| w.is_charging).count();
+        assert_eq!(charging_before, 1);
+
+        // Update - well1 explodes, freeing a slot
+        let events = update_explosions(&mut state, &config, DT, 100, 10000.0);
+
+        // Should have both explosion and new charging event
+        let has_explosion = events.iter().any(|e| matches!(e, GravityWaveEvent::WellExploded { .. }));
+        assert!(has_explosion, "Well1 should have exploded");
+
+        // Well2 can't start charging in same tick (slot was full at start of tick)
+        // But on next update it should be able to
+        let _ = update_explosions(&mut state, &config, DT, 100, 10000.0);
+
+        // Now well2 should be charging
+        if let Some(well2) = state.arena.gravity_wells.get(&well2_id) {
+            assert!(well2.is_charging, "Well2 should start charging after slot opens");
+        }
+    }
+
+    #[test]
+    fn test_concurrent_charging_already_charging_not_counted_as_new() {
+        use crate::game::constants::arena::CORE_RADIUS;
+        use crate::game::constants::physics::CENTRAL_MASS;
+
+        let mut state = GameState::new();
+        let mut config = GravityWaveConfig::default();
+        config.max_concurrent_charging = 2;
+
+        // Add 1 well already charging
+        let well1_id = state.arena.alloc_well_id();
+        let mut well1 = GravityWell::new(well1_id, Vec2::new(500.0, 0.0), CENTRAL_MASS, CORE_RADIUS);
+        well1.explosion_timer = 1.0; // Still charging, not exploding yet
+        well1.is_charging = true;
+        state.arena.gravity_wells.insert(well1_id, well1);
+
+        // Add 2 more wells about to start charging
+        for i in 2..=3 {
+            let well_id = state.arena.alloc_well_id();
+            let mut well = GravityWell::new(
+                well_id,
+                Vec2::new(500.0 * i as f32, 0.0),
+                CENTRAL_MASS,
+                CORE_RADIUS,
+            );
+            well.explosion_timer = config.charge_duration - 0.01;
+            well.is_charging = false;
+            state.arena.gravity_wells.insert(well_id, well);
+        }
+
+        // Update - with 1 already charging and limit of 2, only 1 more can start
+        let events = update_explosions(&mut state, &config, DT, 100, 10000.0);
+
+        let charging_events = events.iter()
+            .filter(|e| matches!(e, GravityWaveEvent::WellCharging { .. }))
+            .count();
+        assert_eq!(charging_events, 1, "Only 1 new well should start charging (1 already charging, limit 2)");
+
+        // Total charging should be 2
+        let total_charging: usize = state.arena.gravity_wells.values()
+            .filter(|w| w.id != crate::game::state::CENTRAL_WELL_ID && w.is_charging)
+            .count();
+        assert_eq!(total_charging, 2, "Total charging should be at limit");
+    }
+
+    #[test]
+    fn test_concurrent_charging_default_limit() {
+        let config = GravityWaveConfig::default();
+        assert_eq!(config.max_concurrent_charging, 3, "Default should be 3 concurrent");
     }
 }
