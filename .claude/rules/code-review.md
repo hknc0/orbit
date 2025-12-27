@@ -28,7 +28,15 @@ Before committing any code changes, follow these steps:
 - Add new tests for any new functionality
 - Update existing tests if behavior changed
 - Test edge cases and error conditions
-- Verify reasonable code coverage of modified code
+- Verify full code coverage of modified code
+
+## Code Cleanup
+- Remove unused imports, variables, and functions
+- Delete commented-out code (don't leave "just in case" code)
+- Remove dead code paths that are no longer reachable
+- Clean up legacy patterns when touching related code
+- Remove backwards-compatibility shims that are no longer needed
+- Don't leave `_unused` variable renames - delete the code entirely
 
 ## Pre-Commit Checklist
 1. Security review completed
@@ -37,4 +45,5 @@ Before committing any code changes, follow these steps:
 4. New tests added for new functionality
 5. Existing tests updated if necessary
 6. No debug statements or console.logs left behind
-7. Code follows project style guidelines
+7. Legacy/dead code cleaned up
+8. Code follows project style guidelines
