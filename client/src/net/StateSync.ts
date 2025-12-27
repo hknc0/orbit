@@ -158,6 +158,7 @@ export class StateSync {
     // This prevents other players from appearing delayed after respawn
     if (this.localPlayerId) {
       const localPlayer = snapshot.players.find((p) => p.id === this.localPlayerId);
+
       if (localPlayer) {
         const justRespawned =
           // Was dead, now alive
@@ -166,13 +167,12 @@ export class StateSync {
           (localPlayer.spawnTick !== this.localPlayerLastSpawnTick && this.localPlayerLastSpawnTick > 0);
 
         if (justRespawned) {
-          // Reset interpolation state - similar to fresh join
-          // This makes other players appear immediately instead of waiting for interpolation buffer
-          this.snapshots = [];
+          // Reset birth tracking so other players don't trigger birth animation
+          // DON'T clear snapshots - that breaks delta reconstruction and causes
+          // ~1 second delay waiting for next full snapshot from server
           this.playerBornTimes.clear();
           this.wellBornTimes.clear();
           this.hasReceivedFirstSnapshot = false;
-          // Don't reset adaptiveDelay - keep the learned rate
         }
 
         // Update tracking
@@ -449,7 +449,8 @@ export class StateSync {
       if (!this.playerBornTimes.has(player.id)) {
         // First time seeing this player
         // Animate only if they recently spawned (not if they spawned long ago and entered our AOI)
-        this.playerBornTimes.set(player.id, recentlySpawned && player.alive ? now : 0);
+        const bornTime = recentlySpawned && player.alive ? now : 0;
+        this.playerBornTimes.set(player.id, bornTime);
       } else if (recentlySpawned && player.alive && this.playerBornTimes.get(player.id) === 0) {
         // Player respawned - update birth time to animate
         this.playerBornTimes.set(player.id, now);
