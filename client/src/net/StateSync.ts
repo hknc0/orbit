@@ -388,17 +388,21 @@ export class StateSync {
     const now = performance.now();
 
     // Track player birth times before building player map
-    // Players in first snapshot or without spawn protection = 0 (skip animation)
-    // Players appearing later with spawn protection = now (show birth animation)
+    // Players appearing for the first time = 0 (no animation - they're entering AOI, not spawning)
+    // Only animate actual respawns (detected via alive state change in interpolateSnapshots)
     for (const player of snapshot.players) {
       if (!this.playerBornTimes.has(player.id)) {
-        // New player: only show birth effect if they have spawn protection (actually spawned)
-        // AND this isn't the first snapshot (pre-existing players skip animation)
-        const shouldAnimate = this.hasReceivedFirstSnapshot && player.spawnProtection;
-        this.playerBornTimes.set(player.id, shouldAnimate ? now : 0);
-      } else if (!player.alive) {
-        // Player died - remove tracking so respawn triggers animation
-        this.playerBornTimes.delete(player.id);
+        // First time seeing this player - no animation (they're entering our AOI, not spawning)
+        this.playerBornTimes.set(player.id, 0);
+      }
+      // Note: don't delete on death - need to track to distinguish respawn from AOI entry
+    }
+
+    // Cleanup: remove tracking for players who left our AOI (prevents memory leak)
+    const currentPlayerIds = new Set(snapshot.players.map(p => p.id));
+    for (const trackedId of this.playerBornTimes.keys()) {
+      if (!currentPlayerIds.has(trackedId)) {
+        this.playerBornTimes.delete(trackedId);
       }
     }
 
@@ -495,20 +499,26 @@ export class StateSync {
     const beforeDebrisMap = new Map(before.debris.map(d => [d.id, d]));
 
     // Track player birth times before building player map
+    // Only animate actual respawns, NOT players entering AOI for the first time
     for (const afterPlayer of after.players) {
       const beforePlayer = beforePlayerMap.get(afterPlayer.id);
-      const justRespawned = beforePlayer && !beforePlayer.alive && afterPlayer.alive;
+      const wasTrackedAndDead = this.playerBornTimes.has(afterPlayer.id) && beforePlayer && !beforePlayer.alive;
+      const justRespawned = wasTrackedAndDead && afterPlayer.alive;
 
       if (!this.playerBornTimes.has(afterPlayer.id)) {
-        // New player: only animate if they have spawn protection (actually spawned)
-        const shouldAnimate = this.hasReceivedFirstSnapshot && afterPlayer.spawnProtection;
-        this.playerBornTimes.set(afterPlayer.id, shouldAnimate ? now : 0);
+        // First time seeing this player - no animation (entering AOI, not spawning)
+        this.playerBornTimes.set(afterPlayer.id, 0);
       } else if (justRespawned && afterPlayer.spawnProtection) {
-        // Player respawned - set new birth time for animation
+        // Actual respawn detected - animate birth effect
         this.playerBornTimes.set(afterPlayer.id, now);
-      } else if (!afterPlayer.alive) {
-        // Player died - remove tracking so respawn triggers animation
-        this.playerBornTimes.delete(afterPlayer.id);
+      }
+    }
+
+    // Cleanup: remove tracking for players who left our AOI (prevents memory leak)
+    const currentPlayerIds = new Set(after.players.map(p => p.id));
+    for (const trackedId of this.playerBornTimes.keys()) {
+      if (!currentPlayerIds.has(trackedId)) {
+        this.playerBornTimes.delete(trackedId);
       }
     }
 
