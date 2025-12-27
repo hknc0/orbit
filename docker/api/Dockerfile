@@ -16,13 +16,13 @@ COPY api/benches ./benches
 
 # Create dummy src to cache dependencies
 RUN mkdir -p src && echo "fn main() {}" > src/main.rs
-RUN cargo build --release --features ai_manager && rm -rf src target/release/orbit-royale-server*
+RUN cargo build --release --features "ai_manager,metrics_extended" && rm -rf src target/release/orbit-royale-server*
 
 # Copy actual source code
 COPY api/src ./src
 
-# Build release binary with AI manager feature
-RUN cargo build --release --features ai_manager
+# Build release binary with AI manager and metrics features
+RUN cargo build --release --features "ai_manager,metrics_extended"
 
 # Stage 2: Build cert generator
 FROM rust:1.85-slim-bookworm AS cert-builder
