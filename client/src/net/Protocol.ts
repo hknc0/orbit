@@ -9,6 +9,16 @@ export type PlayerId = string;
 // Match phases
 export type MatchPhase = 'waiting' | 'countdown' | 'playing' | 'ended';
 
+// Rejection reasons (matches RejectionReason enum in protocol.rs)
+export type RejectionReason =
+  | { type: 'ServerFull'; currentPlayers: number }
+  | { type: 'SpectatorsFull' }
+  | { type: 'InvalidName' }
+  | { type: 'RateLimited' }
+  | { type: 'Banned' }
+  | { type: 'Maintenance' }
+  | { type: 'Other'; message: string };
+
 // Client -> Server messages
 export type ClientMessage =
   | { type: 'JoinRequest'; playerName: string; colorIndex: number; isSpectator: boolean }
@@ -23,7 +33,7 @@ export type ClientMessage =
 // Server -> Client messages
 export type ServerMessage =
   | { type: 'JoinAccepted'; playerId: PlayerId; sessionToken: Uint8Array; isSpectator: boolean }
-  | { type: 'JoinRejected'; reason: string }
+  | { type: 'JoinRejected'; reason: RejectionReason }
   | { type: 'Snapshot'; snapshot: GameSnapshot }
   | { type: 'Delta'; delta: DeltaUpdate }
   | { type: 'Event'; event: GameEvent }

@@ -14,7 +14,7 @@ use crate::net::dos_protection::DoSProtection;
 use crate::net::game_session::{start_game_loop, send_to_player, GameSession};
 #[cfg(feature = "ai_manager")]
 use crate::net::game_session::start_ai_manager;
-use crate::net::protocol::{decode, ClientMessage, ServerMessage};
+use crate::net::protocol::{decode, ClientMessage, RejectionReason, ServerMessage};
 use crate::net::tls::TlsConfig;
 
 // Feature-gated imports
@@ -310,7 +310,7 @@ async fn handle_connection(
                                         if sanitized_name.is_empty() {
                                             tracing::warn!("Rejecting player with empty/invalid name");
                                             let response_msg = ServerMessage::JoinRejected {
-                                                reason: "Invalid player name".to_string(),
+                                                reason: RejectionReason::InvalidName,
                                             };
                                             if let Err(e) = send_to_player(&writer, &response_msg).await {
                                                 tracing::warn!("Failed to send JoinRejected: {}", e);
@@ -336,18 +336,18 @@ async fn handle_connection(
 
                                         if !can_accept {
                                             // Reject due to performance/capacity
-                                            let rejection_msg = {
+                                            let rejection_reason = {
                                                 let session = game_session.read().await;
                                                 if is_spectator {
-                                                    "Server at capacity, spectating unavailable".to_string()
+                                                    RejectionReason::SpectatorsFull
                                                 } else {
-                                                    session.rejection_message()
+                                                    session.rejection_reason()
                                                 }
                                             };
-                                            tracing::warn!("Rejecting {} '{}': {}", join_type, sanitized_name, rejection_msg);
+                                            tracing::warn!("Rejecting {} '{}': {:?}", join_type, sanitized_name, rejection_reason);
 
                                             let response_msg = ServerMessage::JoinRejected {
-                                                reason: rejection_msg,
+                                                reason: rejection_reason,
                                             };
                                             if let Err(e) = send_to_player(&writer, &response_msg).await {
                                                 tracing::warn!("Failed to send JoinRejected: {}", e);

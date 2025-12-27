@@ -5,7 +5,7 @@ import { GameTransport, type ConnectionState } from '@/net/Transport';
 import { StateSync } from '@/net/StateSync';
 import { InputSystem } from '@/systems/InputSystem';
 import { RenderSystem } from '@/systems/RenderSystem';
-import type { ServerMessage, GameEvent, MatchPhase, PlayerId } from '@/net/Protocol';
+import type { ServerMessage, GameEvent, MatchPhase, PlayerId, RejectionReason } from '@/net/Protocol';
 
 export type GamePhase = 'menu' | 'connecting' | 'countdown' | 'playing' | 'ended' | 'disconnected';
 
@@ -602,25 +602,24 @@ export class Game {
     }
   }
 
-  private formatRejectionMessage(reason: string): string {
-    // Convert server rejection reasons to user-friendly messages
-    if (reason.includes('Server at capacity')) {
-      return 'Server is full. Please try again in a moment.';
+  private formatRejectionMessage(reason: RejectionReason): string {
+    // Convert rejection codes to user-friendly messages
+    switch (reason.type) {
+      case 'ServerFull':
+        return `Server is at full capacity (${reason.currentPlayers} players).\nPlease try again later.`;
+      case 'SpectatorsFull':
+        return 'Server is at full capacity.\nSpectating is temporarily unavailable.';
+      case 'InvalidName':
+        return 'Please enter a valid player name (2-16 characters).';
+      case 'RateLimited':
+        return 'Too many connection attempts.\nPlease wait a moment.';
+      case 'Banned':
+        return 'You have been temporarily blocked.\nPlease try again later.';
+      case 'Maintenance':
+        return 'Server is undergoing maintenance.\nPlease try again shortly.';
+      case 'Other':
+        return reason.message;
     }
-    if (reason.includes('Invalid name') || reason.includes('Name too')) {
-      return 'Please enter a valid player name (2-20 characters).';
-    }
-    if (reason.includes('rate limit') || reason.includes('too many')) {
-      return 'Too many connection attempts. Please wait a moment.';
-    }
-    if (reason.includes('banned') || reason.includes('blocked')) {
-      return 'You have been temporarily blocked. Please try again later.';
-    }
-    if (reason.includes('maintenance') || reason.includes('restarting')) {
-      return 'Server is undergoing maintenance. Please try again shortly.';
-    }
-    // Default: show the server message if it's already user-friendly
-    return reason;
   }
 
   private stopGameLoop(): void {

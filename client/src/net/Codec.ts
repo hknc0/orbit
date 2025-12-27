@@ -16,6 +16,7 @@ import type {
   ProjectileDelta,
   MatchPhase,
   GravityWellSnapshot,
+  RejectionReason,
 } from './Protocol';
 
 // Binary writer for encoding messages
@@ -248,7 +249,7 @@ export function decodeServerMessage(data: ArrayBuffer): ServerMessage {
     case 1: // JoinRejected
       return {
         type: 'JoinRejected',
-        reason: reader.readString(),
+        reason: readRejectionReason(reader),
       };
     case 2: // Snapshot
       return {
@@ -574,5 +575,34 @@ function readGameEvent(reader: BinaryReader): GameEvent {
       };
     default:
       throw new Error(`Unknown game event variant: ${variant}`);
+  }
+}
+
+function readRejectionReason(reader: BinaryReader): RejectionReason {
+  const variant = reader.readU32();
+
+  switch (variant) {
+    case 0: // ServerFull
+      return {
+        type: 'ServerFull',
+        currentPlayers: reader.readU32(),
+      };
+    case 1: // SpectatorsFull
+      return { type: 'SpectatorsFull' };
+    case 2: // InvalidName
+      return { type: 'InvalidName' };
+    case 3: // RateLimited
+      return { type: 'RateLimited' };
+    case 4: // Banned
+      return { type: 'Banned' };
+    case 5: // Maintenance
+      return { type: 'Maintenance' };
+    case 6: // Other
+      return {
+        type: 'Other',
+        message: reader.readString(),
+      };
+    default:
+      throw new Error(`Unknown rejection reason variant: ${variant}`);
   }
 }

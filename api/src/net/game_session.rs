@@ -124,7 +124,7 @@ use crate::game::state::{MatchPhase, Player, PlayerId};
 use crate::metrics::Metrics;
 use crate::net::aoi::{AOIConfig, AOIManager};
 use crate::net::delta::{generate_delta, DeltaStats};
-use crate::net::protocol::{GameEvent, GameSnapshot, PlayerInput, ServerMessage};
+use crate::net::protocol::{GameEvent, GameSnapshot, PlayerInput, RejectionReason, ServerMessage};
 
 // ============================================================================
 // SPECTATOR MODE CONSTANTS
@@ -468,13 +468,12 @@ impl GameSession {
         self.performance.can_accept_players()
     }
 
-    /// Get rejection message for when server is at capacity
-    pub fn rejection_message(&self) -> String {
-        let player_count = self.game_loop.state().players.len();
-        format!(
-            "Server at capacity ({} players). Please try again later.",
-            player_count
-        )
+    /// Get rejection reason for when server is at capacity
+    pub fn rejection_reason(&self) -> RejectionReason {
+        let player_count = self.game_loop.state().players.len() as u32;
+        RejectionReason::ServerFull {
+            current_players: player_count,
+        }
     }
 
     /// Get current player count
