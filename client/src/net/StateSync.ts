@@ -130,6 +130,11 @@ export class StateSync {
   // Track if we have enough data for smooth rendering (at least 2 snapshots for interpolation)
   private isReadyForRendering: boolean = false;
 
+  // World preview mode: show world without local player for a brief period after becoming ready
+  // This ensures other players are visible BEFORE local player spawns (prevents "pop-in")
+  private worldPreviewUntil: number = 0;
+  private static readonly WORLD_PREVIEW_DURATION_MS = 300; // 300ms preview before spawning local player
+
   // Birth animation window: animate players who spawned within this many ticks
   // At 30 TPS, 15 ticks = 0.5 seconds
   private static readonly BIRTH_ANIMATION_TICKS = 15;
@@ -151,6 +156,12 @@ export class StateSync {
   // Returns true when we have at least 2 snapshots buffered for interpolation
   isReady(): boolean {
     return this.isReadyForRendering;
+  }
+
+  // Check if we're in world preview mode (showing world without local player)
+  // Returns true during the brief period after becoming ready but before showing local player
+  isInWorldPreview(): boolean {
+    return this.worldPreviewUntil > 0 && performance.now() < this.worldPreviewUntil;
   }
 
   // Mark a gravity well as destroyed (called when GravityWellDestroyed event received)
@@ -244,6 +255,9 @@ export class StateSync {
     // This prevents rendering before we have enough data for a complete game state
     if (!this.isReadyForRendering && this.snapshots.length >= 2) {
       this.isReadyForRendering = true;
+      // Start world preview period: show world without local player for a brief moment
+      // This ensures other players are fully visible BEFORE local player spawns (prevents "pop-in")
+      this.worldPreviewUntil = performance.now() + StateSync.WORLD_PREVIEW_DURATION_MS;
     }
 
     // Clean up destroyed wells tracking when OLDEST snapshot confirms removal
@@ -464,7 +478,16 @@ export class StateSync {
       if (!this.playerBornTimes.has(player.id)) {
         // First time seeing this player
         // Animate only if they recently spawned (not if they spawned long ago and entered our AOI)
-        const bornTime = recentlySpawned && player.alive ? now : 0;
+        let bornTime = 0;
+        if (recentlySpawned && player.alive) {
+          // For local player during world preview: delay birth animation until preview ends
+          if (player.id === this.localPlayerId && this.isInWorldPreview()) {
+            // Set bornTime to end of preview period so animation starts when player becomes visible
+            bornTime = this.worldPreviewUntil;
+          } else {
+            bornTime = now;
+          }
+        }
         this.playerBornTimes.set(player.id, bornTime);
       } else if (recentlySpawned && player.alive && this.playerBornTimes.get(player.id) === 0) {
         // Player respawned - update birth time to animate
@@ -595,7 +618,17 @@ export class StateSync {
       if (!this.playerBornTimes.has(afterPlayer.id)) {
         // First time seeing this player
         // Animate only if they recently spawned (not if they spawned long ago and entered our AOI)
-        this.playerBornTimes.set(afterPlayer.id, recentlySpawned && afterPlayer.alive ? now : 0);
+        let bornTime = 0;
+        if (recentlySpawned && afterPlayer.alive) {
+          // For local player during world preview: delay birth animation until preview ends
+          if (afterPlayer.id === this.localPlayerId && this.isInWorldPreview()) {
+            // Set bornTime to end of preview period so animation starts when player becomes visible
+            bornTime = this.worldPreviewUntil;
+          } else {
+            bornTime = now;
+          }
+        }
+        this.playerBornTimes.set(afterPlayer.id, bornTime);
       } else if (recentlySpawned && afterPlayer.alive && this.playerBornTimes.get(afterPlayer.id) === 0) {
         // Player respawned - update birth time to animate
         this.playerBornTimes.set(afterPlayer.id, now);
@@ -809,6 +842,7 @@ export class StateSync {
     this.playerNameCache.clear();
     this.hasReceivedFirstSnapshot = false;
     this.isReadyForRendering = false;
+    this.worldPreviewUntil = 0;
     // Reset respawn detection tracking
     this.localPlayerLastAlive = false;
     this.localPlayerLastSpawnTick = 0;

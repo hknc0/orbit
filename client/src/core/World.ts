@@ -79,6 +79,10 @@ export class World {
   // Local player info
   localPlayerId: PlayerId | null = null;
 
+  // World preview mode: hide local player while showing other players
+  // Used during initial join to ensure world is visible before local player spawns
+  isInWorldPreview: boolean = false;
+
   // Arena state
   arena: ArenaState = {
     coreRadius: ARENA.CORE_RADIUS,
@@ -571,6 +575,7 @@ export class World {
   reset(): void {
     this.state = null;
     this.localPlayerId = null;
+    this.isInWorldPreview = false;
     this.isSpectator = false;
     this.spectateTargetId = null;
     this.spectateWellId = null;

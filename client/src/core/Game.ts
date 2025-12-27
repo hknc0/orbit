@@ -276,6 +276,9 @@ export class Game {
         this.handlePhaseChange(phase, countdown);
       }
 
+      // Update world preview state (hide local player briefly after join to show world first)
+      this.world.isInWorldPreview = this.stateSync.isInWorldPreview();
+
       // Update input and send to server
       if (this.phase === 'playing' || this.phase === 'countdown') {
         this.processInput(dt);

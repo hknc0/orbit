@@ -385,6 +385,9 @@ export class RenderSystem {
       const player = world.getPlayer(playerId);
       if (!player || !player.alive) continue;
 
+      // World preview mode: hide local player's trail (prevents "pop-in")
+      if (player.id === world.localPlayerId && world.isInWorldPreview) continue;
+
       const color = world.getPlayerColor(player.colorIndex);
       const currentRadius = world.massToRadius(player.mass);
 
@@ -633,6 +636,9 @@ export class RenderSystem {
   private renderAimIndicator(world: World, input: InputState): void {
     const localPlayer = world.getLocalPlayer();
     if (!localPlayer || !localPlayer.alive) return;
+
+    // World preview mode: hide aim indicator (local player is hidden)
+    if (world.isInWorldPreview) return;
 
     const radius = world.massToRadius(localPlayer.mass);
     const aimLength = radius + 30 + (input.isCharging ? input.chargeRatio * 20 : 0);
@@ -1320,6 +1326,9 @@ export class RenderSystem {
 
       const isLocal = player.id === world.localPlayerId;
 
+      // World preview mode: hide local player's boost flames (prevents "pop-in")
+      if (isLocal && world.isInWorldPreview) continue;
+
       // Determine if flame should show
       const speed = player.velocity.length();
       let showFlame = false;
@@ -1358,6 +1367,11 @@ export class RenderSystem {
 
       const color = world.getPlayerColor(player.colorIndex);
       const isLocal = player.id === world.localPlayerId;
+
+      // World preview mode: hide local player to show world first (prevents "pop-in")
+      // During initial join, other players are rendered but local player is hidden
+      // until the preview period ends (typically 300ms)
+      if (isLocal && world.isInWorldPreview) continue;
 
       // Birth effect - expanding rings when player spawns (skip at minimal quality)
       // bornTime > 0 means show animation, 0 means skip (entered AOI, not actually spawned)
