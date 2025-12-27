@@ -398,19 +398,17 @@ impl GameSession {
             );
         }
 
-        // Create AOI manager with view-based radii (not arena-based)
-        // Camera zoom ranges 0.45x-1.0x, screen ~2000px diagonal = ~4500 world units at max zoom out
-        // Using fixed values that work regardless of arena size
+        // Create AOI manager with dynamic viewport-based radius
+        // Radius is calculated at runtime from player's viewport_zoom:
+        //   radius = (1200 * 1.3) / viewport_zoom
+        // At zoom=1.0: ~1560 units, at zoom=0.45: ~3467 units
         let aoi_config = AOIConfig {
-            full_detail_radius: 3000.0,   // Full detail for immediate viewport
-            extended_radius: 6000.0,      // Extended for max zoom out (0.45x) + buffer
-            max_entities: 150,            // Cap per client for performance
+            max_entities: 100,            // Cap per client for performance
             always_include_top_n: 10,     // Always show top 10 players
         };
         info!(
-            "AOI configured: full_detail={:.0}, extended={:.0}, max_entities={}, arena_radius={:.0}",
-            aoi_config.full_detail_radius, aoi_config.extended_radius, aoi_config.max_entities,
-            game_loop.state().arena.escape_radius
+            "AOI configured: dynamic radius from viewport_zoom, max_entities={}, always_top={}",
+            aoi_config.max_entities, aoi_config.always_include_top_n
         );
 
         // Initialize metrics with current state
@@ -1201,7 +1199,12 @@ impl GameSession {
             .map(|p| (p.position, p.velocity))
             .unwrap_or((crate::util::vec2::Vec2::ZERO, crate::util::vec2::Vec2::ZERO));
 
-        self.aoi_manager.filter_for_player(player_id, player_position, player_velocity, &full_snapshot)
+        // Get viewport_zoom from connection (default to 1.0 if not found)
+        let viewport_zoom = self.players.get(&player_id)
+            .map(|c| c.viewport_zoom)
+            .unwrap_or(1.0);
+
+        self.aoi_manager.filter_for_player(player_id, player_position, player_velocity, viewport_zoom, &full_snapshot)
     }
 
     /// Respawn dead players after respawn delay
@@ -1485,6 +1488,7 @@ pub async fn broadcast_filtered_snapshots(session: &GameSession, tick: u64) {
         .collect();
 
     // Pre-compute AOI snapshots for bots with spectator followers
+    // Bots use default zoom=1.0 (they don't have viewport settings)
     let mut bot_snapshot_cache: HashMap<PlayerId, Arc<Vec<u8>>> = HashMap::with_capacity(bot_targets.len());
     for &bot_id in &bot_targets {
         if let Some(bot) = session.game_loop.state().get_player(bot_id) {
@@ -1492,6 +1496,7 @@ pub async fn broadcast_filtered_snapshots(session: &GameSession, tick: u64) {
                 bot_id,
                 bot.position,
                 bot.velocity,
+                1.0, // Bots use default zoom
                 &full_snapshot,
             );
             let message = ServerMessage::Snapshot(filtered);
@@ -1534,11 +1539,12 @@ pub async fn broadcast_filtered_snapshots(session: &GameSession, tick: u64) {
             .map(|p| (p.position, p.velocity))
             .unwrap_or((crate::util::vec2::Vec2::ZERO, crate::util::vec2::Vec2::ZERO));
 
-        // Filter snapshot for this player (AOI expands based on velocity)
+        // Filter snapshot for this player (AOI radius based on viewport zoom + velocity)
         let mut filtered = session.aoi_manager.filter_for_player(
             player_id,
             player_position,
             player_velocity,
+            conn.viewport_zoom,
             &full_snapshot,
         );
 

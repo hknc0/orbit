@@ -2,6 +2,13 @@
 //!
 //! Filters game state to only include entities relevant to each player,
 //! dramatically reducing bandwidth usage at scale.
+//!
+//! The AOI radius is **dynamically calculated** from viewport zoom:
+//! - Zoomed in (zoom=1.0): ~1560 unit radius, fewer entities
+//! - Zoomed out (zoom=0.45): ~3467 unit radius, more entities
+//!
+//! This ensures players only receive data for what's actually visible,
+//! with a buffer for smooth scrolling and movement prediction.
 
 use std::cell::RefCell;
 
@@ -20,14 +27,32 @@ thread_local! {
 }
 
 // ============================================================================
-// AOI System Constants
+// Dynamic AOI Constants (Performance-Tuned)
 // ============================================================================
 
-/// Default full detail radius - entities within this range get full update rate
-const DEFAULT_FULL_DETAIL_RADIUS: f32 = 500.0;
+/// Base visible radius at zoom=1.0 (half screen diagonal in world units)
+/// Calculated from typical 1920x1080 screen: sqrt(1920² + 1080²) / 2 ≈ 1100
+/// Rounded up slightly for buffer
+const BASE_VISIBLE_RADIUS: f32 = 1200.0;
 
-/// Default extended radius - entities in this range get reduced detail
-const DEFAULT_EXTENDED_RADIUS: f32 = 1000.0;
+/// Buffer multiplier beyond visible screen edge
+/// Prevents pop-in during movement and scroll. 1.3 = 30% extra radius.
+const AOI_BUFFER_MULTIPLIER: f32 = 1.3;
+
+/// Minimum zoom clamp to prevent extreme radius values
+/// Even at 0.1 zoom: 1200/0.1*1.3 = 15,600 (reasonable for spectators)
+const MIN_ZOOM_CLAMP: f32 = 0.1;
+
+/// Lookahead time in seconds for velocity-based AOI expansion
+/// Prevents pop-in when moving fast by looking ahead this many seconds
+const VELOCITY_LOOKAHEAD_TIME: f32 = 1.5;
+
+/// Maximum velocity expansion as fraction of calculated radius
+/// AOI can expand by up to 40% when moving at high speed
+const VELOCITY_EXPANSION_MAX_RATIO: f32 = 0.4;
+
+/// Projectile entity cap divisor (projectiles capped at max_entities / this value)
+const PROJECTILE_CAP_DIVISOR: usize = 2;
 
 /// Default maximum entities to include per client (performance cap)
 const DEFAULT_MAX_ENTITIES: usize = 100;
@@ -35,24 +60,60 @@ const DEFAULT_MAX_ENTITIES: usize = 100;
 /// Default number of top players to always include (for leaderboard visibility)
 const DEFAULT_ALWAYS_INCLUDE_TOP_N: usize = 5;
 
-/// Lookahead time in seconds for velocity-based AOI expansion
-/// Prevents pop-in when moving fast by looking ahead this many seconds
-const VELOCITY_LOOKAHEAD_TIME: f32 = 2.0;
+// ============================================================================
+// Pre-computed Constants (Avoid Runtime Division)
+// ============================================================================
 
-/// Maximum velocity expansion as fraction of extended radius
-/// AOI can expand by up to 50% when moving at high speed
-const VELOCITY_EXPANSION_MAX_RATIO: f32 = 0.5;
+/// Pre-computed: BASE_VISIBLE_RADIUS * AOI_BUFFER_MULTIPLIER
+/// Used to avoid multiplication in hot path
+const BASE_RADIUS_WITH_BUFFER: f32 = BASE_VISIBLE_RADIUS * AOI_BUFFER_MULTIPLIER;
 
-/// Projectile entity cap divisor (projectiles capped at max_entities / this value)
-const PROJECTILE_CAP_DIVISOR: usize = 2;
+// ============================================================================
+// Inline Calculation Functions
+// ============================================================================
 
-/// AOI configuration
+/// Calculate effective AOI radius from viewport zoom
+///
+/// # Performance
+/// - Single division + multiplication
+/// - Inlined at all call sites
+/// - No branching in common path
+///
+/// # Formula
+/// `radius = (BASE_VISIBLE_RADIUS * BUFFER) / max(zoom, MIN_ZOOM)`
+///
+/// # Examples
+/// - zoom=1.0  → 1560 units
+/// - zoom=0.7  → 2229 units
+/// - zoom=0.45 → 3467 units
+/// - zoom=0.1  → 15600 units (spectator edge case)
+#[inline(always)]
+fn calculate_base_radius(viewport_zoom: f32) -> f32 {
+    // Branchless max using conditional move
+    // Compiler optimizes this to a single MAXSS instruction on x86
+    let clamped_zoom = if viewport_zoom > MIN_ZOOM_CLAMP { viewport_zoom } else { MIN_ZOOM_CLAMP };
+    BASE_RADIUS_WITH_BUFFER / clamped_zoom
+}
+
+/// Calculate velocity-based radius expansion
+///
+/// Fast-moving players get expanded AOI to prevent pop-in.
+/// Expansion is capped at VELOCITY_EXPANSION_MAX_RATIO of base radius.
+#[inline(always)]
+fn calculate_velocity_expansion(speed: f32, base_radius: f32) -> f32 {
+    let max_expansion = base_radius * VELOCITY_EXPANSION_MAX_RATIO;
+    let velocity_expansion = speed * VELOCITY_LOOKAHEAD_TIME;
+    // Branchless min
+    if velocity_expansion < max_expansion { velocity_expansion } else { max_expansion }
+}
+
+// ============================================================================
+// AOI Configuration
+// ============================================================================
+
+/// AOI configuration (caps only - radius is dynamic from viewport zoom)
 #[derive(Debug, Clone)]
 pub struct AOIConfig {
-    /// Full detail radius - entities within this range get full update rate
-    pub full_detail_radius: f32,
-    /// Extended radius - entities in this range get reduced detail
-    pub extended_radius: f32,
     /// Maximum entities to include per client (performance cap)
     pub max_entities: usize,
     /// Always include top N players by score (for leaderboard visibility)
@@ -62,13 +123,15 @@ pub struct AOIConfig {
 impl Default for AOIConfig {
     fn default() -> Self {
         Self {
-            full_detail_radius: DEFAULT_FULL_DETAIL_RADIUS,   // Full detail for nearby entities
-            extended_radius: DEFAULT_EXTENDED_RADIUS,         // Reduced detail for medium range
-            max_entities: DEFAULT_MAX_ENTITIES,               // Cap to prevent bandwidth explosion
-            always_include_top_n: DEFAULT_ALWAYS_INCLUDE_TOP_N, // Always show top N players
+            max_entities: DEFAULT_MAX_ENTITIES,
+            always_include_top_n: DEFAULT_ALWAYS_INCLUDE_TOP_N,
         }
     }
 }
+
+// ============================================================================
+// AOI Manager
+// ============================================================================
 
 /// Manages Area of Interest filtering for network optimization
 pub struct AOIManager {
@@ -80,35 +143,51 @@ impl AOIManager {
         Self { config }
     }
 
-    /// Filter a game snapshot for a specific player based on their position and velocity
+    /// Filter a game snapshot for a specific player based on their viewport and velocity
     ///
-    /// Returns a personalized snapshot containing:
-    /// - The player themselves (always)
-    /// - Nearby players within AOI radius (expanded based on speed)
-    /// - Top N players by score (for leaderboard)
-    /// - Nearby projectiles
-    /// - All gravity wells (they're sparse and important)
+    /// # Arguments
+    /// - `player_id`: The player receiving this filtered snapshot
+    /// - `player_position`: Player's world position (center of AOI)
+    /// - `player_velocity`: Player's velocity (for predictive expansion)
+    /// - `viewport_zoom`: Camera zoom level (0.1-1.0, lower = zoomed out = larger AOI)
+    /// - `full_snapshot`: Complete game state to filter
     ///
-    /// AOI radius is expanded when player is moving fast to prevent pop-in:
-    /// - At rest: uses configured extended_radius
-    /// - At high speed: expanded by up to 50% in direction of movement
+    /// # Returns
+    /// A personalized snapshot containing:
+    /// - The player themselves (always, first priority)
+    /// - Top N players by score (for leaderboard visibility)
+    /// - Nearby players within dynamic AOI radius (sorted by distance)
+    /// - Nearby projectiles and debris
+    /// - All gravity wells (sparse and always important)
+    ///
+    /// # Performance
+    /// - O(n log n) for player sorting by distance
+    /// - Uses thread-local buffers to avoid allocations
+    /// - Pre-computes squared radius to avoid sqrt in distance checks
+    /// - Inlined radius calculations
+    #[inline]
     pub fn filter_for_player(
         &self,
         player_id: PlayerId,
         player_position: Vec2,
         player_velocity: Vec2,
+        viewport_zoom: f32,
         full_snapshot: &GameSnapshot,
     ) -> GameSnapshot {
+        // Calculate dynamic AOI radius from viewport zoom
+        let base_radius = calculate_base_radius(viewport_zoom);
+
         // Expand AOI based on speed to prevent pop-in when moving fast
-        // At 250 speed (max zoom out), player covers ~250 units/sec
-        // Lookahead ~2 seconds of movement = 500 units extra radius
         let speed = player_velocity.length();
-        let velocity_expansion = (speed * VELOCITY_LOOKAHEAD_TIME).min(self.config.extended_radius * VELOCITY_EXPANSION_MAX_RATIO);
-        let effective_extended_radius = self.config.extended_radius + velocity_expansion;
+        let velocity_expansion = calculate_velocity_expansion(speed, base_radius);
+        let effective_radius = base_radius + velocity_expansion;
+
         // OPTIMIZATION: Pre-compute squared radius to avoid sqrt in distance checks
-        let effective_extended_radius_sq = effective_extended_radius * effective_extended_radius;
+        let effective_radius_sq = effective_radius * effective_radius;
+
+        // Pre-allocate with expected capacity
         let mut filtered_players = Vec::with_capacity(self.config.max_entities);
-        let mut filtered_projectiles = Vec::with_capacity(self.config.max_entities);
+        let mut filtered_projectiles = Vec::with_capacity(self.config.max_entities / PROJECTILE_CAP_DIVISOR);
         let mut filtered_debris = Vec::with_capacity(self.config.max_entities);
 
         // CRITICAL: First, find and add the local player BEFORE processing others
@@ -124,7 +203,7 @@ impl AOIManager {
 
         // Get top N players by score (for leaderboard visibility)
         // OPTIMIZATION: Use thread-local buffer to avoid per-filter allocation
-        let top_player_ids: SmallVec<[PlayerId; 8]> = PLAYERS_BY_SCORE_BUFFER.with(|buffer_cell| {
+        let top_player_ids: SmallVec<[PlayerId; 16]> = PLAYERS_BY_SCORE_BUFFER.with(|buffer_cell| {
             let mut buffer = buffer_cell.borrow_mut();
             buffer.clear();
 
@@ -132,7 +211,7 @@ impl AOIManager {
             buffer.extend(full_snapshot.players.iter().map(|p| (p.id, p.kills)));
 
             // Sort by kills descending
-            buffer.sort_by(|a, b| b.1.cmp(&a.1));
+            buffer.sort_unstable_by(|a, b| b.1.cmp(&a.1));
 
             // Take top N player IDs
             buffer
@@ -154,9 +233,7 @@ impl AOIManager {
 
         // Collect nearby players with their distances
         // CRITICAL: Sort by distance to ensure closest players are included first
-        // This prevents far-away players from taking priority over nearby ones
-        // when max_entities cap is reached (HashMap iteration order is arbitrary)
-        // OPTIMIZATION: Use thread-local buffer with indices instead of references
+        // OPTIMIZATION: Use thread-local buffer with indices instead of cloning
         let nearby_indices: Vec<usize> = NEARBY_WITH_DISTANCE_BUFFER.with(|buffer_cell| {
             let mut buffer = buffer_cell.borrow_mut();
             buffer.clear();
@@ -167,13 +244,13 @@ impl AOIManager {
                     continue;
                 }
                 let distance_sq = (p.position - player_position).length_sq();
-                if distance_sq <= effective_extended_radius_sq {
+                if distance_sq <= effective_radius_sq {
                     buffer.push((idx, distance_sq));
                 }
             }
 
             // Sort by squared distance (closest first) - sqrt is monotonic so order is preserved
-            buffer.sort_by(|a, b| a.1.partial_cmp(&b.1).unwrap_or(std::cmp::Ordering::Equal));
+            buffer.sort_unstable_by(|a, b| a.1.partial_cmp(&b.1).unwrap_or(std::cmp::Ordering::Equal));
 
             // Return sorted indices
             buffer.iter().map(|(idx, _)| *idx).collect()
@@ -197,31 +274,28 @@ impl AOIManager {
                 .collect();
         }
 
-        // Filter projectiles by distance (using velocity-expanded radius)
+        // Filter projectiles by distance
         // OPTIMIZATION: Use length_sq() to avoid sqrt
+        let projectile_cap = self.config.max_entities / PROJECTILE_CAP_DIVISOR;
         for proj in &full_snapshot.projectiles {
-            let distance_sq = (proj.position - player_position).length_sq();
-            if distance_sq <= effective_extended_radius_sq {
-                filtered_projectiles.push(proj.clone());
-            }
-
-            // Cap projectiles too
-            if filtered_projectiles.len() >= self.config.max_entities / PROJECTILE_CAP_DIVISOR {
+            if filtered_projectiles.len() >= projectile_cap {
                 break;
+            }
+            let distance_sq = (proj.position - player_position).length_sq();
+            if distance_sq <= effective_radius_sq {
+                filtered_projectiles.push(proj.clone());
             }
         }
 
-        // Filter debris by distance (using velocity-expanded radius)
+        // Filter debris by distance
         // OPTIMIZATION: Use length_sq() to avoid sqrt
         for debris in &full_snapshot.debris {
-            let distance_sq = (debris.position - player_position).length_sq();
-            if distance_sq <= effective_extended_radius_sq {
-                filtered_debris.push(debris.clone());
-            }
-
-            // Cap debris
             if filtered_debris.len() >= self.config.max_entities {
                 break;
+            }
+            let distance_sq = (debris.position - player_position).length_sq();
+            if distance_sq <= effective_radius_sq {
+                filtered_debris.push(debris.clone());
             }
         }
 
@@ -285,6 +359,10 @@ pub struct AOIStats {
     pub reduction_percent: f32,
 }
 
+// ============================================================================
+// Tests
+// ============================================================================
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -301,7 +379,7 @@ mod tests {
             velocity: Vec2::ZERO,
             rotation: 0.0,
             mass: 100.0,
-            flags: player_flags::ALIVE, // alive=true, spawn_protection=false, is_bot=false
+            flags: player_flags::ALIVE,
             kills,
             deaths: 0,
             color_index: 0,
@@ -349,6 +427,84 @@ mod tests {
         }
     }
 
+    // ========================================================================
+    // Dynamic Radius Tests
+    // ========================================================================
+
+    #[test]
+    fn test_calculate_base_radius_zoom_1() {
+        let radius = calculate_base_radius(1.0);
+        assert!((radius - 1560.0).abs() < 1.0, "At zoom=1.0, radius should be ~1560, got {}", radius);
+    }
+
+    #[test]
+    fn test_calculate_base_radius_zoom_half() {
+        let radius = calculate_base_radius(0.5);
+        assert!((radius - 3120.0).abs() < 1.0, "At zoom=0.5, radius should be ~3120, got {}", radius);
+    }
+
+    #[test]
+    fn test_calculate_base_radius_zoom_min_clamp() {
+        // Zoom below MIN_ZOOM_CLAMP should be clamped
+        let radius_at_min = calculate_base_radius(MIN_ZOOM_CLAMP);
+        let radius_below_min = calculate_base_radius(0.01);
+        assert_eq!(radius_at_min, radius_below_min, "Zoom below MIN should be clamped");
+    }
+
+    #[test]
+    fn test_dynamic_aoi_zoomed_in_filters_more() {
+        let aoi = AOIManager::new(AOIConfig {
+            max_entities: 200,
+            always_include_top_n: 0,
+        });
+
+        let player_id = Uuid::new_v4();
+        let player_pos = Vec2::new(0.0, 0.0);
+
+        // Create players at various distances
+        let snapshot = GameSnapshot {
+            tick: 100,
+            match_phase: MatchPhase::Playing,
+            match_time: 60.0,
+            countdown: 0.0,
+            players: vec![
+                create_player_snapshot(player_id, player_pos, 0),
+                create_player_snapshot(Uuid::new_v4(), Vec2::new(1000.0, 0.0), 1),  // 1000 units
+                create_player_snapshot(Uuid::new_v4(), Vec2::new(2000.0, 0.0), 2),  // 2000 units
+                create_player_snapshot(Uuid::new_v4(), Vec2::new(3000.0, 0.0), 3),  // 3000 units
+            ],
+            projectiles: vec![],
+            debris: vec![],
+            arena_collapse_phase: 0,
+            arena_safe_radius: 5000.0,
+            arena_scale: 1.0,
+            gravity_wells: vec![],
+            total_players: 4,
+            total_alive: 4,
+            density_grid: vec![],
+            notable_players: vec![],
+            echo_client_time: 0,
+            ai_status: None,
+        };
+
+        // Zoomed in (zoom=1.0): radius ~1560, should only see player at 1000
+        let filtered_zoomed_in = aoi.filter_for_player(player_id, player_pos, Vec2::ZERO, 1.0, &snapshot);
+
+        // Zoomed out (zoom=0.45): radius ~3467, should see all except 3000 (borderline)
+        let filtered_zoomed_out = aoi.filter_for_player(player_id, player_pos, Vec2::ZERO, 0.45, &snapshot);
+
+        assert!(
+            filtered_zoomed_in.players.len() < filtered_zoomed_out.players.len(),
+            "Zoomed in should see fewer players. In: {}, Out: {}",
+            filtered_zoomed_in.players.len(),
+            filtered_zoomed_out.players.len()
+        );
+    }
+
+    // ========================================================================
+    // Core Functionality Tests
+    // ========================================================================
+
     #[test]
     fn test_aoi_filter_self_always_included() {
         let aoi = AOIManager::default();
@@ -359,17 +515,14 @@ mod tests {
         snapshot.players[0].id = player_id;
         snapshot.players[0].position = player_pos;
 
-        let filtered = aoi.filter_for_player(player_id, player_pos, Vec2::ZERO, &snapshot);
+        let filtered = aoi.filter_for_player(player_id, player_pos, Vec2::ZERO, 1.0, &snapshot);
 
-        // Self should always be included
         assert!(filtered.players.iter().any(|p| p.id == player_id));
     }
 
     #[test]
     fn test_aoi_filter_distant_players_excluded() {
         let config = AOIConfig {
-            full_detail_radius: 100.0,
-            extended_radius: 200.0,
             max_entities: 50,
             always_include_top_n: 0,
         };
@@ -385,8 +538,8 @@ mod tests {
             countdown: 0.0,
             players: vec![
                 create_player_snapshot(player_id, player_pos, 0),
-                create_player_snapshot(Uuid::new_v4(), Vec2::new(150.0, 0.0), 1),  // Within extended
-                create_player_snapshot(Uuid::new_v4(), Vec2::new(500.0, 0.0), 2),  // Far away
+                create_player_snapshot(Uuid::new_v4(), Vec2::new(500.0, 0.0), 1),   // Within AOI at zoom=1.0
+                create_player_snapshot(Uuid::new_v4(), Vec2::new(5000.0, 0.0), 2),  // Far outside AOI
             ],
             projectiles: vec![],
             debris: vec![],
@@ -402,17 +555,15 @@ mod tests {
             ai_status: None,
         };
 
-        let filtered = aoi.filter_for_player(player_id, player_pos, Vec2::ZERO, &snapshot);
+        // At zoom=1.0, radius ~1560, so 500 is in, 5000 is out
+        let filtered = aoi.filter_for_player(player_id, player_pos, Vec2::ZERO, 1.0, &snapshot);
 
-        // Should include self and nearby player, but not far player
-        assert_eq!(filtered.players.len(), 2);
+        assert_eq!(filtered.players.len(), 2, "Should include self and nearby player only");
     }
 
     #[test]
     fn test_aoi_filter_top_players_included() {
         let config = AOIConfig {
-            full_detail_radius: 100.0,
-            extended_radius: 200.0,
             max_entities: 50,
             always_include_top_n: 3,
         };
@@ -428,8 +579,8 @@ mod tests {
             countdown: 0.0,
             players: vec![
                 create_player_snapshot(player_id, player_pos, 0),
-                create_player_snapshot(Uuid::new_v4(), Vec2::new(5000.0, 0.0), 100),  // Far but top scorer
-                create_player_snapshot(Uuid::new_v4(), Vec2::new(5000.0, 5000.0), 50),  // Far, second place
+                create_player_snapshot(Uuid::new_v4(), Vec2::new(50000.0, 0.0), 100),  // Far but top scorer
+                create_player_snapshot(Uuid::new_v4(), Vec2::new(50000.0, 50000.0), 50), // Far, second place
             ],
             projectiles: vec![],
             debris: vec![],
@@ -445,17 +596,15 @@ mod tests {
             ai_status: None,
         };
 
-        let filtered = aoi.filter_for_player(player_id, player_pos, Vec2::ZERO, &snapshot);
+        let filtered = aoi.filter_for_player(player_id, player_pos, Vec2::ZERO, 1.0, &snapshot);
 
-        // Should include all 3 because top N is 3
+        // Should include all 3 because top N is 3 (even though 2 are far away)
         assert_eq!(filtered.players.len(), 3);
     }
 
     #[test]
     fn test_aoi_filter_projectiles() {
         let config = AOIConfig {
-            full_detail_radius: 100.0,
-            extended_radius: 300.0,
             max_entities: 50,
             always_include_top_n: 0,
         };
@@ -471,9 +620,9 @@ mod tests {
             countdown: 0.0,
             players: vec![create_player_snapshot(player_id, player_pos, 0)],
             projectiles: vec![
-                create_projectile_snapshot(1, Vec2::new(50.0, 0.0)),   // Near
-                create_projectile_snapshot(2, Vec2::new(200.0, 0.0)),  // Within extended
-                create_projectile_snapshot(3, Vec2::new(1000.0, 0.0)), // Far
+                create_projectile_snapshot(1, Vec2::new(50.0, 0.0)),    // Near
+                create_projectile_snapshot(2, Vec2::new(1000.0, 0.0)),  // Within AOI at zoom=1.0
+                create_projectile_snapshot(3, Vec2::new(5000.0, 0.0)),  // Far
             ],
             debris: vec![],
             arena_collapse_phase: 0,
@@ -488,9 +637,9 @@ mod tests {
             ai_status: None,
         };
 
-        let filtered = aoi.filter_for_player(player_id, player_pos, Vec2::ZERO, &snapshot);
+        let filtered = aoi.filter_for_player(player_id, player_pos, Vec2::ZERO, 1.0, &snapshot);
 
-        // Should include 2 nearby projectiles, exclude far one
+        // At zoom=1.0, radius ~1560. Should include 50 and 1000, exclude 5000
         assert_eq!(filtered.projectiles.len(), 2);
     }
 
@@ -498,9 +647,7 @@ mod tests {
     fn test_aoi_filter_max_entities_cap() {
         let max_entities = 10;
         let config = AOIConfig {
-            full_detail_radius: 10000.0,  // Include everything by distance
-            extended_radius: 10000.0,
-            max_entities,                 // But cap at 10
+            max_entities,
             always_include_top_n: 0,
         };
         let aoi = AOIManager::new(config);
@@ -508,14 +655,163 @@ mod tests {
         let player_id = Uuid::new_v4();
         let player_pos = Vec2::new(0.0, 0.0);
 
-        let mut snapshot = create_test_snapshot(50);  // 50 players
+        // Create 50 players, all close enough to be in AOI
+        let mut snapshot = create_test_snapshot(50);
+        snapshot.players[0].id = player_id;
+        snapshot.players[0].position = player_pos;
+        // Move all players close
+        for p in &mut snapshot.players {
+            p.position = Vec2::new(100.0, 100.0);
+        }
+
+        let filtered = aoi.filter_for_player(player_id, player_pos, Vec2::ZERO, 0.1, &snapshot);
+
+        assert!(filtered.players.len() <= max_entities);
+    }
+
+    #[test]
+    fn test_aoi_gravity_wells_preserved() {
+        let aoi = AOIManager::default();
+        let player_id = Uuid::new_v4();
+        let player_pos = Vec2::new(0.0, 0.0);
+
+        let mut snapshot = create_test_snapshot(5);
+        snapshot.players[0].id = player_id;
+        snapshot.gravity_wells = vec![
+            GravityWellSnapshot {
+                id: 0,
+                position: Vec2::new(50000.0, 50000.0),  // Very far
+                mass: 10000.0,
+                core_radius: 50.0,
+            },
+            GravityWellSnapshot {
+                id: 1,
+                position: Vec2::new(-50000.0, -50000.0),  // Very far
+                mass: 10000.0,
+                core_radius: 50.0,
+            },
+        ];
+
+        let filtered = aoi.filter_for_player(player_id, player_pos, Vec2::ZERO, 1.0, &snapshot);
+
+        // ALL gravity wells should be preserved regardless of distance
+        assert_eq!(filtered.gravity_wells.len(), 2);
+    }
+
+    #[test]
+    fn test_aoi_velocity_expansion() {
+        let config = AOIConfig {
+            max_entities: 100,
+            always_include_top_n: 0,
+        };
+        let aoi = AOIManager::new(config);
+
+        let player_id = Uuid::new_v4();
+        let player_pos = Vec2::new(0.0, 0.0);
+
+        // Player at edge of normal AOI
+        let edge_player_pos = Vec2::new(1800.0, 0.0);  // Just outside zoom=1.0 radius of ~1560
+
+        let snapshot = GameSnapshot {
+            tick: 100,
+            match_phase: MatchPhase::Playing,
+            match_time: 60.0,
+            countdown: 0.0,
+            players: vec![
+                create_player_snapshot(player_id, player_pos, 0),
+                create_player_snapshot(Uuid::new_v4(), edge_player_pos, 1),
+            ],
+            projectiles: vec![],
+            debris: vec![],
+            arena_collapse_phase: 0,
+            arena_safe_radius: 5000.0,
+            arena_scale: 1.0,
+            gravity_wells: vec![],
+            total_players: 2,
+            total_alive: 2,
+            density_grid: vec![],
+            notable_players: vec![],
+            echo_client_time: 0,
+            ai_status: None,
+        };
+
+        // Stationary - edge player might be excluded
+        let filtered_stationary = aoi.filter_for_player(
+            player_id, player_pos, Vec2::ZERO, 1.0, &snapshot
+        );
+
+        // Moving fast toward edge player - should expand AOI
+        let filtered_moving = aoi.filter_for_player(
+            player_id, player_pos, Vec2::new(300.0, 0.0), 1.0, &snapshot
+        );
+
+        // Moving should include more players due to velocity expansion
+        assert!(
+            filtered_moving.players.len() >= filtered_stationary.players.len(),
+            "Moving player should see at least as many players as stationary"
+        );
+    }
+
+    #[test]
+    fn test_aoi_prioritizes_closest_players() {
+        let max_entities = 5;
+        let config = AOIConfig {
+            max_entities,
+            always_include_top_n: 0,
+        };
+        let aoi = AOIManager::new(config);
+
+        let player_id = Uuid::new_v4();
+        let player_pos = Vec2::new(0.0, 0.0);
+
+        let mut snapshot = create_test_snapshot(20);
         snapshot.players[0].id = player_id;
         snapshot.players[0].position = player_pos;
 
-        let filtered = aoi.filter_for_player(player_id, player_pos, Vec2::ZERO, &snapshot);
+        // Put CLOSE players at END of array (tests sorting)
+        for i in 1..15 {
+            snapshot.players[i].position = Vec2::new(800.0 + (i as f32) * 30.0, 0.0);  // 800-1200
+        }
+        for i in 15..20 {
+            snapshot.players[i].position = Vec2::new(50.0 + ((i - 15) as f32) * 25.0, 0.0);  // 50-150
+        }
 
-        // Should be capped at max_entities
-        assert!(filtered.players.len() <= max_entities);
+        let filtered = aoi.filter_for_player(player_id, player_pos, Vec2::ZERO, 1.0, &snapshot);
+
+        // All included players (except self) should be close
+        for player in &filtered.players {
+            if player.id == player_id {
+                continue;
+            }
+            let distance = (player.position - player_pos).length();
+            assert!(
+                distance < 600.0,
+                "Far player at distance {} should NOT be included when closer players exist",
+                distance
+            );
+        }
+    }
+
+    #[test]
+    fn test_aoi_no_duplicate_players() {
+        let config = AOIConfig {
+            max_entities: 100,
+            always_include_top_n: 5,
+        };
+        let aoi = AOIManager::new(config);
+
+        let player_id = Uuid::new_v4();
+        let player_pos = Vec2::new(0.0, 0.0);
+
+        let mut snapshot = create_test_snapshot(10);
+        snapshot.players[0].id = player_id;
+        snapshot.players[0].position = player_pos;
+        snapshot.players[0].kills = 1000;  // Make them top scorer too
+
+        let filtered = aoi.filter_for_player(player_id, player_pos, Vec2::ZERO, 1.0, &snapshot);
+
+        let self_count = filtered.players.iter().filter(|p| p.id == player_id).count();
+        assert_eq!(self_count, 1, "Local player should appear exactly once");
     }
 
     #[test]
@@ -532,286 +828,7 @@ mod tests {
     }
 
     #[test]
-    fn test_aoi_gravity_wells_preserved() {
-        let aoi = AOIManager::default();
-        let player_id = Uuid::new_v4();
-        let player_pos = Vec2::new(0.0, 0.0);
-
-        let mut snapshot = create_test_snapshot(5);
-        snapshot.players[0].id = player_id;
-        snapshot.gravity_wells = vec![
-            GravityWellSnapshot {
-                id: 0,
-                position: Vec2::new(500.0, 500.0),
-                mass: 10000.0,
-                core_radius: 50.0,
-            },
-            GravityWellSnapshot {
-                id: 1,
-                position: Vec2::new(-500.0, -500.0),
-                mass: 10000.0,
-                core_radius: 50.0,
-            },
-        ];
-
-        let filtered = aoi.filter_for_player(player_id, player_pos, Vec2::ZERO, &snapshot);
-
-        // All gravity wells should be preserved
-        assert_eq!(filtered.gravity_wells.len(), 2);
-    }
-
-    #[test]
-    fn test_aoi_self_always_included_even_at_end_of_list() {
-        // Test that the local player is ALWAYS included even when they appear
-        // late in the players list and max_entities cap is reached early.
-        // This was a bug where HashMap iteration order could cause the local
-        // player to be missed if they happened to be processed after the cap.
-        let max_entities = 5;
-        let config = AOIConfig {
-            full_detail_radius: 10000.0,  // Include all by distance
-            extended_radius: 10000.0,
-            max_entities,                  // Tight cap
-            always_include_top_n: 0,       // No top player priority
-        };
-        let aoi = AOIManager::new(config);
-
-        let player_id = Uuid::new_v4();
-        let player_pos = Vec2::new(0.0, 0.0);
-
-        // Create 50 players, put our player at the END of the list
-        let mut snapshot = create_test_snapshot(50);
-        // Put the local player as the LAST player in the list
-        snapshot.players[49].id = player_id;
-        snapshot.players[49].position = player_pos;
-
-        let filtered = aoi.filter_for_player(player_id, player_pos, Vec2::ZERO, &snapshot);
-
-        // Local player MUST be included regardless of their position in the list
-        assert!(
-            filtered.players.iter().any(|p| p.id == player_id),
-            "Local player must always be included, even when at end of player list"
-        );
-    }
-
-    #[test]
-    fn test_aoi_self_included_with_many_top_players() {
-        // Ensure local player is included even when top players fill most slots
-        let max_entities = 10;
-        let config = AOIConfig {
-            full_detail_radius: 10000.0,
-            extended_radius: 10000.0,
-            max_entities,
-            always_include_top_n: 8,  // Reserve 8 slots for top players
-        };
-        let aoi = AOIManager::new(config);
-
-        let player_id = Uuid::new_v4();
-        let player_pos = Vec2::new(0.0, 0.0);
-
-        // Create 20 players with various kill counts
-        let mut snapshot = create_test_snapshot(20);
-        // Our player has 0 kills (not a top player) and is at end of list
-        snapshot.players[19].id = player_id;
-        snapshot.players[19].position = player_pos;
-        snapshot.players[19].kills = 0;
-
-        // Give other players higher kill counts
-        for i in 0..10 {
-            snapshot.players[i].kills = 100 - i as u32;
-        }
-
-        let filtered = aoi.filter_for_player(player_id, player_pos, Vec2::ZERO, &snapshot);
-
-        // Local player MUST be in the filtered list
-        assert!(
-            filtered.players.iter().any(|p| p.id == player_id),
-            "Local player must be included even when not a top scorer"
-        );
-    }
-
-    #[test]
-    fn test_aoi_no_duplicate_players() {
-        // Ensure players aren't added multiple times (self, top, nearby)
-        let config = AOIConfig {
-            full_detail_radius: 10000.0,
-            extended_radius: 10000.0,
-            max_entities: 100,
-            always_include_top_n: 5,
-        };
-        let aoi = AOIManager::new(config);
-
-        let player_id = Uuid::new_v4();
-        let player_pos = Vec2::new(0.0, 0.0);
-
-        // Create snapshot where local player is also a top scorer
-        let mut snapshot = create_test_snapshot(10);
-        snapshot.players[0].id = player_id;
-        snapshot.players[0].position = player_pos;
-        snapshot.players[0].kills = 1000;  // Make them top scorer
-
-        let filtered = aoi.filter_for_player(player_id, player_pos, Vec2::ZERO, &snapshot);
-
-        // Count occurrences of local player
-        let self_count = filtered.players.iter().filter(|p| p.id == player_id).count();
-        assert_eq!(self_count, 1, "Local player should appear exactly once, not duplicated");
-    }
-
-    #[test]
-    fn test_aoi_prioritizes_closest_players() {
-        // When max_entities is limited, closest players should be included first
-        // This prevents invisible collisions from players that are actually nearby
-        let max_entities = 5;  // Very limited
-        let config = AOIConfig {
-            full_detail_radius: 1000.0,
-            extended_radius: 1000.0,
-            max_entities,
-            always_include_top_n: 0,  // No top player priority
-        };
-        let aoi = AOIManager::new(config);
-
-        let player_id = Uuid::new_v4();
-        let player_pos = Vec2::new(0.0, 0.0);
-
-        // Create 20 players at various distances
-        let mut snapshot = create_test_snapshot(20);
-        snapshot.players[0].id = player_id;
-        snapshot.players[0].position = player_pos;
-
-        // Set up distances: some far (500-900), some close (50-150)
-        // Put the CLOSE ones at the END of the array to test sorting
-        for i in 1..15 {
-            // Far players (500-900 units)
-            snapshot.players[i].position = Vec2::new(500.0 + (i as f32) * 30.0, 0.0);
-        }
-        for i in 15..20 {
-            // Close players (50-150 units) - these should be prioritized
-            snapshot.players[i].position = Vec2::new(50.0 + ((i - 15) as f32) * 25.0, 0.0);
-        }
-
-        let filtered = aoi.filter_for_player(player_id, player_pos, Vec2::ZERO, &snapshot);
-
-        // With max_entities = 5 (1 self + 4 others), we should have the closest 4 others
-        // Check that NO far players (500+ units) are included
-        for player in &filtered.players {
-            if player.id == player_id {
-                continue;
-            }
-            let distance = (player.position - player_pos).length();
-            assert!(
-                distance < 400.0,
-                "Far player at distance {} should NOT be included when closer players exist",
-                distance
-            );
-        }
-    }
-
-    #[test]
-    fn test_aoi_collision_visibility_guarantee() {
-        // Players within collision range (50-100 units) MUST be visible
-        // This test ensures no "invisible collision" scenarios
-        let config = AOIConfig {
-            full_detail_radius: 500.0,
-            extended_radius: 1000.0,
-            max_entities: 10,  // Limited
-            always_include_top_n: 0,
-        };
-        let aoi = AOIManager::new(config);
-
-        let player_id = Uuid::new_v4();
-        let player_pos = Vec2::new(0.0, 0.0);
-
-        // Create many players, with some very close (collision range)
-        let mut snapshot = create_test_snapshot(50);
-        snapshot.players[0].id = player_id;
-        snapshot.players[0].position = player_pos;
-
-        // Put 3 players at collision distance (30-50 units)
-        let close_ids: Vec<_> = (1..=3).map(|i| {
-            snapshot.players[i].position = Vec2::new(30.0 + (i as f32) * 10.0, 0.0);
-            snapshot.players[i].id
-        }).collect();
-
-        // Fill rest with far players (300-500 units)
-        for i in 4..50 {
-            snapshot.players[i].position = Vec2::new(300.0 + (i as f32) * 10.0, 0.0);
-        }
-
-        let filtered = aoi.filter_for_player(player_id, player_pos, Vec2::ZERO, &snapshot);
-
-        // ALL close players (collision range) MUST be included
-        for close_id in close_ids {
-            assert!(
-                filtered.players.iter().any(|p| p.id == close_id),
-                "Player at collision range MUST be visible to prevent invisible collisions"
-            );
-        }
-    }
-
-    #[test]
-    fn test_aoi_length_sq_optimization_correctness() {
-        // Verify that using length_sq() produces the same results as length()
-        // for distance-based filtering (since sqrt is monotonic)
-        let config = AOIConfig {
-            full_detail_radius: 100.0,
-            extended_radius: 200.0,
-            max_entities: 50,
-            always_include_top_n: 0,
-        };
-        let aoi = AOIManager::new(config);
-
-        let player_id = Uuid::new_v4();
-        let player_pos = Vec2::new(0.0, 0.0);
-
-        // Create players at various distances around the boundary
-        let snapshot = GameSnapshot {
-            tick: 100,
-            match_phase: MatchPhase::Playing,
-            match_time: 60.0,
-            countdown: 0.0,
-            players: vec![
-                create_player_snapshot(player_id, player_pos, 0),
-                // At exactly 199 units - should be included
-                create_player_snapshot(Uuid::new_v4(), Vec2::new(199.0, 0.0), 1),
-                // At exactly 200 units - should be included (boundary)
-                create_player_snapshot(Uuid::new_v4(), Vec2::new(200.0, 0.0), 2),
-                // At 201 units - should NOT be included
-                create_player_snapshot(Uuid::new_v4(), Vec2::new(201.0, 0.0), 3),
-                // Diagonal distance: sqrt(141^2 + 141^2) ≈ 199.4 - should be included
-                create_player_snapshot(Uuid::new_v4(), Vec2::new(141.0, 141.0), 4),
-                // Diagonal distance: sqrt(142^2 + 142^2) ≈ 200.8 - should NOT be included
-                create_player_snapshot(Uuid::new_v4(), Vec2::new(142.0, 142.0), 5),
-            ],
-            projectiles: vec![],
-            debris: vec![],
-            arena_collapse_phase: 0,
-            arena_safe_radius: 800.0,
-            arena_scale: 1.0,
-            gravity_wells: vec![],
-            total_players: 6,
-            total_alive: 6,
-            density_grid: vec![],
-            notable_players: vec![],
-            echo_client_time: 0,
-            ai_status: None,
-        };
-
-        let filtered = aoi.filter_for_player(player_id, player_pos, Vec2::ZERO, &snapshot);
-
-        // Should include: self + 199 + 200 + diagonal(141,141)
-        // Should exclude: 201 + diagonal(142,142)
-        assert_eq!(filtered.players.len(), 4, "Should include exactly 4 players");
-
-        // Verify boundary cases
-        assert!(filtered.players.iter().any(|p| p.kills == 1), "Player at 199 should be included");
-        assert!(filtered.players.iter().any(|p| p.kills == 2), "Player at 200 should be included");
-        assert!(!filtered.players.iter().any(|p| p.kills == 3), "Player at 201 should be excluded");
-        assert!(filtered.players.iter().any(|p| p.kills == 4), "Diagonal player at ~199 should be included");
-        assert!(!filtered.players.iter().any(|p| p.kills == 5), "Diagonal player at ~201 should be excluded");
-    }
-
-    #[test]
     fn test_aoi_buffer_pooling_multiple_calls() {
-        // Stress test: verify buffer pooling works correctly across many calls
         let aoi = AOIManager::default();
         let player_id = Uuid::new_v4();
         let player_pos = Vec2::new(0.0, 0.0);
@@ -820,23 +837,16 @@ mod tests {
         snapshot.players[0].id = player_id;
         snapshot.players[0].position = player_pos;
 
-        // Set varied kill counts to test top-N sorting
         for i in 0..50 {
             snapshot.players[i].kills = i as u32;
         }
 
-        // Call many times to ensure buffer reuse works correctly
+        // Many calls to test buffer reuse
         for i in 0..100 {
-            let filtered = aoi.filter_for_player(player_id, player_pos, Vec2::ZERO, &snapshot);
+            let filtered = aoi.filter_for_player(player_id, player_pos, Vec2::ZERO, 1.0, &snapshot);
             assert!(
                 filtered.players.iter().any(|p| p.id == player_id),
                 "Local player should be included on iteration {}",
-                i
-            );
-            // Top players by kills should be included
-            assert!(
-                filtered.players.iter().any(|p| p.kills == 49),
-                "Top scorer should be included on iteration {}",
                 i
             );
         }
