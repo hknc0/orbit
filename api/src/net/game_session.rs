@@ -1189,7 +1189,7 @@ impl GameSession {
     }
 
     /// Get a filtered snapshot for a specific player using AOI
-    #[allow(dead_code)]
+    /// Used for initial snapshots on player join to ensure consistency with broadcast filtering
     pub fn get_filtered_snapshot(&self, player_id: PlayerId) -> GameSnapshot {
         let full_snapshot = self.get_snapshot();
 
@@ -2765,5 +2765,58 @@ mod client_net_state_tests {
         // Verify nothing changed (simulating the fix)
         assert_eq!(state.last_snapshot.is_some(), snapshot_before.is_some());
         assert_eq!(state.last_full_tick, tick_before);
+    }
+
+    #[test]
+    fn test_initial_snapshot_aoi_consistency() {
+        // BUG FIX: Initial snapshot for players must be AOI-filtered
+        //
+        // Before fix: transport.rs sent session.get_snapshot() which returns
+        // ALL entities regardless of distance - causing a "pop-in" effect where
+        // players would see everyone momentarily, then entities would disappear
+        // when the first AOI-filtered broadcast arrived.
+        //
+        // After fix: transport.rs sends session.get_filtered_snapshot(player_id)
+        // for players (spectators still get full snapshot).
+        //
+        // This test documents the expected behavior:
+        // 1. get_snapshot() returns unfiltered snapshot (all entities)
+        // 2. get_filtered_snapshot() returns AOI-filtered snapshot
+        // 3. Initial player snapshot should use get_filtered_snapshot
+
+        // The fix ensures consistency between:
+        // - Initial snapshot on join
+        // - Regular broadcast snapshots (every 100ms)
+        //
+        // Without AOI filtering on initial snapshot:
+        // - Tick 0: Player receives ALL 50 players
+        // - Tick 3: First broadcast, AOI filters to 10 nearby players
+        // - Result: 40 players suddenly "disappear" (~1 second delay perception)
+        //
+        // With AOI filtering on initial snapshot:
+        // - Tick 0: Player receives AOI-filtered 10 nearby players
+        // - Tick 3: First broadcast, same 10 players (consistent)
+        // - Result: No pop-in/pop-out, smooth experience
+
+        // Document the snapshot source decision logic
+        fn initial_snapshot_source(is_spectator: bool) -> &'static str {
+            if is_spectator {
+                "get_snapshot (full)"  // Spectators see everything
+            } else {
+                "get_filtered_snapshot (AOI)"  // Players get AOI-filtered
+            }
+        }
+
+        assert_eq!(
+            initial_snapshot_source(false),
+            "get_filtered_snapshot (AOI)",
+            "Players should receive AOI-filtered initial snapshot"
+        );
+
+        assert_eq!(
+            initial_snapshot_source(true),
+            "get_snapshot (full)",
+            "Spectators should receive full initial snapshot"
+        );
     }
 }

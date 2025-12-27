@@ -394,10 +394,14 @@ async fn handle_connection(
                                         }
                                         tracing::debug!("Sent JoinAccepted (player_id: {})", new_player_id);
 
-                                        // Send initial snapshot
+                                        // Send initial snapshot (AOI-filtered for players, full for spectators)
                                         let snapshot = {
                                             let session = game_session.read().await;
-                                            session.get_snapshot()
+                                            if is_spectator {
+                                                session.get_snapshot()
+                                            } else {
+                                                session.get_filtered_snapshot(new_player_id)
+                                            }
                                         };
                                         let snapshot_msg = ServerMessage::Snapshot(snapshot);
                                         if let Err(e) = send_to_player(&writer, &snapshot_msg).await {
