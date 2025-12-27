@@ -40,6 +40,10 @@
 //!
 //! ## Decision Making
 //! - `AI_SOA_DECISION_INTERVAL` - Seconds between AI decisions (default: 0.5)
+//!
+//! ## Wake-up Rate Limiting (prevents CPU spikes when humans join)
+//! - `AI_SOA_BASE_WAKEUPS_PER_TICK` - Base wake-ups per tick at reference bot count (default: 30)
+//! - `AI_SOA_WAKEUP_SCALE_REFERENCE` - Reference bot count for scaling formula (default: 500)
 
 use bitvec::prelude::*;
 use hashbrown::HashMap;
@@ -155,6 +159,12 @@ pub struct AiSoaConfig {
     pub decision_interval: f32,
     /// Cache refresh interval for nearest well (seconds)
     pub well_cache_refresh_interval: f32,
+
+    // Wake-up rate limiting (prevents CPU spikes when humans join)
+    /// Base wake-ups per tick at reference bot count (scales linearly with bot count)
+    pub base_wakeups_per_tick: usize,
+    /// Reference bot count for wake-up scaling formula
+    pub wakeup_scale_reference: usize,
 }
 
 impl Default for AiSoaConfig {
@@ -189,6 +199,10 @@ impl Default for AiSoaConfig {
             // Decision making
             decision_interval: DEFAULT_DECISION_INTERVAL_SOA,
             well_cache_refresh_interval: DEFAULT_WELL_CACHE_REFRESH_INTERVAL,
+
+            // Wake-up rate limiting
+            base_wakeups_per_tick: 30,    // Base wake-ups at 500 bots
+            wakeup_scale_reference: 500,  // Reference bot count for scaling
         }
     }
 }
@@ -264,6 +278,22 @@ impl AiSoaConfig {
             config.well_cache_refresh_interval = val.parse().unwrap_or(DEFAULT_WELL_CACHE_REFRESH_INTERVAL);
         }
 
+        // Wake-up rate limiting
+        if let Ok(val) = std::env::var("AI_SOA_BASE_WAKEUPS_PER_TICK") {
+            if let Ok(parsed) = val.parse::<usize>() {
+                if parsed >= 10 && parsed <= 200 {
+                    config.base_wakeups_per_tick = parsed;
+                }
+            }
+        }
+        if let Ok(val) = std::env::var("AI_SOA_WAKEUP_SCALE_REFERENCE") {
+            if let Ok(parsed) = val.parse::<usize>() {
+                if parsed >= 100 && parsed <= 10000 {
+                    config.wakeup_scale_reference = parsed;
+                }
+            }
+        }
+
         // Log configuration on startup
         tracing::info!(
             dormancy = config.dormancy_enabled,
@@ -275,6 +305,8 @@ impl AiSoaConfig {
             lod_reduced = config.lod_reduced_radius,
             lod_dormant = config.lod_dormant_radius,
             target_tick_ms = config.target_tick_ms,
+            base_wakeups = config.base_wakeups_per_tick,
+            wakeup_ref = config.wakeup_scale_reference,
             "AI SoA configuration loaded"
         );
 
@@ -859,6 +891,31 @@ impl AiManagerSoA {
         }
     }
 
+    /// Calculate dynamic max wake-ups based on bot count and server health.
+    /// Scales with bot count (more bots = more wake-ups allowed to maintain same spread).
+    /// Reduces when server is stressed to prevent cascading performance issues.
+    ///
+    /// Performance status values: 0=Excellent, 1=Good, 2=Warning, 3=Critical, 4+=Catastrophic
+    pub fn calculate_max_wakeups(&self, performance_status: u64) -> usize {
+        let config = AiSoaConfig::global();
+
+        // Scale with bot count: more bots = spread wake-ups proportionally
+        // At 500 bots with base=30, max is 30. At 1500 bots, max is 90.
+        let bot_factor = (self.count as f32 / config.wakeup_scale_reference as f32).max(1.0);
+        let base_max = (config.base_wakeups_per_tick as f32 * bot_factor) as usize;
+
+        // Reduce when server is stressed
+        let health_factor = match performance_status {
+            0 | 1 => 1.0,  // Excellent/Good - full rate
+            2 => 0.5,      // Warning - half rate
+            3 => 0.25,     // Critical - quarter rate
+            _ => 0.1,      // Catastrophic - minimal
+        };
+
+        // Minimum 5 wake-ups to ensure progress even under stress
+        ((base_max as f32) * health_factor).max(5.0) as usize
+    }
+
     /// Register a new bot
     pub fn register_bot(&mut self, player_id: PlayerId) {
         if self.id_to_index.contains_key(&player_id) {
@@ -1016,7 +1073,8 @@ impl AiManagerSoA {
     /// Respects AI_SOA_DORMANCY_ENABLED env var - when disabled, all bots update every tick
     /// Uses adaptive thresholds when AI_SOA_ADAPTIVE_DORMANCY is enabled
     /// OPTIMIZED: Uses parallel processing for bot distance calculations
-    pub fn update_dormancy(&mut self, state: &GameState) {
+    /// Rate-limits Dormant → Full/Reduced transitions to prevent CPU spikes when humans join
+    pub fn update_dormancy(&mut self, state: &GameState, performance_status: u64) {
         let config = AiSoaConfig::global();
 
         // If dormancy is disabled, all bots are always active
@@ -1027,6 +1085,9 @@ impl AiManagerSoA {
             }
             return;
         }
+
+        // Calculate max wake-ups for this tick (dynamic based on bot count and health)
+        let max_wakeups = self.calculate_max_wakeups(performance_status);
 
         // Get thresholds (scaled by adaptive controller if enabled)
         let (full_radius, reduced_radius, dormant_radius) = if self.adaptive.enabled {
@@ -1059,6 +1120,9 @@ impl AiManagerSoA {
         let tick_counter = self.tick_counter;
         let reduced_interval = config.reduced_update_interval;
         let dormant_interval = config.dormant_update_interval;
+
+        // Snapshot current modes to detect wake-ups (Dormant → Full/Reduced)
+        let current_modes: Vec<UpdateMode> = self.update_modes.clone();
 
         // OPTIMIZATION: Parallel dormancy calculation for large bot counts
         // Collect results to avoid mutable borrow issues with parallel iteration
@@ -1106,13 +1170,29 @@ impl AiManagerSoA {
                 })
                 .collect();
 
-            // Apply results
-            for (i, mode, should_update) in results {
-                self.update_modes[i] = mode;
-                self.active_mask.set(i, should_update);
+            // Apply results with rate-limited wake-ups
+            let mut wakeups_this_tick = 0;
+            for (i, new_mode, should_update) in results {
+                let is_wakeup =
+                    current_modes[i] == UpdateMode::Dormant && new_mode != UpdateMode::Dormant;
+
+                if is_wakeup {
+                    if wakeups_this_tick < max_wakeups {
+                        // Allow wake-up
+                        self.update_modes[i] = new_mode;
+                        self.active_mask.set(i, should_update);
+                        wakeups_this_tick += 1;
+                    }
+                    // Else: stay dormant, will try again next tick
+                } else {
+                    // Non-wakeup transitions (including going TO dormant) happen immediately
+                    self.update_modes[i] = new_mode;
+                    self.active_mask.set(i, should_update);
+                }
             }
         } else {
             // Sequential path for small bot counts (avoids parallel overhead)
+            let mut wakeups_this_tick = 0;
             for i in 0..self.count {
                 let player_id = self.bot_ids[i];
                 let Some(player) = state.get_player(player_id) else {
@@ -1134,18 +1214,32 @@ impl AiManagerSoA {
                     })
                     .fold(f32::MAX, |a, b| a.min(b));
 
-                let mode = if min_dist_sq < full_radius_sq {
+                let new_mode = if min_dist_sq < full_radius_sq {
                     UpdateMode::Full
                 } else if min_dist_sq < reduced_radius_sq {
                     UpdateMode::Reduced
                 } else {
                     UpdateMode::Dormant
                 };
-                self.update_modes[i] = mode;
+
+                // Rate-limit wake-ups (Dormant → Full/Reduced)
+                let is_wakeup =
+                    current_modes[i] == UpdateMode::Dormant && new_mode != UpdateMode::Dormant;
+
+                if is_wakeup {
+                    if wakeups_this_tick < max_wakeups {
+                        // Allow wake-up
+                        self.update_modes[i] = new_mode;
+                        wakeups_this_tick += 1;
+                    }
+                    // Else: stay dormant (mode unchanged), will try again next tick
+                } else {
+                    // Non-wakeup transitions happen immediately
+                    self.update_modes[i] = new_mode;
+                }
 
                 // Stagger updates by bot index to distribute load evenly across ticks
-                // instead of all bots in same mode updating on same tick
-                let should_update = match mode {
+                let should_update = match self.update_modes[i] {
                     UpdateMode::Full => true,
                     UpdateMode::Reduced => {
                         (tick_counter as usize + i) % reduced_interval as usize == 0
@@ -1171,7 +1265,11 @@ impl AiManagerSoA {
 
     /// Main update function - processes all active bots
     /// Respects config flags for zone queries, behavior batching, and parallel processing
-    pub fn update(&mut self, state: &GameState, dt: f32) {
+    ///
+    /// # Arguments
+    /// * `performance_status` - 0=Excellent, 1=Good, 2=Warning, 3=Critical, 4+=Catastrophic
+    ///   Used for rate-limiting bot wake-ups to prevent CPU spikes
+    pub fn update(&mut self, state: &GameState, dt: f32, performance_status: u64) {
         let config = AiSoaConfig::global();
         self.tick_counter = self.tick_counter.wrapping_add(1);
 
@@ -1181,7 +1279,7 @@ impl AiManagerSoA {
         }
 
         // Update dormancy (skip if dormancy disabled - handled in update_dormancy)
-        self.update_dormancy(state);
+        self.update_dormancy(state, performance_status);
 
         // Rebuild behavior batches (skip if batching disabled)
         if config.behavior_batching_enabled {
@@ -1215,7 +1313,7 @@ impl AiManagerSoA {
         performance_status: u64,
     ) {
         self.update_adaptive(tick_time_us, performance_status);
-        self.update(state, dt);
+        self.update(state, dt, performance_status);
     }
 
     /// Sequential update fallback (when behavior batching is disabled)
@@ -2179,7 +2277,7 @@ mod tests {
         let human = create_human_player(Vec2::new(100.0, 0.0), 100.0);
         state.add_player(human);
 
-        manager.update_dormancy(&state);
+        manager.update_dormancy(&state, 1);
 
         let idx = manager.get_index(bot_id).unwrap() as usize;
         assert_eq!(manager.update_modes[idx], UpdateMode::Full);
@@ -2201,7 +2299,7 @@ mod tests {
         let human = create_human_player(Vec2::new(0.0, 0.0), 100.0);
         state.add_player(human);
 
-        manager.update_dormancy(&state);
+        manager.update_dormancy(&state, 1);
 
         let idx = manager.get_index(bot_id).unwrap() as usize;
         assert_eq!(manager.update_modes[idx], UpdateMode::Dormant);
@@ -2217,7 +2315,7 @@ mod tests {
         state.add_player(bot);
         manager.register_bot(bot_id);
 
-        manager.update_dormancy(&state);
+        manager.update_dormancy(&state, 1);
 
         let idx = manager.get_index(bot_id).unwrap() as usize;
         // No humans = maximum distance = Dormant
@@ -2478,7 +2576,7 @@ mod tests {
         state.add_player(human);
 
         // Run update
-        manager.update(&state, 0.033);
+        manager.update(&state, 0.033, 1);
 
         // Verify tick counter incremented
         assert_eq!(manager.tick_counter, 1);
@@ -2630,6 +2728,8 @@ mod tests {
             zone_cell_size: 2048.0,
             decision_interval: 0.25,
             well_cache_refresh_interval: 0.25,
+            base_wakeups_per_tick: 50,
+            wakeup_scale_reference: 1000,
         };
 
         assert!(!config.dormancy_enabled);
@@ -2883,7 +2983,7 @@ mod tests {
         let human = create_human_player(Vec2::new(0.0, 0.0), 100.0);
         state.add_player(human);
 
-        manager.update_dormancy(&state);
+        manager.update_dormancy(&state, 1);
 
         let idx = manager.get_index(bot_id).unwrap() as usize;
         // Distance is 1000, which is > 500 (full) but < 2000 (reduced threshold)
@@ -2911,7 +3011,7 @@ mod tests {
         // Reduced mode updates every 4 ticks (tick_counter % 4 == 0)
         for tick in 0..12u32 {
             manager.tick_counter = tick;
-            manager.update_dormancy(&state);
+            manager.update_dormancy(&state, 1);
 
             let should_be_active = tick % 4 == 0;
             let is_active = manager.active_mask.get(idx).map(|b| *b).unwrap_or(false);
@@ -2944,7 +3044,7 @@ mod tests {
         // Dormant mode updates every 8 ticks
         for tick in 0..16u32 {
             manager.tick_counter = tick;
-            manager.update_dormancy(&state);
+            manager.update_dormancy(&state, 1);
 
             let should_be_active = tick % 8 == 0;
             let is_active = manager.active_mask.get(idx).map(|b| *b).unwrap_or(false);
@@ -2976,7 +3076,7 @@ mod tests {
         let human = create_human_player(Vec2::new(100.0, 0.0), 100.0);
         state.add_player(human);
 
-        manager.update_dormancy(&state);
+        manager.update_dormancy(&state, 1);
 
         let idx = manager.get_index(bot_id).unwrap() as usize;
         // Dead bot should be marked inactive
@@ -3496,7 +3596,7 @@ mod tests {
         let state = create_test_state();
 
         manager.tick_counter = u32::MAX;
-        manager.update(&state, 0.033);
+        manager.update(&state, 0.033, 1);
 
         // Should wrap to 0
         assert_eq!(manager.tick_counter, 0);
@@ -3508,9 +3608,9 @@ mod tests {
         let state = create_test_state();
 
         assert_eq!(manager.tick_counter, 0);
-        manager.update(&state, 0.033);
+        manager.update(&state, 0.033, 1);
         assert_eq!(manager.tick_counter, 1);
-        manager.update(&state, 0.033);
+        manager.update(&state, 0.033, 1);
         assert_eq!(manager.tick_counter, 2);
     }
 
@@ -3744,19 +3844,19 @@ mod tests {
         // With default scale (1.0), bot should be in Reduced mode
         manager.adaptive.enabled = true;
         manager.adaptive.lod_scale = 1.0;
-        manager.update_dormancy(&state);
+        manager.update_dormancy(&state, 1);
 
         let idx = manager.get_index(bot_id).unwrap() as usize;
         assert_eq!(manager.update_modes[idx], UpdateMode::Reduced);
 
         // With expanded scale (2.0), full radius is 1000, so bot should be Full
         manager.adaptive.lod_scale = 2.0;
-        manager.update_dormancy(&state);
+        manager.update_dormancy(&state, 1);
         assert_eq!(manager.update_modes[idx], UpdateMode::Full);
 
         // With shrunk scale (0.5), full radius is 250, so bot should still be Reduced
         manager.adaptive.lod_scale = 0.5;
-        manager.update_dormancy(&state);
+        manager.update_dormancy(&state, 1);
         assert_eq!(manager.update_modes[idx], UpdateMode::Reduced);
     }
 
@@ -3826,7 +3926,7 @@ mod tests {
             manager.register_bot(bot_id);
         }
 
-        manager.update_dormancy(&state);
+        manager.update_dormancy(&state, 1);
 
         // All bots should have valid update modes
         for i in 0..manager.count {
@@ -4041,7 +4141,7 @@ mod tests {
 
         for tick in 0..interval as u32 {
             manager.tick_counter = tick;
-            manager.update_dormancy(&state);
+            manager.update_dormancy(&state, 1);
 
             let active = (0..manager.count)
                 .filter(|&i| {
@@ -4102,7 +4202,7 @@ mod tests {
 
         for tick in 0..interval as u32 {
             manager.tick_counter = tick;
-            manager.update_dormancy(&state);
+            manager.update_dormancy(&state, 1);
 
             let active = (0..manager.count)
                 .filter(|&i| {
@@ -4153,7 +4253,7 @@ mod tests {
 
         for tick in 0..interval {
             manager.tick_counter = tick;
-            manager.update_dormancy(&state);
+            manager.update_dormancy(&state, 1);
 
             for i in 0..manager.count {
                 if manager.update_modes[i] == UpdateMode::Reduced &&
@@ -4202,7 +4302,7 @@ mod tests {
 
         for tick in 0..(interval * num_cycles) {
             manager.tick_counter = tick;
-            manager.update_dormancy(&state);
+            manager.update_dormancy(&state, 1);
 
             for i in 0..manager.count {
                 if manager.update_modes[i] == UpdateMode::Reduced &&
@@ -4336,7 +4436,7 @@ mod tests {
         // Test specific tick/index combinations
         for tick in 0..interval as u32 {
             manager.tick_counter = tick;
-            manager.update_dormancy(&state);
+            manager.update_dormancy(&state, 1);
 
             for i in 0..manager.count {
                 if manager.update_modes[i] != UpdateMode::Reduced {
@@ -4376,7 +4476,7 @@ mod tests {
         // Test specific tick/index combinations
         for tick in 0..interval as u32 {
             manager.tick_counter = tick;
-            manager.update_dormancy(&state);
+            manager.update_dormancy(&state, 1);
 
             for i in 0..manager.count {
                 if manager.update_modes[i] != UpdateMode::Dormant {
@@ -4418,7 +4518,7 @@ mod tests {
         for offset in 0..8u32 {
             let tick = start_tick.wrapping_add(offset);
             manager.tick_counter = tick;
-            manager.update_dormancy(&state);
+            manager.update_dormancy(&state, 1);
 
             // Count active reduced-mode bots
             let active_count: usize = (0..manager.count)
@@ -4465,7 +4565,7 @@ mod tests {
 
         for tick in 0..(interval * 4) {
             manager.tick_counter = tick;
-            manager.update_dormancy(&state);
+            manager.update_dormancy(&state, 1);
 
             let active_count: usize = (0..manager.count)
                 .filter(|&i| {
@@ -4479,7 +4579,7 @@ mod tests {
 
         // Count total reduced-mode bots
         manager.tick_counter = 0;
-        manager.update_dormancy(&state);
+        manager.update_dormancy(&state, 1);
         let total_reduced: usize = (0..manager.count)
             .filter(|&i| manager.update_modes[i] == UpdateMode::Reduced)
             .count();
@@ -4499,6 +4599,210 @@ mod tests {
             max_concurrent < total_reduced / 2,
             "Too many concurrent updates ({}), staggering may not be working",
             max_concurrent
+        );
+    }
+
+    // ========================================================================
+    // Wake-up Rate Limiting Tests
+    // ========================================================================
+
+    #[test]
+    fn test_calculate_max_wakeups_scales_with_bot_count() {
+        // At 500 bots (reference), should get base wake-ups (30)
+        let mut manager = AiManagerSoA::default();
+        for _ in 0..500 {
+            manager.register_bot(Uuid::new_v4());
+        }
+
+        // Good performance status
+        let max_wakeups = manager.calculate_max_wakeups(1);
+        assert_eq!(max_wakeups, 30, "At 500 bots, should get base 30 wake-ups");
+
+        // At 1500 bots, should scale to 90 (3x)
+        for _ in 0..1000 {
+            manager.register_bot(Uuid::new_v4());
+        }
+        let max_wakeups = manager.calculate_max_wakeups(1);
+        assert_eq!(max_wakeups, 90, "At 1500 bots, should get 90 wake-ups (3x scale)");
+
+        // At 250 bots (below reference), should get minimum of 30 (factor clamped to 1.0)
+        let mut small_manager = AiManagerSoA::default();
+        for _ in 0..250 {
+            small_manager.register_bot(Uuid::new_v4());
+        }
+        let max_wakeups = small_manager.calculate_max_wakeups(1);
+        assert_eq!(max_wakeups, 30, "Below reference, should still get base 30");
+    }
+
+    #[test]
+    fn test_calculate_max_wakeups_reduces_with_health() {
+        let mut manager = AiManagerSoA::default();
+        for _ in 0..500 {
+            manager.register_bot(Uuid::new_v4());
+        }
+
+        // Excellent (0): full rate
+        assert_eq!(manager.calculate_max_wakeups(0), 30);
+
+        // Good (1): full rate
+        assert_eq!(manager.calculate_max_wakeups(1), 30);
+
+        // Warning (2): half rate
+        assert_eq!(manager.calculate_max_wakeups(2), 15);
+
+        // Critical (3): quarter rate
+        assert_eq!(manager.calculate_max_wakeups(3), 7);  // 30 * 0.25 = 7.5 → 7
+
+        // Catastrophic (4+): 10% rate, but minimum 5
+        assert_eq!(manager.calculate_max_wakeups(4), 5);  // 30 * 0.1 = 3, but min 5
+        assert_eq!(manager.calculate_max_wakeups(99), 5); // Any high value = min 5
+    }
+
+    #[test]
+    fn test_calculate_max_wakeups_minimum_guarantee() {
+        // Even with small bot count and catastrophic health, should get at least 5
+        let mut manager = AiManagerSoA::default();
+        for _ in 0..10 {
+            manager.register_bot(Uuid::new_v4());
+        }
+
+        // At 10 bots: bot_factor = max(10/500, 1.0) = 1.0
+        // base_max = 30 * 1.0 = 30
+        // health_factor for catastrophic = 0.1
+        // effective = 30 * 0.1 = 3, but clamped to min 5
+        let max_wakeups = manager.calculate_max_wakeups(4);
+        assert_eq!(max_wakeups, 5, "Should guarantee minimum 5 wake-ups");
+    }
+
+    #[test]
+    fn test_wakeup_rate_limiting_prevents_mass_wakeup() {
+        let mut state = create_test_state();
+        let mut manager = AiManagerSoA::default();
+
+        // Create 100 bots, all far from any humans (dormant)
+        let bot_ids: Vec<_> = (0..100).map(|_| Uuid::new_v4()).collect();
+        for &id in &bot_ids {
+            manager.register_bot(id);
+            let bot = create_bot_player(Vec2::new(10000.0, 10000.0), 10.0);
+            state.players.insert(id, bot);
+        }
+
+        // Initially update with no humans - all dormant
+        manager.update_dormancy(&state, 1);
+        let dormant_count: usize = (0..manager.count)
+            .filter(|&i| manager.update_modes[i] == UpdateMode::Dormant)
+            .count();
+        assert_eq!(dormant_count, 100, "All bots should start dormant");
+
+        // Now add a human near ALL bots - this should trigger mass wake-up
+        let human = create_human_player(Vec2::new(10000.0, 10000.0), 100.0);
+        let human_id = human.id;
+        state.players.insert(human_id, human);
+
+        // First update - should only wake up max_wakeups bots
+        manager.update_dormancy(&state, 1);
+
+        let full_count: usize = (0..manager.count)
+            .filter(|&i| manager.update_modes[i] == UpdateMode::Full)
+            .count();
+
+        // With 100 bots and good health, max_wakeups = 30 (100 < 500, factor=1.0)
+        assert!(
+            full_count <= 30,
+            "First tick should wake at most 30 bots, got {}",
+            full_count
+        );
+        assert!(
+            full_count >= 1,
+            "At least some bots should wake up"
+        );
+
+        // After several ticks, all should eventually wake
+        for _ in 0..10 {
+            manager.update_dormancy(&state, 1);
+        }
+
+        let final_full_count: usize = (0..manager.count)
+            .filter(|&i| manager.update_modes[i] == UpdateMode::Full)
+            .count();
+
+        assert_eq!(
+            final_full_count, 100,
+            "After multiple ticks, all bots should be awake"
+        );
+    }
+
+    #[test]
+    fn test_wakeup_rate_limiting_reduces_under_stress() {
+        let mut state = create_test_state();
+        let mut manager = AiManagerSoA::default();
+
+        // Create 100 bots far from humans
+        let bot_ids: Vec<_> = (0..100).map(|_| Uuid::new_v4()).collect();
+        for &id in &bot_ids {
+            manager.register_bot(id);
+            let bot = create_bot_player(Vec2::new(10000.0, 10000.0), 10.0);
+            state.players.insert(id, bot);
+        }
+
+        // All dormant initially
+        manager.update_dormancy(&state, 1);
+
+        // Add human
+        let human = create_human_player(Vec2::new(10000.0, 10000.0), 100.0);
+        state.players.insert(human.id, human);
+
+        // Update with Critical health (3) - should only wake 7 bots (30 * 0.25)
+        manager.update_dormancy(&state, 3);
+
+        let full_count: usize = (0..manager.count)
+            .filter(|&i| manager.update_modes[i] == UpdateMode::Full)
+            .count();
+
+        assert!(
+            full_count <= 8,  // Allow small margin
+            "Under critical stress, should wake at most ~7 bots, got {}",
+            full_count
+        );
+    }
+
+    #[test]
+    fn test_non_wakeup_transitions_not_rate_limited() {
+        let mut state = create_test_state();
+        let mut manager = AiManagerSoA::default();
+
+        // Create bots near human (Full mode)
+        let bot_ids: Vec<_> = (0..100).map(|_| Uuid::new_v4()).collect();
+        let human = create_human_player(Vec2::new(0.0, 0.0), 100.0);
+        let human_id = human.id;
+        state.players.insert(human_id, human);
+
+        for &id in &bot_ids {
+            manager.register_bot(id);
+            let bot = create_bot_player(Vec2::new(100.0, 100.0), 10.0);
+            state.players.insert(id, bot);
+        }
+
+        // Set all to Full mode
+        manager.update_dormancy(&state, 1);
+        let full_count: usize = (0..manager.count)
+            .filter(|&i| manager.update_modes[i] == UpdateMode::Full)
+            .count();
+        assert_eq!(full_count, 100, "All bots near human should be Full");
+
+        // Now remove human (or move bots far away) - transition to Dormant
+        state.players.remove(&human_id);
+
+        // This should NOT be rate limited - all should go dormant immediately
+        manager.update_dormancy(&state, 1);
+        let dormant_count: usize = (0..manager.count)
+            .filter(|&i| manager.update_modes[i] == UpdateMode::Dormant)
+            .count();
+
+        assert_eq!(
+            dormant_count, 100,
+            "Going dormant should not be rate-limited, got {} dormant",
+            dormant_count
         );
     }
 }
