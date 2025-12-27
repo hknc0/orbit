@@ -300,6 +300,11 @@ pub struct Arena {
     /// to maintain consistent golden angle spacing across batches.
     #[serde(default = "default_well_base_offset")]
     pub well_base_offset: f32,
+    /// Next index for golden angle distribution (monotonically increasing, NEVER reused)
+    /// This ensures new wells always get unique angles, even after other wells are destroyed.
+    /// Unlike well count, this counter only goes up - destroyed wells don't free their angle slots.
+    #[serde(default)]
+    pub next_well_angle_index: u32,
 }
 
 fn default_next_well_id() -> WellId { 1 }
@@ -338,6 +343,7 @@ impl Default for Arena {
             shrink_delay_ticks: 0,
             next_well_id: 1, // Central well uses ID 0
             well_base_offset: default_well_base_offset(),
+            next_well_angle_index: 0, // Start at 0, increment for each well added
         }
     }
 }
@@ -829,16 +835,16 @@ impl Arena {
         // (FIX: Previously used Fermat spiral that didn't account for existing wells)
         let new_radii = self.find_gap_radii(actual_count, min_radius, max_radius);
 
-        for (i, target_radius) in new_radii.iter().enumerate() {
-            let well_index = existing_orbital + i;
-
+        for target_radius in new_radii.iter() {
             // === GOLDEN ANGLE DISTRIBUTION ===
-            // Each well placed at golden_angle × index from persistent base offset
-            // This maximizes angular separation naturally
-            let target_angle = base_offset + (well_index as f32) * GOLDEN_ANGLE;
+            // Use monotonically increasing counter (NEVER reused, even after well destruction)
+            // This ensures each new well gets a unique angle, preventing clustering
+            let angle_index = self.next_well_angle_index;
+            self.next_well_angle_index += 1;
+
+            let target_angle = base_offset + (angle_index as f32) * GOLDEN_ANGLE;
 
             // Find valid position with minimum spacing check
-            // (FIX: Previously had no spacing validation)
             let position = match self.find_valid_well_position(
                 *target_radius,
                 target_angle,
@@ -849,8 +855,8 @@ impl Arena {
                 Some(pos) => pos,
                 None => {
                     tracing::warn!(
-                        "Could not find valid position for well {} at target radius {:.0}, skipping",
-                        well_index, target_radius
+                        "Could not find valid position for well (angle_idx={}) at target radius {:.0}, skipping",
+                        angle_index, target_radius
                     );
                     continue;
                 }
@@ -1920,5 +1926,84 @@ mod tests {
                 );
             }
         }
+    }
+
+    #[test]
+    fn test_wells_after_destruction_get_unique_angles() {
+        // Regression test: wells added after destruction must get NEW unique angles,
+        // not reuse angle indices from the current well count.
+        // This prevents wells from clustering at similar positions.
+        use crate::config::ArenaScalingConfig;
+        let config = ArenaScalingConfig::default();
+        let mut arena = Arena::default();
+        let escape_radius = 2000.0;
+
+        // Add initial wells
+        arena.add_orbital_wells(5, escape_radius, &config);
+        assert_eq!(arena.orbital_well_count(), 5);
+        assert_eq!(arena.next_well_angle_index, 5); // Indices 0-4 used
+
+        // Record positions of all orbital wells
+        let original_positions: Vec<(WellId, Vec2)> = arena.gravity_wells.values()
+            .filter(|w| w.id != CENTRAL_WELL_ID)
+            .map(|w| (w.id, w.position))
+            .collect();
+
+        // Destroy one well (simulate explosion)
+        let well_to_destroy = original_positions[2].0;
+        let destroyed_position = original_positions[2].1;
+        arena.remove_well(well_to_destroy);
+        assert_eq!(arena.orbital_well_count(), 4);
+
+        // Add a replacement well
+        arena.add_orbital_wells(1, escape_radius, &config);
+        assert_eq!(arena.orbital_well_count(), 5);
+        assert_eq!(arena.next_well_angle_index, 6); // Index 5 used, NOT 4 (reused)
+
+        // Find the new well (highest ID)
+        let new_well = arena.gravity_wells.values()
+            .filter(|w| w.id != CENTRAL_WELL_ID)
+            .max_by_key(|w| w.id)
+            .expect("Should have new well");
+
+        // New well should NOT be at the same position as the destroyed well
+        let dist_from_destroyed = (new_well.position - destroyed_position).length();
+
+        // Golden angle separation (137.5° × 3 indices = 412.5° ≈ 52.5° actual)
+        // At radius ~1000, 52.5° separation = ~900 units minimum
+        // Allow some tolerance for gap-filling radius differences
+        assert!(
+            dist_from_destroyed > 200.0,
+            "New well at {:?} is too close to destroyed well position {:?} (dist: {:.0}). \
+             This indicates angle index reuse bug.",
+            new_well.position, destroyed_position, dist_from_destroyed
+        );
+    }
+
+    #[test]
+    fn test_angle_index_never_reused() {
+        // Verify that next_well_angle_index only increases, never decreases
+        use crate::config::ArenaScalingConfig;
+        let config = ArenaScalingConfig::default();
+        let mut arena = Arena::default();
+
+        assert_eq!(arena.next_well_angle_index, 0);
+
+        arena.add_orbital_wells(3, 1500.0, &config);
+        assert_eq!(arena.next_well_angle_index, 3);
+
+        // Remove a well
+        let well_id = arena.gravity_wells.keys()
+            .find(|&&id| id != CENTRAL_WELL_ID)
+            .copied()
+            .unwrap();
+        arena.remove_well(well_id);
+
+        // Index should NOT decrease
+        assert_eq!(arena.next_well_angle_index, 3);
+
+        // Add more wells
+        arena.add_orbital_wells(2, 1500.0, &config);
+        assert_eq!(arena.next_well_angle_index, 5); // 3 + 2 = 5
     }
 }
