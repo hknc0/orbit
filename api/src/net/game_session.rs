@@ -305,6 +305,10 @@ pub struct GameSession {
     last_simulation_update_tick: u64,
     /// Last tick when a bot was spawned (rate limiting to simulate human joins)
     last_bot_spawn_tick: u64,
+    /// Bots spawned per tick during initial ramp-up (from env BOT_SPAWN_RATE, default 10)
+    initial_spawn_rate: usize,
+    /// Whether we're still in initial ramp-up phase (spawning to target)
+    initial_ramp_complete: bool,
     /// Last client timestamp per player for RTT echo
     last_client_times: HashMap<PlayerId, u64>,
     /// Last processed input sequence per player (for deduplication)
@@ -351,9 +355,20 @@ impl GameSession {
                 .ok()
                 .and_then(|s| s.parse().ok())
                 .unwrap_or(ai::COUNT);
-            info!("Bot count set to {}", count);
+            info!("Bot count target set to {}", count);
             count
         };
+
+        // Load initial spawn rate from env (bots per tick during startup ramp-up)
+        // Default 3 means 90 bots/sec at 30 TPS, reaching 500 bots in ~5.5 seconds
+        // This gives adaptive systems time to adjust without CPU spikes
+        let initial_spawn_rate = std::env::var("BOT_SPAWN_RATE")
+            .ok()
+            .and_then(|s| s.parse().ok())
+            .unwrap_or(3)
+            .max(1)
+            .min(20); // Clamp to 1-20
+        info!("Initial bot spawn rate: {} per tick", initial_spawn_rate);
 
         // Load configs from environment
         let gravity_wave_config = GravityWaveConfig::from_env();
@@ -384,8 +399,8 @@ impl GameSession {
             game_loop.state().arena.escape_radius
         );
 
-        // Fill with bots initially
-        game_loop.fill_with_bots(bot_count);
+        // NOTE: Bots are spawned gradually via maintain_player_count() to prevent
+        // startup CPU spikes. The target is stored in bot_count.
 
         // Spawn initial debris (since we skip countdown phase)
         if debris_spawn_config.enabled {
@@ -412,11 +427,11 @@ impl GameSession {
             aoi_config.always_include_top_n
         );
 
-        // Initialize metrics with current state
+        // Initialize metrics with current state (starts at 0 bots, will ramp up)
         if let Some(ref m) = metrics {
-            m.total_players.store(bot_count as u64, Ordering::Relaxed);
-            m.bot_players.store(bot_count as u64, Ordering::Relaxed);
-            m.alive_players.store(bot_count as u64, Ordering::Relaxed);
+            m.total_players.store(0, Ordering::Relaxed);
+            m.bot_players.store(0, Ordering::Relaxed);
+            m.alive_players.store(0, Ordering::Relaxed);
             m.gravity_well_count.store(
                 game_loop.state().arena.gravity_wells.len() as u64,
                 Ordering::Relaxed,
@@ -436,6 +451,8 @@ impl GameSession {
             session_start: std::time::Instant::now(),
             last_simulation_update_tick: 0,
             last_bot_spawn_tick: 0,
+            initial_spawn_rate,
+            initial_ramp_complete: false,
             last_client_times: HashMap::new(),
             last_input_sequences: HashMap::new(),
             last_idle_check_tick: 0,
@@ -1308,19 +1325,66 @@ impl GameSession {
     }
 
     /// Maintain minimum player count with bots
-    /// Rate-limited to ~1 bot per second to simulate realistic human join behavior
+    /// During initial ramp-up: spawns multiple bots per tick (configurable via BOT_SPAWN_RATE)
+    /// After ramp-up: rate-limited to ~1 bot per second to simulate realistic join behavior
     fn maintain_player_count(&mut self) {
         let current_count = self.game_loop.state().players.len();
         let target = self.bot_count;
-        let current_tick = self.game_loop.state().tick;
 
-        // Rate limit: ~1 bot per second (30 ticks at 30 TPS)
-        // Simulates realistic human join rate on a busy server
-        const BOT_SPAWN_INTERVAL_TICKS: u64 = 30;
+        if current_count >= target {
+            // Mark ramp-up complete once we reach target
+            if !self.initial_ramp_complete {
+                self.initial_ramp_complete = true;
+                info!(
+                    "Initial bot ramp-up complete: {} bots spawned",
+                    current_count
+                );
+            }
+            return;
+        }
 
-        if current_count < target && current_tick >= self.last_bot_spawn_tick + BOT_SPAWN_INTERVAL_TICKS {
-            self.game_loop.fill_with_bots(current_count + 1);
-            self.last_bot_spawn_tick = current_tick;
+        if !self.initial_ramp_complete {
+            // Initial ramp-up: spawn multiple bots per tick
+            // Rate is capped by performance status to prevent overload
+            use crate::game::performance::PerformanceStatus;
+            let spawn_count = match self.performance.status() {
+                PerformanceStatus::Excellent | PerformanceStatus::Good => {
+                    // Excellent/Good: spawn at full rate
+                    self.initial_spawn_rate
+                }
+                PerformanceStatus::Warning => {
+                    // Warning: spawn at half rate
+                    (self.initial_spawn_rate / 2).max(1)
+                }
+                PerformanceStatus::Critical | PerformanceStatus::Catastrophic => {
+                    // Critical/Catastrophic: spawn 1 at a time
+                    1
+                }
+            };
+
+            let to_spawn = spawn_count.min(target - current_count);
+            self.game_loop.fill_with_bots(current_count + to_spawn);
+
+            // Log progress every 100 bots
+            let new_count = self.game_loop.state().players.len();
+            if new_count / 100 > current_count / 100 {
+                info!(
+                    "Bot ramp-up: {}/{} ({:.0}%)",
+                    new_count,
+                    target,
+                    (new_count as f32 / target as f32) * 100.0
+                );
+            }
+        } else {
+            // Post ramp-up: rate limit to ~1 bot per second (30 ticks at 30 TPS)
+            // Simulates realistic human join rate on a busy server
+            const BOT_SPAWN_INTERVAL_TICKS: u64 = 30;
+            let current_tick = self.game_loop.state().tick;
+
+            if current_tick >= self.last_bot_spawn_tick + BOT_SPAWN_INTERVAL_TICKS {
+                self.game_loop.fill_with_bots(current_count + 1);
+                self.last_bot_spawn_tick = current_tick;
+            }
         }
     }
 }

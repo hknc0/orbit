@@ -25,6 +25,11 @@ services:
       - PORT=4433
       - METRICS_PORT=9090
       - BOT_COUNT=500
+      # Bot spawn rate during startup (bots per tick, 1-20)
+      # Default 3 = 90 bots/sec at 30 TPS, 500 bots spawned in ~5.5 seconds
+      # Bots spawn gradually to prevent CPU spikes on server start
+      # - BOT_SPAWN_RATE=3
+      #
       # Simulation mode (load testing) - disabled for stable benchmarking
       - SIMULATION_MODE=false
       - SIMULATION_MIN_BOTS=150
