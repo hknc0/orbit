@@ -872,9 +872,13 @@ impl AiManagerSoA {
 
         // Initialize with random personality
         let mut rng = rand::thread_rng();
+        let config = AiSoaConfig::global();
 
         self.behaviors.push(AiBehavior::Idle);
-        self.decision_timers.push(0.0);
+        // Stagger initial decision timer to distribute processing across ticks
+        // instead of all bots deciding on their first active tick
+        let stagger = (index % 16) as f32 / 16.0 * config.decision_interval;
+        self.decision_timers.push(stagger);
         self.wants_boost.push(false);
         self.wants_fire.push(false);
         self.charge_times.push(0.0);
@@ -1087,10 +1091,15 @@ impl AiManagerSoA {
                         UpdateMode::Dormant
                     };
 
+                    // Stagger updates by bot index to distribute load evenly across ticks
                     let should_update = match mode {
                         UpdateMode::Full => true,
-                        UpdateMode::Reduced => tick_counter % reduced_interval == 0,
-                        UpdateMode::Dormant => tick_counter % dormant_interval == 0,
+                        UpdateMode::Reduced => {
+                            (tick_counter as usize + i) % reduced_interval as usize == 0
+                        }
+                        UpdateMode::Dormant => {
+                            (tick_counter as usize + i) % dormant_interval as usize == 0
+                        }
                     };
 
                     Some((i, mode, should_update))
@@ -1134,14 +1143,19 @@ impl AiManagerSoA {
                 };
                 self.update_modes[i] = mode;
 
+                // Stagger updates by bot index to distribute load evenly across ticks
+                // instead of all bots in same mode updating on same tick
                 let should_update = match mode {
                     UpdateMode::Full => true,
-                    UpdateMode::Reduced => tick_counter % reduced_interval == 0,
-                    UpdateMode::Dormant => tick_counter % dormant_interval == 0,
+                    UpdateMode::Reduced => {
+                        (tick_counter as usize + i) % reduced_interval as usize == 0
+                    }
+                    UpdateMode::Dormant => {
+                        (tick_counter as usize + i) % dormant_interval as usize == 0
+                    }
                 };
                 self.active_mask.set(i, should_update);
             }
-        }
     }
 
     /// Update the adaptive dormancy controller with current metrics.
