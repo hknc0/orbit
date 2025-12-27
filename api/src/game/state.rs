@@ -235,7 +235,7 @@ impl GravityWell {
             target_position: position, // Start at position (no lerping needed)
             mass,
             core_radius,
-            explosion_timer: Self::random_explosion_delay(),
+            explosion_timer: crate::config::GravityWaveConfig::global().random_explosion_delay(),
             is_charging: false,
         }
     }
@@ -260,12 +260,6 @@ impl GravityWell {
         true
     }
 
-    /// Generate a random explosion delay (30-90 seconds)
-    pub fn random_explosion_delay() -> f32 {
-        use rand::Rng;
-        let mut rng = rand::thread_rng();
-        rng.gen_range(30.0..90.0)
-    }
 }
 
 /// An expanding gravity wave from a well explosion
@@ -2197,5 +2191,136 @@ mod tests {
         assert_eq!(player.color_index, 0);
         assert_eq!(player.respawn_timer, 0.0);
         assert_eq!(player.spawn_tick, 0);
+    }
+
+    // ========== EXPLOSION TIMER RANDOMIZATION TESTS ==========
+
+    #[test]
+    fn test_well_explosion_timer_in_valid_range() {
+        // Verify explosion timers are within expected range (30-90 seconds)
+        use crate::config::GravityWaveConfig;
+        let config = GravityWaveConfig::from_env();
+        for _ in 0..100 {
+            let timer = config.random_explosion_delay();
+            assert!(
+                timer >= config.min_explosion_delay && timer < config.max_explosion_delay,
+                "Explosion timer {} should be in range [{}, {})",
+                timer, config.min_explosion_delay, config.max_explosion_delay
+            );
+        }
+    }
+
+    #[test]
+    fn test_well_explosion_timer_randomization_quality() {
+        // Create 20 wells and verify their explosion timers are diverse
+        // If randomization is broken, all wells would have identical or near-identical timers
+        use crate::game::constants::arena::CORE_RADIUS;
+        use crate::game::constants::physics::CENTRAL_MASS;
+
+        let mut timers: Vec<f32> = Vec::new();
+        for i in 0..20 {
+            let well = GravityWell::new(
+                i + 1, // Well IDs starting from 1
+                Vec2::new(500.0 * (i as f32), 0.0),
+                CENTRAL_MASS,
+                CORE_RADIUS,
+            );
+            timers.push(well.explosion_timer);
+        }
+
+        // All timers should be in valid range
+        for timer in &timers {
+            assert!(
+                *timer >= 30.0 && *timer < 90.0,
+                "Timer {} out of range",
+                timer
+            );
+        }
+
+        // Check for diversity - at least 10 unique values (given 60s range, should be easy)
+        let mut unique_timers: Vec<f32> = timers.clone();
+        unique_timers.sort_by(|a, b| a.partial_cmp(b).unwrap());
+        unique_timers.dedup_by(|a, b| (*a - *b).abs() < 0.001);
+
+        assert!(
+            unique_timers.len() >= 10,
+            "Expected at least 10 unique timer values, got {}. Timers: {:?}",
+            unique_timers.len(),
+            timers
+        );
+
+        // Check spread - min and max should differ by at least 20 seconds
+        let min_timer = timers.iter().cloned().fold(f32::MAX, f32::min);
+        let max_timer = timers.iter().cloned().fold(f32::MIN, f32::max);
+        let spread = max_timer - min_timer;
+
+        assert!(
+            spread >= 20.0,
+            "Timer spread {} should be at least 20s (min={}, max={}). Timers: {:?}",
+            spread,
+            min_timer,
+            max_timer,
+            timers
+        );
+    }
+
+    #[test]
+    fn test_well_explosion_timers_are_independent() {
+        // Verify that creating wells in quick succession still produces random timers
+        // This tests that the RNG isn't seeded in a way that causes correlation
+        use crate::game::constants::arena::CORE_RADIUS;
+        use crate::game::constants::physics::CENTRAL_MASS;
+
+        let well1 = GravityWell::new(1, Vec2::new(100.0, 0.0), CENTRAL_MASS, CORE_RADIUS);
+        let well2 = GravityWell::new(2, Vec2::new(200.0, 0.0), CENTRAL_MASS, CORE_RADIUS);
+        let well3 = GravityWell::new(3, Vec2::new(300.0, 0.0), CENTRAL_MASS, CORE_RADIUS);
+
+        // Wells should not all have identical timers
+        let all_same = (well1.explosion_timer - well2.explosion_timer).abs() < 0.001
+            && (well2.explosion_timer - well3.explosion_timer).abs() < 0.001;
+
+        assert!(
+            !all_same,
+            "Wells created in succession should have different timers: {}, {}, {}",
+            well1.explosion_timer,
+            well2.explosion_timer,
+            well3.explosion_timer
+        );
+    }
+
+    #[test]
+    fn test_arena_wells_have_diverse_explosion_timers() {
+        // Verify wells added via scale_for_simulation have diverse timers
+        use crate::config::ArenaScalingConfig;
+
+        let config = ArenaScalingConfig::default();
+        let mut arena = Arena::default();
+
+        // Scale arena to add multiple wells
+        for _ in 0..100 {
+            arena.scale_for_simulation(100, &config);
+        }
+
+        // Collect explosion timers from orbital wells
+        let timers: Vec<f32> = arena.gravity_wells.values()
+            .filter(|w| w.id != CENTRAL_WELL_ID)
+            .map(|w| w.explosion_timer)
+            .collect();
+
+        if timers.len() >= 3 {
+            // Check that timers are diverse
+            let min_timer = timers.iter().cloned().fold(f32::MAX, f32::min);
+            let max_timer = timers.iter().cloned().fold(f32::MIN, f32::max);
+            let spread = max_timer - min_timer;
+
+            assert!(
+                spread >= 10.0,
+                "Arena wells should have diverse explosion timers. Spread: {} (min={}, max={}). Timers: {:?}",
+                spread,
+                min_timer,
+                max_timer,
+                timers
+            );
+        }
     }
 }

@@ -229,6 +229,11 @@ impl ServerConfig {
     }
 }
 
+use std::sync::OnceLock;
+
+/// Global cached gravity wave configuration
+static GRAVITY_WAVE_CONFIG: OnceLock<GravityWaveConfig> = OnceLock::new();
+
 /// Gravity wave explosion configuration
 /// Controls the random well explosions that create expanding shockwaves
 /// All values can be overridden via GRAVITY_WAVE_* environment variables
@@ -368,6 +373,11 @@ impl GravityWaveConfig {
         }
 
         config
+    }
+
+    /// Get the global cached configuration (loads from env on first call)
+    pub fn global() -> &'static Self {
+        GRAVITY_WAVE_CONFIG.get_or_init(Self::from_env)
     }
 
     /// Generate a random explosion delay using this config
