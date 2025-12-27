@@ -24,7 +24,7 @@ services:
       - HOST=0.0.0.0
       - PORT=4433
       - METRICS_PORT=9090
-      - BOT_COUNT=150
+      - BOT_COUNT=500
       # Simulation mode (load testing) - disabled for stable benchmarking
       - SIMULATION_MODE=false
       - SIMULATION_MIN_BOTS=150

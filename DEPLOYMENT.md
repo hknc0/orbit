@@ -341,6 +341,337 @@ async function selectServer() {
 
 ---
 
+## Auto-Scaling: Multi-Galaxy Architecture
+
+### Concept
+
+Instead of scaling a single game world, spawn **multiple galaxies** (parallel universes) where each galaxy is an independent game instance. Players seamlessly join available galaxies or migrate between them.
+
+```
+┌─────────────────────────────────────────────────────────────────┐
+│                      Galaxy Orchestrator                         │
+│  ┌─────────────────────────────────────────────────────────────┐│
+│  │ • Monitors galaxy health & player counts                    ││
+│  │ • Spawns new galaxies when capacity reached                 ││
+│  │ • Provides galaxy discovery API for clients                 ││
+│  │ • Terminates empty galaxies after cooldown                  ││
+│  └─────────────────────────────────────────────────────────────┘│
+└─────────────────────────────────────────────────────────────────┘
+                               │
+       ┌───────────────────────┼───────────────────────┐
+       │                       │                       │
+       ▼                       ▼                       ▼
+┌─────────────┐         ┌─────────────┐         ┌─────────────┐
+│  Galaxy α   │         │  Galaxy β   │         │  Galaxy γ   │
+│  Port 4433  │         │  Port 4434  │         │  Port 4435  │
+│  120/150    │         │  80/150     │         │  45/150     │
+│  players    │         │  players    │         │  players    │
+└─────────────┘         └─────────────┘         └─────────────┘
+       │                       │                       │
+       └───────────────────────┴───────────────────────┘
+                               │
+                        ┌──────┴──────┐
+                        │   Client    │
+                        │ (connects   │
+                        │ to least    │
+                        │ crowded)    │
+                        └─────────────┘
+```
+
+### Scaling Rules
+
+| Condition | Action |
+|-----------|--------|
+| All galaxies > 80% capacity | Spawn new galaxy |
+| Galaxy empty for 5+ minutes | Terminate galaxy |
+| Galaxy unhealthy (no heartbeat) | Mark unavailable, respawn |
+| Player count spike detected | Pre-spawn galaxies |
+
+### Implementation Options
+
+#### Option A: Simple Orchestrator (Recommended for Start)
+
+A lightweight service that manages galaxy instances via Docker API:
+
+```yaml
+# docker-compose.prod.yml
+services:
+  orchestrator:
+    build: ./docker/orchestrator
+    ports:
+      - "8080:8080"  # Galaxy discovery API
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+    environment:
+      - MIN_GALAXIES=1
+      - MAX_GALAXIES=10
+      - PLAYERS_PER_GALAXY=150
+      - SCALE_UP_THRESHOLD=0.8    # 80% capacity
+      - SCALE_DOWN_DELAY=300      # 5 min cooldown
+      - GALAXY_IMAGE=orbit-api:latest
+      - BASE_PORT=4433
+```
+
+**Orchestrator API:**
+```
+GET  /galaxies          → List available galaxies with player counts
+GET  /galaxies/best     → Get recommended galaxy (least crowded)
+POST /galaxies          → Force spawn new galaxy (admin)
+DELETE /galaxies/:id    → Force terminate galaxy (admin)
+GET  /health            → Orchestrator health check
+```
+
+**Simple Orchestrator Logic (Rust/Node):**
+```rust
+// Pseudo-code for orchestrator
+async fn check_scaling() {
+    let galaxies = get_running_galaxies().await;
+
+    // Scale up: all galaxies above threshold
+    let all_busy = galaxies.iter()
+        .all(|g| g.player_count as f32 / g.capacity as f32 > 0.8);
+
+    if all_busy && galaxies.len() < MAX_GALAXIES {
+        spawn_galaxy().await;
+    }
+
+    // Scale down: empty galaxies past cooldown
+    for galaxy in &galaxies {
+        if galaxy.player_count == 0
+           && galaxy.empty_since.elapsed() > Duration::from_secs(300)
+           && galaxies.len() > MIN_GALAXIES {
+            terminate_galaxy(galaxy.id).await;
+        }
+    }
+}
+```
+
+#### Option B: Hetzner Cloud API Auto-Scaling
+
+Use Hetzner's API to spin up/down entire servers for large scale:
+
+```bash
+# Create new server via Hetzner API
+curl -X POST "https://api.hetzner.cloud/v1/servers" \
+  -H "Authorization: Bearer $HETZNER_TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "name": "galaxy-4",
+    "server_type": "cx22",
+    "image": "docker-ce",
+    "location": "fsn1",
+    "user_data": "#cloud-init script to start galaxy"
+  }'
+```
+
+**Hetzner Scaling Tiers:**
+```
+Tier 1 (0-500 players):     1x CX42 with 3-4 galaxies
+Tier 2 (500-2000 players):  1x CX42 + 1x CX22 (auto-spawned)
+Tier 3 (2000-5000 players): 2x CX42 (auto-spawned)
+Tier 4 (5000+ players):     Multiple CX52 (auto-spawned)
+```
+
+#### Option C: Kubernetes (Future Scale)
+
+For massive scale, use Kubernetes with Horizontal Pod Autoscaler:
+
+```yaml
+# k8s/galaxy-deployment.yaml
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: orbit-galaxy
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: orbit-galaxy
+  template:
+    spec:
+      containers:
+      - name: galaxy
+        image: orbit-api:latest
+        ports:
+        - containerPort: 4433
+          protocol: UDP
+        resources:
+          requests:
+            cpu: "500m"
+            memory: "512Mi"
+          limits:
+            cpu: "1000m"
+            memory: "1Gi"
+---
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: orbit-galaxy-hpa
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: orbit-galaxy
+  minReplicas: 1
+  maxReplicas: 20
+  metrics:
+  - type: Pods
+    pods:
+      metric:
+        name: orbit_players_total
+      target:
+        type: AverageValue
+        averageValue: "120"  # Scale when avg > 120 players/galaxy
+```
+
+### Client-Side Galaxy Selection
+
+Update client to discover and select galaxies:
+
+```typescript
+// client/src/net/GalaxySelector.ts
+interface Galaxy {
+  id: string;
+  host: string;
+  port: number;
+  playerCount: number;
+  capacity: number;
+  region: string;
+  ping?: number;
+}
+
+const ORCHESTRATOR_URL = 'https://api.orbit.game';
+
+export async function selectBestGalaxy(): Promise<Galaxy> {
+  // 1. Fetch available galaxies
+  const response = await fetch(`${ORCHESTRATOR_URL}/galaxies`);
+  const galaxies: Galaxy[] = await response.json();
+
+  // 2. Filter by capacity (exclude full galaxies)
+  const available = galaxies.filter(g => g.playerCount < g.capacity * 0.95);
+
+  // 3. Ping test each galaxy
+  const withPing = await Promise.all(
+    available.map(async (galaxy) => ({
+      ...galaxy,
+      ping: await measurePing(galaxy.host, galaxy.port)
+    }))
+  );
+
+  // 4. Score: prefer low ping + moderate population
+  const scored = withPing.map(g => ({
+    ...g,
+    score: g.ping + (g.playerCount < 50 ? 50 : 0) // Slight preference for populated
+  }));
+
+  // 5. Return best option
+  return scored.sort((a, b) => a.score - b.score)[0];
+}
+
+// Usage in game init
+async function joinGame(playerName: string) {
+  const galaxy = await selectBestGalaxy();
+
+  // Show galaxy info to player
+  ui.showStatus(`Joining Galaxy ${galaxy.id} (${galaxy.playerCount} players)`);
+
+  // Connect to selected galaxy
+  const transport = new WebTransport(`https://${galaxy.host}:${galaxy.port}`);
+  await transport.connect();
+
+  // Join the game
+  sendJoinRequest(transport, playerName);
+}
+```
+
+### Galaxy Migration (Optional)
+
+Allow players to switch galaxies mid-session:
+
+```typescript
+// Client-side galaxy switching
+async function switchGalaxy(targetGalaxyId: string) {
+  // 1. Gracefully disconnect from current
+  await currentTransport.sendLeave();
+  await currentTransport.close();
+
+  // 2. Fetch target galaxy info
+  const galaxy = await fetch(`${ORCHESTRATOR_URL}/galaxies/${targetGalaxyId}`);
+
+  // 3. Connect to new galaxy
+  const newTransport = new WebTransport(`https://${galaxy.host}:${galaxy.port}`);
+  await newTransport.connect();
+
+  // 4. Rejoin with same player name
+  sendJoinRequest(newTransport, playerName);
+
+  // 5. Update UI
+  ui.showStatus(`Switched to Galaxy ${galaxy.id}`);
+}
+```
+
+### Galaxy Browser UI
+
+Add a galaxy selection screen:
+
+```
+┌────────────────────────────────────────────────────────┐
+│                   SELECT GALAXY                        │
+├────────────────────────────────────────────────────────┤
+│                                                        │
+│  ○ Galaxy Alpha    [████████░░] 120/150   12ms  [JOIN] │
+│  ○ Galaxy Beta     [█████░░░░░]  75/150   15ms  [JOIN] │
+│  ○ Galaxy Gamma    [███░░░░░░░]  45/150   18ms  [JOIN] │
+│  ○ Galaxy Delta    [█░░░░░░░░░]  12/150   14ms  [JOIN] │
+│                                                        │
+│  [AUTO-SELECT BEST]              [REFRESH]             │
+│                                                        │
+└────────────────────────────────────────────────────────┘
+```
+
+### Metrics for Auto-Scaling
+
+Add galaxy-level metrics to Prometheus:
+
+```rust
+// api/src/metrics.rs additions
+lazy_static! {
+    pub static ref GALAXY_ID: String = std::env::var("GALAXY_ID")
+        .unwrap_or_else(|_| "default".to_string());
+
+    pub static ref GALAXY_PLAYERS: IntGauge = register_int_gauge!(
+        "orbit_galaxy_players",
+        "Current player count in this galaxy"
+    ).unwrap();
+
+    pub static ref GALAXY_CAPACITY: IntGauge = register_int_gauge!(
+        "orbit_galaxy_capacity",
+        "Max player capacity for this galaxy"
+    ).unwrap();
+}
+```
+
+Orchestrator scrapes all galaxies:
+```yaml
+# prometheus.yml
+scrape_configs:
+  - job_name: 'galaxies'
+    static_configs:
+      - targets: ['galaxy-1:9090', 'galaxy-2:9090', 'galaxy-3:9090']
+    relabel_configs:
+      - source_labels: [__address__]
+        target_label: galaxy
+```
+
+### Recommended Implementation Order
+
+1. **Phase 1**: Static multi-galaxy (manual docker-compose with 2-3 galaxies)
+2. **Phase 2**: Simple orchestrator (Docker API-based, single server)
+3. **Phase 3**: Hetzner API scaling (multi-server, auto-provision)
+4. **Phase 4**: Kubernetes (if 5000+ concurrent players)
+
+---
+
 ## Monitoring
 
 ### Access Grafana
