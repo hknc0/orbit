@@ -1401,7 +1401,7 @@
       "targets": [
         { "expr": "orbit_royale_budget_usage_percent{job=\"orbit-royale-api\"} / 100", "legendFormat": "CPU Budget", "refId": "A" },
         { "expr": "orbit_royale_tick_time_microseconds{job=\"orbit-royale-api\"} / 33300", "legendFormat": "Tick Time", "refId": "B" },
-        { "expr": "1 - (orbit_royale_aoi_reduction_percent{job=\"orbit-royale-api\"} / 100)", "legendFormat": "Network Load", "refId": "C" },
+        { "expr": "(orbit_royale_players_human{job=\"orbit-royale-api\"} + orbit_royale_spectators_total{job=\"orbit-royale-api\"} > 0) * (1 - (orbit_royale_aoi_reduction_percent{job=\"orbit-royale-api\"} / 100))", "legendFormat": "Network Load", "refId": "C" },
         { "expr": "orbit_royale_bot_ai_active{job=\"orbit-royale-api\"} / (orbit_royale_bot_ai_total{job=\"orbit-royale-api\"} + 1)", "legendFormat": "AI Load", "refId": "D" }
       ],
       "title": "Performance Indicators (normalized 0-1)",
@@ -1420,12 +1420,12 @@
     },
     {
       "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
-      "description": "Network saturation (inverse of AOI reduction). Green = efficient filtering, Red = high network load.",
+      "description": "Network saturation (inverse of AOI reduction). Green = efficient filtering, Red = high network load. Shows 0% when no human players or spectators connected.",
       "fieldConfig": { "defaults": { "min": 0, "max": 100, "unit": "percent", "thresholds": { "mode": "absolute", "steps": [{ "color": "green", "value": null }, { "color": "yellow", "value": 60 }, { "color": "red", "value": 85 }] } } },
       "gridPos": { "h": 3, "w": 4, "x": 20, "y": 74 },
       "id": 123,
       "options": { "showThresholdLabels": false, "showThresholdMarkers": true, "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false } },
-      "targets": [{ "expr": "100 - orbit_royale_aoi_reduction_percent{job=\"orbit-royale-api\"}", "legendFormat": "Network", "refId": "A" }],
+      "targets": [{ "expr": "(orbit_royale_players_human{job=\"orbit-royale-api\"} + orbit_royale_spectators_total{job=\"orbit-royale-api\"} > 0) * (100 - orbit_royale_aoi_reduction_percent{job=\"orbit-royale-api\"})", "legendFormat": "Network", "refId": "A" }],
       "title": "Network Saturation",
       "type": "gauge"
     },
@@ -1467,7 +1467,7 @@
       "gridPos": { "h": 6, "w": 6, "x": 0, "y": 82 },
       "id": 131,
       "options": { "showThresholdLabels": true, "showThresholdMarkers": true, "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false } },
-      "targets": [{ "expr": "100 - ((orbit_royale_budget_usage_percent{job=\"orbit-royale-api\"} * 0.4) + ((100 - orbit_royale_aoi_reduction_percent{job=\"orbit-royale-api\"}) * 0.2) + ((orbit_royale_performance_status{job=\"orbit-royale-api\"} / 4) * 100 * 0.4))", "legendFormat": "Health", "refId": "A" }],
+      "targets": [{ "expr": "100 - ((orbit_royale_budget_usage_percent{job=\"orbit-royale-api\"} * 0.4) + ((orbit_royale_players_human{job=\"orbit-royale-api\"} + orbit_royale_spectators_total{job=\"orbit-royale-api\"} > 0) * (100 - orbit_royale_aoi_reduction_percent{job=\"orbit-royale-api\"}) * 0.2) + ((orbit_royale_performance_status{job=\"orbit-royale-api\"} / 4) * 100 * 0.4))", "legendFormat": "Health", "refId": "A" }],
       "title": "System Health Score",
       "type": "gauge"
     },
@@ -1491,7 +1491,7 @@
         { "expr": "orbit_royale_performance_status{job=\"orbit-royale-api\"}", "legendFormat": "Performance", "refId": "A" },
         { "expr": "orbit_royale_bot_ai_health_status{job=\"orbit-royale-api\"}", "legendFormat": "Bot AI", "refId": "B" },
         { "expr": "clamp_max(orbit_royale_dos_active_bans{job=\"orbit-royale-api\"} + rate(orbit_royale_dos_connections_rejected{job=\"orbit-royale-api\"}[1m]) / 10, 4)", "legendFormat": "Security", "refId": "C" },
-        { "expr": "clamp_max((100 - orbit_royale_aoi_reduction_percent{job=\"orbit-royale-api\"}) / 25, 4)", "legendFormat": "Network", "refId": "D" }
+        { "expr": "(orbit_royale_players_human{job=\"orbit-royale-api\"} + orbit_royale_spectators_total{job=\"orbit-royale-api\"} > 0) * clamp_max((100 - orbit_royale_aoi_reduction_percent{job=\"orbit-royale-api\"}) / 25, 4)", "legendFormat": "Network", "refId": "D" }
       ],
       "title": "Quick Status",
       "type": "stat"
