@@ -456,6 +456,9 @@ impl GameLoop {
         // Use orbital velocity relative to nearest well
         player.velocity = arena::spawn_velocity_for_well(player.position, &wells);
 
+        // Record spawn tick for birth animation detection
+        player.spawn_tick = self.state.tick;
+
         self.state.add_player(player.clone());
 
         if player.is_bot {
@@ -550,6 +553,7 @@ mod tests {
             is_bot,
             color_index: 0,
             respawn_timer: 0.0,
+            spawn_tick: 0,
         }
     }
 

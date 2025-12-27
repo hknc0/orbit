@@ -241,6 +241,7 @@ mod tests {
             is_bot: false,
             color_index: 0,
             respawn_timer: 0.0,
+            spawn_tick: 0,
         };
         state.add_player(player);
         (state, player_id)

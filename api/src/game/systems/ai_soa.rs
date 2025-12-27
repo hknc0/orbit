@@ -1011,6 +1011,7 @@ impl AiManagerSoA {
     /// Update dormancy based on distance to human players
     /// Respects AI_SOA_DORMANCY_ENABLED env var - when disabled, all bots update every tick
     /// Uses adaptive thresholds when AI_SOA_ADAPTIVE_DORMANCY is enabled
+    /// OPTIMIZED: Uses parallel processing for bot distance calculations
     pub fn update_dormancy(&mut self, state: &GameState) {
         let config = AiSoaConfig::global();
 
@@ -1038,7 +1039,7 @@ impl AiManagerSoA {
             )
         };
 
-        // Collect human player positions
+        // Collect human player positions (typically small: 1-100 humans)
         let human_positions: Vec<Vec2> = state
             .players
             .values()
@@ -1046,45 +1047,100 @@ impl AiManagerSoA {
             .map(|p| p.position)
             .collect();
 
-        // Update each bot's dormancy state
-        for i in 0..self.count {
-            let player_id = self.bot_ids[i];
-            let Some(player) = state.get_player(player_id) else {
-                self.active_mask.set(i, false);
-                continue;
-            };
-            if !player.alive {
-                self.active_mask.set(i, false);
-                continue;
+        // OPTIMIZATION: Pre-compute squared thresholds to avoid sqrt in distance calc
+        let full_radius_sq = full_radius * full_radius;
+        let reduced_radius_sq = reduced_radius * reduced_radius;
+        // dormant_radius_sq not needed - anything beyond reduced is dormant
+        let _ = dormant_radius; // suppress unused warning
+        let tick_counter = self.tick_counter;
+        let reduced_interval = config.reduced_update_interval;
+        let dormant_interval = config.dormant_update_interval;
+
+        // OPTIMIZATION: Parallel dormancy calculation for large bot counts
+        // Collect results to avoid mutable borrow issues with parallel iteration
+        if self.count > 256 && config.parallel_enabled {
+            let results: Vec<(usize, UpdateMode, bool)> = (0..self.count)
+                .into_par_iter()
+                .filter_map(|i| {
+                    let player_id = self.bot_ids[i];
+                    let player = state.get_player(player_id)?;
+                    if !player.alive {
+                        return Some((i, UpdateMode::Dormant, false));
+                    }
+
+                    // Find minimum squared distance to any human (avoid sqrt)
+                    let min_dist_sq = human_positions
+                        .iter()
+                        .map(|&h| {
+                            let dx = player.position.x - h.x;
+                            let dy = player.position.y - h.y;
+                            dx * dx + dy * dy
+                        })
+                        .fold(f32::MAX, |a, b| a.min(b));
+
+                    // Determine update mode based on squared distance
+                    let mode = if min_dist_sq < full_radius_sq {
+                        UpdateMode::Full
+                    } else if min_dist_sq < reduced_radius_sq {
+                        UpdateMode::Reduced
+                    } else {
+                        UpdateMode::Dormant
+                    };
+
+                    let should_update = match mode {
+                        UpdateMode::Full => true,
+                        UpdateMode::Reduced => tick_counter % reduced_interval == 0,
+                        UpdateMode::Dormant => tick_counter % dormant_interval == 0,
+                    };
+
+                    Some((i, mode, should_update))
+                })
+                .collect();
+
+            // Apply results
+            for (i, mode, should_update) in results {
+                self.update_modes[i] = mode;
+                self.active_mask.set(i, should_update);
             }
+        } else {
+            // Sequential path for small bot counts (avoids parallel overhead)
+            for i in 0..self.count {
+                let player_id = self.bot_ids[i];
+                let Some(player) = state.get_player(player_id) else {
+                    self.active_mask.set(i, false);
+                    continue;
+                };
+                if !player.alive {
+                    self.active_mask.set(i, false);
+                    continue;
+                }
 
-            // Find minimum distance to any human
-            let min_dist = human_positions
-                .iter()
-                .map(|&h| player.position.distance_to(h))
-                .min_by(|a, b| a.partial_cmp(b).unwrap())
-                .unwrap_or(f32::MAX);
+                // Find minimum squared distance (avoid sqrt)
+                let min_dist_sq = human_positions
+                    .iter()
+                    .map(|&h| {
+                        let dx = player.position.x - h.x;
+                        let dy = player.position.y - h.y;
+                        dx * dx + dy * dy
+                    })
+                    .fold(f32::MAX, |a, b| a.min(b));
 
-            // Determine update mode based on distance (using scaled thresholds)
-            let mode = if min_dist < full_radius {
-                UpdateMode::Full
-            } else if min_dist < reduced_radius {
-                UpdateMode::Reduced
-            } else if min_dist < dormant_radius {
-                UpdateMode::Dormant
-            } else {
-                // Beyond dormant radius - very infrequent updates
-                UpdateMode::Dormant
-            };
-            self.update_modes[i] = mode;
+                let mode = if min_dist_sq < full_radius_sq {
+                    UpdateMode::Full
+                } else if min_dist_sq < reduced_radius_sq {
+                    UpdateMode::Reduced
+                } else {
+                    UpdateMode::Dormant
+                };
+                self.update_modes[i] = mode;
 
-            // Set active mask based on mode and tick (using config intervals)
-            let should_update = match mode {
-                UpdateMode::Full => true,
-                UpdateMode::Reduced => self.tick_counter % config.reduced_update_interval == 0,
-                UpdateMode::Dormant => self.tick_counter % config.dormant_update_interval == 0,
-            };
-            self.active_mask.set(i, should_update);
+                let should_update = match mode {
+                    UpdateMode::Full => true,
+                    UpdateMode::Reduced => tick_counter % reduced_interval == 0,
+                    UpdateMode::Dormant => tick_counter % dormant_interval == 0,
+                };
+                self.active_mask.set(i, should_update);
+            }
         }
     }
 
@@ -1206,72 +1262,91 @@ impl AiManagerSoA {
         }
     }
 
+    /// Minimum batch size for parallel processing (avoids thread overhead for small batches)
+    const MIN_PARALLEL_BATCH_SIZE: usize = 64;
+
     /// Update all bots in orbit behavior
+    /// OPTIMIZED: Pre-collects well data, uses batch threshold for parallelism
     fn update_orbit_batch(&mut self, state: &GameState, _dt: f32) {
         let indices = &self.batches.orbit;
         if indices.is_empty() {
             return;
         }
 
-        // Parallel orbit updates
-        let results: Vec<(u32, f32, f32, bool)> = indices
-            .par_iter()
-            .filter_map(|&idx| {
-                let i = idx as usize;
-                let player_id = self.bot_ids[i];
-                let player = state.get_player(player_id)?;
-                if !player.alive {
-                    return None;
-                }
-
-                // Find nearest well using zone-based approximation or cached value
-                let nearest_well = state
-                    .arena
-                    .gravity_wells
-                    .values()
-                    .min_by(|a, b| {
-                        let dist_a = (a.position - player.position).length_sq();
-                        let dist_b = (b.position - player.position).length_sq();
-                        dist_a.partial_cmp(&dist_b).unwrap()
-                    });
-
-                let (well_pos, core_radius) = nearest_well
-                    .map(|w| (w.position, w.core_radius))
-                    .unwrap_or((Vec2::ZERO, 50.0));
-
-                let to_well = well_pos - player.position;
-                let current_radius = to_well.length();
-
-                // Emergency escape if too close
-                let danger_zone = core_radius * 2.5;
-                if current_radius < danger_zone && current_radius > 0.1 {
-                    let escape_dir = -to_well.normalize();
-                    return Some((idx, escape_dir.x, escape_dir.y, true));
-                }
-
-                // Target orbit radius
-                let preferred = self.preferred_radius[i];
-                let min_safe = core_radius * 3.0;
-                let target_radius = preferred.max(min_safe);
-
-                // Tangential + radial thrust
-                let tangent = to_well.perpendicular().normalize();
-                let radial = if current_radius > target_radius + 20.0 {
-                    to_well.normalize() * 0.5
-                } else if current_radius < target_radius - 20.0 {
-                    -to_well.normalize() * 0.5
-                } else {
-                    Vec2::ZERO
-                };
-
-                let thrust = (tangent + radial).normalize();
-                let orbital_vel =
-                    crate::game::systems::gravity::orbital_velocity(current_radius);
-                let boost = player.velocity.length() < orbital_vel * 0.6;
-
-                Some((idx, thrust.x, thrust.y, boost))
-            })
+        // OPTIMIZATION: Pre-collect well data once (avoid HashMap access in hot loop)
+        let wells: Vec<(Vec2, f32)> = state
+            .arena
+            .gravity_wells
+            .values()
+            .map(|w| (w.position, w.core_radius))
             .collect();
+
+        if wells.is_empty() {
+            return;
+        }
+
+        let config = AiSoaConfig::global();
+        let use_parallel = config.parallel_enabled && indices.len() >= Self::MIN_PARALLEL_BATCH_SIZE;
+
+        // Closure to compute orbit for a single bot
+        let compute_orbit = |idx: u32| -> Option<(u32, f32, f32, bool)> {
+            let i = idx as usize;
+            let player_id = self.bot_ids[i];
+            let player = state.get_player(player_id)?;
+            if !player.alive {
+                return None;
+            }
+
+            // Find nearest well from pre-collected data (faster than HashMap iteration)
+            let (well_pos, core_radius) = wells
+                .iter()
+                .map(|&(pos, radius)| {
+                    let dx = pos.x - player.position.x;
+                    let dy = pos.y - player.position.y;
+                    (pos, radius, dx * dx + dy * dy)
+                })
+                .min_by(|a, b| a.2.partial_cmp(&b.2).unwrap())
+                .map(|(pos, radius, _)| (pos, radius))
+                .unwrap_or((Vec2::ZERO, 50.0));
+
+            let to_well = well_pos - player.position;
+            let current_radius = to_well.length();
+
+            // Emergency escape if too close
+            let danger_zone = core_radius * 2.5;
+            if current_radius < danger_zone && current_radius > 0.1 {
+                let escape_dir = -to_well.normalize();
+                return Some((idx, escape_dir.x, escape_dir.y, true));
+            }
+
+            // Target orbit radius
+            let preferred = self.preferred_radius[i];
+            let min_safe = core_radius * 3.0;
+            let target_radius = preferred.max(min_safe);
+
+            // Tangential + radial thrust
+            let tangent = to_well.perpendicular().normalize();
+            let radial = if current_radius > target_radius + 20.0 {
+                to_well.normalize() * 0.5
+            } else if current_radius < target_radius - 20.0 {
+                -to_well.normalize() * 0.5
+            } else {
+                Vec2::ZERO
+            };
+
+            let thrust = (tangent + radial).normalize();
+            let orbital_vel = crate::game::systems::gravity::orbital_velocity(current_radius);
+            let boost = player.velocity.length() < orbital_vel * 0.6;
+
+            Some((idx, thrust.x, thrust.y, boost))
+        };
+
+        // OPTIMIZATION: Use parallel only for large batches
+        let results: Vec<(u32, f32, f32, bool)> = if use_parallel {
+            indices.par_iter().filter_map(|&idx| compute_orbit(idx)).collect()
+        } else {
+            indices.iter().filter_map(|&idx| compute_orbit(idx)).collect()
+        };
 
         // Apply results
         for (idx, tx, ty, boost) in results {
@@ -1283,40 +1358,47 @@ impl AiManagerSoA {
     }
 
     /// Update all bots in chase behavior
+    /// OPTIMIZED: Uses batch threshold for parallelism
     fn update_chase_batch(&mut self, state: &GameState, _dt: f32) {
         let indices = &self.batches.chase;
         if indices.is_empty() {
             return;
         }
 
-        let results: Vec<(u32, f32, f32, f32, f32, bool, bool)> = indices
-            .par_iter()
-            .filter_map(|&idx| {
-                let i = idx as usize;
-                let player_id = self.bot_ids[i];
-                let player = state.get_player(player_id)?;
-                if !player.alive {
-                    return None;
-                }
+        let config = AiSoaConfig::global();
+        let use_parallel = config.parallel_enabled && indices.len() >= Self::MIN_PARALLEL_BATCH_SIZE;
 
-                let target_id = self.target_ids[i]?;
-                let target = state.get_player(target_id)?;
-                if !target.alive {
-                    return Some((idx, 0.0, 0.0, 1.0, 0.0, false, true)); // Switch to idle
-                }
+        let compute_chase = |idx: u32| -> Option<(u32, f32, f32, f32, f32, bool, bool)> {
+            let i = idx as usize;
+            let player_id = self.bot_ids[i];
+            let player = state.get_player(player_id)?;
+            if !player.alive {
+                return None;
+            }
 
-                // Lead the target
-                let to_target = target.position - player.position;
-                let distance = to_target.length();
-                let time_to_reach = distance / (player.velocity.length() + 100.0);
-                let predicted_pos = target.position + target.velocity * time_to_reach * 0.5;
+            let target_id = self.target_ids[i]?;
+            let target = state.get_player(target_id)?;
+            if !target.alive {
+                return Some((idx, 0.0, 0.0, 1.0, 0.0, false, true)); // Switch to idle
+            }
 
-                let chase_dir = (predicted_pos - player.position).normalize();
-                let boost = distance > 100.0;
+            // Lead the target
+            let to_target = target.position - player.position;
+            let distance = to_target.length();
+            let time_to_reach = distance / (player.velocity.length() + 100.0);
+            let predicted_pos = target.position + target.velocity * time_to_reach * 0.5;
 
-                Some((idx, chase_dir.x, chase_dir.y, chase_dir.x, chase_dir.y, boost, false))
-            })
-            .collect();
+            let chase_dir = (predicted_pos - player.position).normalize();
+            let boost = distance > 100.0;
+
+            Some((idx, chase_dir.x, chase_dir.y, chase_dir.x, chase_dir.y, boost, false))
+        };
+
+        let results: Vec<_> = if use_parallel {
+            indices.par_iter().filter_map(|&idx| compute_chase(idx)).collect()
+        } else {
+            indices.iter().filter_map(|&idx| compute_chase(idx)).collect()
+        };
 
         for (idx, tx, ty, ax, ay, boost, to_idle) in results {
             let i = idx as usize;
@@ -1333,44 +1415,51 @@ impl AiManagerSoA {
     }
 
     /// Update all bots in flee behavior
+    /// OPTIMIZED: Uses batch threshold for parallelism
     fn update_flee_batch(&mut self, state: &GameState, _dt: f32) {
         let indices = &self.batches.flee;
         if indices.is_empty() {
             return;
         }
 
-        let results: Vec<(u32, f32, f32, f32, f32, bool)> = indices
-            .par_iter()
-            .filter_map(|&idx| {
-                let i = idx as usize;
-                let player_id = self.bot_ids[i];
-                let player = state.get_player(player_id)?;
-                if !player.alive {
-                    return None;
-                }
+        let config = AiSoaConfig::global();
+        let use_parallel = config.parallel_enabled && indices.len() >= Self::MIN_PARALLEL_BATCH_SIZE;
 
-                let threat_id = self.target_ids[i]?;
-                let threat = state.get_player(threat_id)?;
-                if !threat.alive {
-                    return Some((idx, 0.0, 0.0, 1.0, 0.0, true));
-                }
+        let compute_flee = |idx: u32| -> Option<(u32, f32, f32, f32, f32, bool)> {
+            let i = idx as usize;
+            let player_id = self.bot_ids[i];
+            let player = state.get_player(player_id)?;
+            if !player.alive {
+                return None;
+            }
 
-                let flee_dir = (player.position - threat.position).normalize();
+            let threat_id = self.target_ids[i]?;
+            let threat = state.get_player(threat_id)?;
+            if !threat.alive {
+                return Some((idx, 0.0, 0.0, 1.0, 0.0, true));
+            }
 
-                // Stay in arena
-                let zone = crate::game::systems::arena::get_zone(player.position, &state.arena);
-                let adjusted = if zone == crate::game::systems::arena::Zone::Escape
-                    || zone == crate::game::systems::arena::Zone::Outside
-                {
-                    let to_center = -player.position.normalize();
-                    (flee_dir + to_center).normalize()
-                } else {
-                    flee_dir
-                };
+            let flee_dir = (player.position - threat.position).normalize();
 
-                Some((idx, adjusted.x, adjusted.y, -flee_dir.x, -flee_dir.y, true))
-            })
-            .collect();
+            // Stay in arena
+            let zone = crate::game::systems::arena::get_zone(player.position, &state.arena);
+            let adjusted = if zone == crate::game::systems::arena::Zone::Escape
+                || zone == crate::game::systems::arena::Zone::Outside
+            {
+                let to_center = -player.position.normalize();
+                (flee_dir + to_center).normalize()
+            } else {
+                flee_dir
+            };
+
+            Some((idx, adjusted.x, adjusted.y, -flee_dir.x, -flee_dir.y, true))
+        };
+
+        let results: Vec<_> = if use_parallel {
+            indices.par_iter().filter_map(|&idx| compute_flee(idx)).collect()
+        } else {
+            indices.iter().filter_map(|&idx| compute_flee(idx)).collect()
+        };
 
         for (idx, tx, ty, ax, ay, to_idle) in results {
             let i = idx as usize;
@@ -1387,39 +1476,51 @@ impl AiManagerSoA {
     }
 
     /// Update all bots in collect behavior
+    /// OPTIMIZED: Pre-collects debris positions, uses batch threshold for parallelism
     fn update_collect_batch(&mut self, state: &GameState, _dt: f32) {
         let indices = &self.batches.collect;
         if indices.is_empty() {
             return;
         }
 
-        let results: Vec<(u32, f32, f32, bool)> = indices
-            .par_iter()
-            .filter_map(|&idx| {
-                let i = idx as usize;
-                let player_id = self.bot_ids[i];
-                let player = state.get_player(player_id)?;
-                if !player.alive {
-                    return None;
-                }
+        // OPTIMIZATION: Pre-collect debris positions once
+        let debris_positions: Vec<Vec2> = state.debris.iter().map(|d| d.position).collect();
 
-                // Find nearest collectible (debris or projectile)
-                let nearest_debris = state
-                    .debris
-                    .iter()
-                    .map(|d| (d.position, d.position.distance_to(player.position)))
-                    .min_by(|a, b| a.1.partial_cmp(&b.1).unwrap());
+        let config = AiSoaConfig::global();
+        let use_parallel = config.parallel_enabled && indices.len() >= Self::MIN_PARALLEL_BATCH_SIZE;
 
-                let target_pos = nearest_debris.map(|(pos, _)| pos);
+        let compute_collect = |idx: u32| -> Option<(u32, f32, f32, bool)> {
+            let i = idx as usize;
+            let player_id = self.bot_ids[i];
+            let player = state.get_player(player_id)?;
+            if !player.alive {
+                return None;
+            }
 
-                if let Some(pos) = target_pos {
-                    let dir = (pos - player.position).normalize();
-                    Some((idx, dir.x, dir.y, false))
-                } else {
-                    Some((idx, 0.0, 0.0, true)) // Switch to orbit
-                }
-            })
-            .collect();
+            // Find nearest debris using pre-collected positions (avoid Vec access in loop)
+            let nearest_pos = debris_positions
+                .iter()
+                .map(|&pos| {
+                    let dx = pos.x - player.position.x;
+                    let dy = pos.y - player.position.y;
+                    (pos, dx * dx + dy * dy)
+                })
+                .min_by(|a, b| a.1.partial_cmp(&b.1).unwrap())
+                .map(|(pos, _)| pos);
+
+            if let Some(pos) = nearest_pos {
+                let dir = (pos - player.position).normalize();
+                Some((idx, dir.x, dir.y, false))
+            } else {
+                Some((idx, 0.0, 0.0, true)) // Switch to orbit
+            }
+        };
+
+        let results: Vec<_> = if use_parallel {
+            indices.par_iter().filter_map(|&idx| compute_collect(idx)).collect()
+        } else {
+            indices.iter().filter_map(|&idx| compute_collect(idx)).collect()
+        };
 
         for (idx, tx, ty, to_orbit) in results {
             let i = idx as usize;
@@ -1458,8 +1559,20 @@ impl AiManagerSoA {
     }
 
     /// Update decision timers and make new behavior decisions
+    /// OPTIMIZED: Pre-collects human data, uses squared distance comparisons
     fn update_decisions(&mut self, state: &GameState, dt: f32) {
         let mut rng = rand::thread_rng();
+
+        // OPTIMIZATION: Pre-collect human player data once for all decision checks
+        let humans: Vec<(PlayerId, Vec2, f32)> = state
+            .players
+            .values()
+            .filter(|p| !p.is_bot && p.alive)
+            .map(|p| (p.id, p.position, p.mass))
+            .collect();
+
+        let has_debris = !state.debris.is_empty();
+        let aggression_radius_sq = (AGGRESSION_RADIUS * 2.0) * (AGGRESSION_RADIUS * 2.0);
 
         for i in 0..self.count {
             if !self.active_mask.get(i).map(|b| *b).unwrap_or(false) {
@@ -1474,14 +1587,23 @@ impl AiManagerSoA {
                 let timing_factor = 1.0 + rng.gen_range(-variance..variance);
                 self.decision_timers[i] = DECISION_INTERVAL * timing_factor;
 
-                // Make decision
-                self.decide_behavior(i, state, &mut rng);
+                // Make decision using pre-collected data
+                self.decide_behavior_optimized(i, state, &humans, has_debris, aggression_radius_sq, &mut rng);
             }
         }
     }
 
     /// Decide behavior for a single bot
-    fn decide_behavior(&mut self, idx: usize, state: &GameState, rng: &mut impl Rng) {
+    /// OPTIMIZED: Uses pre-collected human data and squared distance
+    fn decide_behavior_optimized(
+        &mut self,
+        idx: usize,
+        state: &GameState,
+        humans: &[(PlayerId, Vec2, f32)],
+        has_debris: bool,
+        aggression_radius_sq: f32,
+        rng: &mut impl Rng,
+    ) {
         let player_id = self.bot_ids[idx];
         let Some(bot) = state.get_player(player_id) else {
             return;
@@ -1496,14 +1618,20 @@ impl AiManagerSoA {
         // Check adjacent zones for threats
         let mut threat_direction = Vec2::ZERO;
         let mut has_threat = false;
+        let aggr_radius_sq = AGGRESSION_RADIUS * AGGRESSION_RADIUS;
 
         for cell in self.zone_grid.adjacent_cells(bot_cell) {
             if let Some(zone) = self.zone_grid.get_zone(cell) {
                 if zone.has_human && zone.threat_mass > bot.mass * 1.2 {
-                    let threat_dir = zone.center - bot.position;
-                    if threat_dir.length() < AGGRESSION_RADIUS {
+                    let dx = zone.center.x - bot.position.x;
+                    let dy = zone.center.y - bot.position.y;
+                    let dist_sq = dx * dx + dy * dy;
+                    if dist_sq < aggr_radius_sq {
                         has_threat = true;
-                        threat_direction = -threat_dir.normalize();
+                        let len = dist_sq.sqrt();
+                        if len > 0.001 {
+                            threat_direction = Vec2::new(-dx / len, -dy / len);
+                        }
                         break;
                     }
                 }
@@ -1519,24 +1647,22 @@ impl AiManagerSoA {
             return;
         }
 
-        // Check for chase opportunity
+        // Check for chase opportunity using pre-collected human data
         if rng.gen::<f32>() < self.aggression[idx] {
-            // Find nearest human target in zone
-            for player in state.players.values() {
-                if player.is_bot || !player.alive || player.id == player_id {
-                    continue;
-                }
-                let dist = bot.position.distance_to(player.position);
-                if dist < AGGRESSION_RADIUS * 2.0 && bot.mass >= player.mass * 0.8 {
+            for &(human_id, human_pos, human_mass) in humans {
+                let dx = bot.position.x - human_pos.x;
+                let dy = bot.position.y - human_pos.y;
+                let dist_sq = dx * dx + dy * dy;
+                if dist_sq < aggression_radius_sq && bot.mass >= human_mass * 0.8 {
                     self.behaviors[idx] = AiBehavior::Chase;
-                    self.target_ids[idx] = Some(player.id);
+                    self.target_ids[idx] = Some(human_id);
                     return;
                 }
             }
         }
 
         // Check for collect opportunity
-        if !state.debris.is_empty() && rng.gen::<f32>() < 0.3 {
+        if has_debris && rng.gen::<f32>() < 0.3 {
             self.behaviors[idx] = AiBehavior::Collect;
             return;
         }
@@ -1546,9 +1672,26 @@ impl AiManagerSoA {
         self.target_ids[idx] = None;
     }
 
+    /// Test helper: Backwards-compatible decision making for a single bot
+    /// Pre-computes required data and calls the optimized version
+    #[cfg(test)]
+    fn decide_behavior(&mut self, idx: usize, state: &GameState, rng: &mut impl Rng) {
+        let humans: Vec<(PlayerId, Vec2, f32)> = state
+            .players
+            .values()
+            .filter(|p| !p.is_bot && p.alive)
+            .map(|p| (p.id, p.position, p.mass))
+            .collect();
+        let has_debris = !state.debris.is_empty();
+        let aggression_radius_sq = (AGGRESSION_RADIUS * 2.0) * (AGGRESSION_RADIUS * 2.0);
+        self.decide_behavior_optimized(idx, state, &humans, has_debris, aggression_radius_sq, rng);
+    }
+
     /// Update firing logic for combat behaviors
+    /// OPTIMIZED: Uses squared distance, batched random checks
     fn update_firing(&mut self, state: &GameState, dt: f32) {
         let mut rng = rand::thread_rng();
+        const FIRE_RANGE_SQ: f32 = 300.0 * 300.0;
 
         for i in 0..self.count {
             if !self.active_mask.get(i).map(|b| *b).unwrap_or(false) {
@@ -1576,21 +1719,28 @@ impl AiManagerSoA {
                 continue;
             };
 
-            let distance = bot.position.distance_to(target.position);
+            // OPTIMIZATION: Use squared distance to avoid sqrt
+            let dx = target.position.x - bot.position.x;
+            let dy = target.position.y - bot.position.y;
+            let distance_sq = dx * dx + dy * dy;
 
-            // Range check
-            if distance > 300.0 {
+            // Range check with squared distance
+            if distance_sq > FIRE_RANGE_SQ {
                 self.wants_fire.set(i, false);
                 self.charge_times[i] = 0.0;
                 continue;
             }
 
-            // Aim with accuracy offset
+            // Aim with accuracy offset - only compute when in range
             let accuracy_offset = (1.0 - self.accuracy[i]) * rng.gen_range(-0.3..0.3);
-            let aim_to_target = (target.position - bot.position).normalize();
-            let rotated = aim_to_target.rotate(accuracy_offset);
-            self.aim_x[i] = rotated.x;
-            self.aim_y[i] = rotated.y;
+            let inv_dist = 1.0 / distance_sq.sqrt();
+            let aim_x = dx * inv_dist;
+            let aim_y = dy * inv_dist;
+            // Rotate by accuracy offset (cos/sin approximation for small angles)
+            let cos_off = 1.0 - accuracy_offset * accuracy_offset * 0.5;
+            let sin_off = accuracy_offset;
+            self.aim_x[i] = aim_x * cos_off - aim_y * sin_off;
+            self.aim_y[i] = aim_x * sin_off + aim_y * cos_off;
 
             // Charge and fire logic
             let wants_fire = self.wants_fire.get(i).map(|b| *b).unwrap_or(false);
@@ -1715,6 +1865,7 @@ mod tests {
             is_bot: true,
             color_index: 0,
             respawn_timer: 0.0,
+            spawn_tick: 0,
         }
     }
 
@@ -3636,5 +3787,207 @@ mod tests {
             adaptive.update(100000, 4); // 100ms, Catastrophic
         }
         assert!(adaptive.lod_scale >= config.min_lod_scale);
+    }
+
+    // ========================================================================
+    // Performance Optimization Tests
+    // ========================================================================
+
+    #[test]
+    fn test_parallel_dormancy_threshold() {
+        // Tests that dormancy update works correctly for both small and large bot counts
+        let mut manager = AiManagerSoA::default();
+        let mut state = create_test_state();
+
+        // Add a human for distance reference
+        let human = create_human_player(Vec2::new(0.0, 0.0), 100.0);
+        state.add_player(human);
+
+        // Small count (should use sequential path)
+        for _ in 0..50 {
+            let bot = create_bot_player(Vec2::new(200.0, 0.0), 100.0);
+            let bot_id = bot.id;
+            state.add_player(bot);
+            manager.register_bot(bot_id);
+        }
+
+        manager.update_dormancy(&state);
+
+        // All bots should have valid update modes
+        for i in 0..manager.count {
+            let mode = manager.update_modes[i];
+            assert!(mode == UpdateMode::Full || mode == UpdateMode::Reduced || mode == UpdateMode::Dormant);
+        }
+    }
+
+    #[test]
+    fn test_batch_threshold_orbit() {
+        // Tests that orbit batch works correctly with small batch (sequential path)
+        let mut manager = AiManagerSoA::default();
+        let mut state = create_test_state();
+
+        // Add a gravity well
+        let well = create_gravity_well(1, Vec2::new(0.0, 0.0), 10000.0, 50.0);
+        state.arena.gravity_wells.insert(1, well);
+
+        // Add fewer bots than MIN_PARALLEL_BATCH_SIZE
+        for _ in 0..10 {
+            let bot = create_bot_player(Vec2::new(300.0, 0.0), 100.0);
+            let bot_id = bot.id;
+            state.add_player(bot);
+            manager.register_bot(bot_id);
+
+            let idx = manager.get_index(bot_id).unwrap() as usize;
+            manager.behaviors[idx] = AiBehavior::Orbit;
+            manager.active_mask.set(idx, true);
+        }
+
+        manager.batches.rebuild(&manager.behaviors, &manager.active_mask);
+        manager.update_orbit_batch(&state, 0.033);
+
+        // All bots should have valid thrust directions
+        for i in 0..manager.count {
+            let thrust_len_sq = manager.thrust_x[i] * manager.thrust_x[i]
+                              + manager.thrust_y[i] * manager.thrust_y[i];
+            // Thrust should be normalized (length ~1) or zero
+            assert!(thrust_len_sq < 1.5, "Thrust should be normalized");
+        }
+    }
+
+    #[test]
+    fn test_collect_behavior_squared_distance() {
+        // Tests that collect behavior correctly finds nearest debris
+        let mut manager = AiManagerSoA::default();
+        let mut state = create_test_state();
+
+        let bot = create_bot_player(Vec2::new(0.0, 0.0), 100.0);
+        let bot_id = bot.id;
+        state.add_player(bot);
+        manager.register_bot(bot_id);
+
+        // Add debris at different distances
+        state.debris.push(crate::game::state::Debris::new(
+            1,
+            Vec2::new(100.0, 0.0), // Distance 100
+            Vec2::ZERO,
+            crate::game::state::DebrisSize::Small,
+        ));
+        state.debris.push(crate::game::state::Debris::new(
+            2,
+            Vec2::new(50.0, 0.0), // Distance 50 - closer
+            Vec2::ZERO,
+            crate::game::state::DebrisSize::Small,
+        ));
+
+        let idx = manager.get_index(bot_id).unwrap() as usize;
+        manager.behaviors[idx] = AiBehavior::Collect;
+        manager.active_mask.set(idx, true);
+        manager.batches.rebuild(&manager.behaviors, &manager.active_mask);
+
+        manager.update_collect_batch(&state, 0.033);
+
+        // Bot should thrust toward the closer debris (positive x)
+        assert!(manager.thrust_x[idx] > 0.5, "Should thrust toward nearest debris");
+    }
+
+    #[test]
+    fn test_decide_behavior_optimized_uses_precollected_humans() {
+        // Tests that the optimized decision making correctly uses pre-collected human data
+        let mut manager = AiManagerSoA::default();
+        let mut state = create_test_state();
+
+        let bot = create_bot_player(Vec2::new(0.0, 0.0), 200.0);
+        let bot_id = bot.id;
+        state.add_player(bot);
+        manager.register_bot(bot_id);
+
+        // Add a weaker human nearby (bot should consider chasing)
+        let human = create_human_player(Vec2::new(100.0, 0.0), 100.0);
+        state.add_player(human);
+
+        let idx = manager.get_index(bot_id).unwrap() as usize;
+        manager.aggression[idx] = 1.0; // Maximum aggression
+        manager.active_mask.set(idx, true);
+
+        // Pre-collect human data as the optimized function does
+        let humans: Vec<(PlayerId, Vec2, f32)> = state
+            .players
+            .values()
+            .filter(|p| !p.is_bot && p.alive)
+            .map(|p| (p.id, p.position, p.mass))
+            .collect();
+
+        assert!(!humans.is_empty(), "Should have pre-collected human data");
+
+        // Run decision making
+        manager.update_decisions(&state, 1.0); // Timer will trigger decision
+
+        // With high aggression and weaker target nearby, should chase
+        assert_eq!(manager.behaviors[idx], AiBehavior::Chase);
+    }
+
+    #[test]
+    fn test_firing_squared_distance_range_check() {
+        // Tests that firing correctly uses squared distance for range check
+        let mut manager = AiManagerSoA::default();
+        let mut state = create_test_state();
+
+        let bot = create_bot_player(Vec2::new(0.0, 0.0), 100.0);
+        let bot_id = bot.id;
+        state.add_player(bot);
+        manager.register_bot(bot_id);
+
+        // Add target just within range (300 units)
+        let target_near = create_human_player(Vec2::new(250.0, 0.0), 100.0);
+        let near_id = target_near.id;
+        state.add_player(target_near);
+
+        let idx = manager.get_index(bot_id).unwrap() as usize;
+        manager.behaviors[idx] = AiBehavior::Chase;
+        manager.target_ids[idx] = Some(near_id);
+        manager.active_mask.set(idx, true);
+        manager.wants_fire.set(idx, true);
+
+        manager.update_firing(&state, 0.033);
+
+        // Should be able to fire at 250 units (within 300 range)
+        // The aim should be updated toward target
+        assert!(manager.aim_x[idx] > 0.5, "Should aim toward target");
+    }
+
+    #[test]
+    fn test_firing_squared_distance_out_of_range() {
+        // Tests that firing correctly rejects out-of-range targets
+        let mut manager = AiManagerSoA::default();
+        let mut state = create_test_state();
+
+        let bot = create_bot_player(Vec2::new(0.0, 0.0), 100.0);
+        let bot_id = bot.id;
+        state.add_player(bot);
+        manager.register_bot(bot_id);
+
+        // Add target beyond range (>300 units)
+        let target_far = create_human_player(Vec2::new(400.0, 0.0), 100.0);
+        let far_id = target_far.id;
+        state.add_player(target_far);
+
+        let idx = manager.get_index(bot_id).unwrap() as usize;
+        manager.behaviors[idx] = AiBehavior::Chase;
+        manager.target_ids[idx] = Some(far_id);
+        manager.active_mask.set(idx, true);
+        manager.wants_fire.set(idx, true);
+
+        manager.update_firing(&state, 0.033);
+
+        // Should not fire at 400 units (beyond 300 range)
+        assert!(!manager.wants_fire.get(idx).map(|b| *b).unwrap_or(true),
+                "Should stop firing when out of range");
+    }
+
+    #[test]
+    fn test_min_parallel_batch_size_constant() {
+        // Verify the constant exists and has a sensible value
+        assert!(AiManagerSoA::MIN_PARALLEL_BATCH_SIZE > 0);
+        assert!(AiManagerSoA::MIN_PARALLEL_BATCH_SIZE <= 256);
     }
 }

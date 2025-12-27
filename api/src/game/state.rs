@@ -39,6 +39,9 @@ pub struct Player {
     /// Timer until respawn (0 = can respawn, >0 = waiting)
     #[serde(default)]
     pub respawn_timer: f32,
+    /// Tick when player spawned/respawned (for birth animation detection)
+    #[serde(default)]
+    pub spawn_tick: u64,
 }
 
 impl Player {
@@ -57,6 +60,7 @@ impl Player {
             is_bot,
             color_index,
             respawn_timer: 0.0,
+            spawn_tick: 0, // Set properly when added to game via add_player
         }
     }
 

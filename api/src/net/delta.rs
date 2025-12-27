@@ -325,6 +325,7 @@ mod tests {
             kills,
             deaths: 0,
             color_index: 0,
+            spawn_tick: 0,
         }
     }
 

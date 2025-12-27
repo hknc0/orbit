@@ -651,6 +651,7 @@ mod tests {
             is_bot: true,
             color_index: 0,
             respawn_timer: 0.0,
+            spawn_tick: 0,
         }
     }
 

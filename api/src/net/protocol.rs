@@ -385,6 +385,9 @@ pub struct PlayerSnapshot {
     pub kills: u32,
     pub deaths: u32,
     pub color_index: u8,
+    /// Tick when player spawned/respawned (for birth animation detection)
+    #[serde(default)]
+    pub spawn_tick: u64,
 }
 
 impl PlayerSnapshot {
@@ -411,6 +414,7 @@ impl PlayerSnapshot {
             kills: player.kills,
             deaths: player.deaths,
             color_index: player.color_index,
+            spawn_tick: player.spawn_tick,
         }
     }
 
@@ -724,6 +728,7 @@ mod tests {
                 kills: 3,
                 deaths: 1,
                 color_index: 2,
+                spawn_tick: 0,
             }],
             projectiles: vec![],
             debris: vec![DebrisSnapshot {
@@ -1171,6 +1176,7 @@ mod encoding_tests {
                 kills: 3,
                 deaths: 0,
                 color_index: 2,
+                spawn_tick: 0,
             }],
             projectiles: vec![],
             debris: vec![],

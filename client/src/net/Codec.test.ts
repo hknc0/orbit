@@ -940,6 +940,7 @@ function writePlayerSnapshot(writer: TestBinaryWriter, player: {
   spawnProtection: boolean;
   isBot: boolean;
   colorIndex: number;
+  spawnTick?: number;
 }): void {
   writer.writeUuid(player.id);
   writer.writeString(player.name);
@@ -956,4 +957,5 @@ function writePlayerSnapshot(writer: TestBinaryWriter, player: {
   writer.writeU32(player.kills);
   writer.writeU32(player.deaths);
   writer.writeU8(player.colorIndex);
+  writer.writeU64(player.spawnTick ?? 0);
 }

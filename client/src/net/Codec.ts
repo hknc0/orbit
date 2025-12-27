@@ -409,6 +409,7 @@ function readPlayerSnapshot(reader: BinaryReader): PlayerSnapshot {
   const kills = reader.readU32();
   const deaths = reader.readU32();
   const colorIndex = reader.readU8();
+  const spawnTick = reader.readU64();
 
   return {
     id,
@@ -423,6 +424,7 @@ function readPlayerSnapshot(reader: BinaryReader): PlayerSnapshot {
     spawnProtection,
     isBot,
     colorIndex,
+    spawnTick,
   };
 }
 

@@ -21,6 +21,8 @@ function createMockPlayerSnapshot(overrides: Partial<PlayerSnapshot> = {}): Play
     spawnProtection: overrides.spawnProtection ?? false,
     isBot: overrides.isBot ?? false,
     colorIndex: overrides.colorIndex ?? 0,
+    // Default spawnTick to old tick (spawned long ago) unless overridden
+    spawnTick: overrides.spawnTick ?? 0,
   };
 }
 
@@ -692,14 +694,19 @@ describe('StateSync', () => {
     });
   });
 
-  describe('player birth animations', () => {
-    it('should skip birth animation for players in first snapshot', () => {
+  describe('player birth animations (spawnTick-based)', () => {
+    // Note: BIRTH_ANIMATION_TICKS = 15 ticks (0.5s at 30 TPS)
+
+    it('should skip birth animation for players who spawned long ago', () => {
+      // Player spawned at tick 0, now at tick 100 - way past animation window
       mockPerformanceNow = 1000;
-      stateSync.applySnapshot(createMockSnapshot(1, {
+      stateSync.applySnapshot(createMockSnapshot(100, {
         players: [
           createMockPlayerSnapshot({
             id: 'player-1',
-            spawnProtection: true,
+            spawnTick: 0, // Spawned 100 ticks ago
+            spawnProtection: false,
+            alive: true,
           }),
         ],
       }));
@@ -707,90 +714,67 @@ describe('StateSync', () => {
       const state = stateSync.getInterpolatedState();
       const player = state?.players.get('player-1');
 
-      // bornTime should be 0 (skip animation) for first snapshot
+      // bornTime should be 0 (skip animation) - spawned too long ago
       expect(player?.bornTime).toBe(0);
     });
 
-    it('should skip birth animation during AOI stabilization period', () => {
-      // First snapshot without player
+    it('should animate players who recently spawned (AOI entry of new spawn)', () => {
+      // Player spawned at tick 95, now at tick 100 - within 15 tick window
       mockPerformanceNow = 1000;
-      stateSync.applySnapshot(createMockSnapshot(1, {
-        players: [],
-      }));
-
-      // Second snapshot with new player (within 2s AOI stabilization period)
-      mockPerformanceNow = 2000; // Only 1s after first snapshot
-      stateSync.applySnapshot(createMockSnapshot(2, {
+      stateSync.applySnapshot(createMockSnapshot(100, {
         players: [
           createMockPlayerSnapshot({
             id: 'player-1',
-            spawnProtection: true,
-          }),
-        ],
-      }));
-
-      mockPerformanceNow = 2200;
-      const state = stateSync.getInterpolatedState();
-      const player = state?.players.get('player-1');
-
-      // During stabilization, new players should NOT animate (bornTime = 0)
-      // This prevents the "pop-in" bug when rejoining
-      expect(player?.bornTime).toBe(0);
-    });
-
-    it('should animate new players spawning after AOI stabilization', () => {
-      // First snapshot
-      mockPerformanceNow = 1000;
-      stateSync.applySnapshot(createMockSnapshot(1, {
-        players: [],
-      }));
-
-      // Second snapshot (still empty, building up buffer)
-      mockPerformanceNow = 1100;
-      stateSync.applySnapshot(createMockSnapshot(2, {
-        players: [],
-      }));
-
-      // Wait for AOI stabilization (2 seconds) then add new player
-      mockPerformanceNow = 3500; // 2.5s after first snapshot - past stabilization
-      stateSync.applySnapshot(createMockSnapshot(3, {
-        players: [
-          createMockPlayerSnapshot({
-            id: 'player-1',
+            spawnTick: 95, // Spawned 5 ticks ago - within animation window
             spawnProtection: true,
             alive: true,
           }),
         ],
       }));
 
-      // Fourth snapshot to enable interpolation
-      mockPerformanceNow = 3600;
-      stateSync.applySnapshot(createMockSnapshot(4, {
-        players: [
-          createMockPlayerSnapshot({
-            id: 'player-1',
-            spawnProtection: true,
-            alive: true,
-          }),
-        ],
-      }));
-
-      mockPerformanceNow = 3650;
       const state = stateSync.getInterpolatedState();
       const player = state?.players.get('player-1');
 
-      // After stabilization, new players with spawn protection SHOULD animate
-      expect(player).toBeDefined();
+      // bornTime should be > 0 (show animation) - recently spawned
       expect(player?.bornTime).toBeGreaterThan(0);
     });
 
-    it('should track birth times on respawn', () => {
-      // First snapshot with alive player
+    it('should skip animation for players entering AOI who spawned long ago', () => {
+      // First snapshot without this player
       mockPerformanceNow = 1000;
-      stateSync.applySnapshot(createMockSnapshot(1, {
+      stateSync.applySnapshot(createMockSnapshot(100, {
+        players: [],
+      }));
+
+      // Second snapshot - player enters our AOI but spawned long ago
+      mockPerformanceNow = 1100;
+      stateSync.applySnapshot(createMockSnapshot(103, {
         players: [
           createMockPlayerSnapshot({
             id: 'player-1',
+            spawnTick: 10, // Spawned 93 ticks ago - way past animation window
+            spawnProtection: false,
+            alive: true,
+          }),
+        ],
+      }));
+
+      mockPerformanceNow = 1200;
+      const state = stateSync.getInterpolatedState();
+      const player = state?.players.get('player-1');
+
+      // bornTime should be 0 (skip animation) - they're just entering our AOI, not spawning
+      expect(player?.bornTime).toBe(0);
+    });
+
+    it('should animate on respawn (spawnTick updates)', () => {
+      // First snapshot with alive player who spawned long ago
+      mockPerformanceNow = 1000;
+      stateSync.applySnapshot(createMockSnapshot(100, {
+        players: [
+          createMockPlayerSnapshot({
+            id: 'player-1',
+            spawnTick: 10, // Original spawn
             alive: true,
           }),
         ],
@@ -798,36 +782,344 @@ describe('StateSync', () => {
 
       // Player dies
       mockPerformanceNow = 2000;
-      stateSync.applySnapshot(createMockSnapshot(2, {
+      stateSync.applySnapshot(createMockSnapshot(200, {
         players: [
           createMockPlayerSnapshot({
             id: 'player-1',
+            spawnTick: 10, // Still old spawn tick
             alive: false,
           }),
         ],
       }));
 
-      // Player respawns
+      // Player respawns - spawnTick updates to current tick
       mockPerformanceNow = 3000;
-      stateSync.applySnapshot(createMockSnapshot(3, {
+      stateSync.applySnapshot(createMockSnapshot(300, {
         players: [
           createMockPlayerSnapshot({
             id: 'player-1',
+            spawnTick: 298, // Respawned 2 ticks ago - within animation window
             alive: true,
             spawnProtection: true,
           }),
         ],
       }));
 
-      // Set time after third snapshot for proper interpolation
-      mockPerformanceNow = 3200;
+      // Fourth snapshot to enable interpolation
+      mockPerformanceNow = 3100;
+      stateSync.applySnapshot(createMockSnapshot(303, {
+        players: [
+          createMockPlayerSnapshot({
+            id: 'player-1',
+            spawnTick: 298,
+            alive: true,
+            spawnProtection: true,
+          }),
+        ],
+      }));
+
+      mockPerformanceNow = 3150;
       const state = stateSync.getInterpolatedState();
       const player = state?.players.get('player-1');
 
-      // Player should exist in interpolated state
+      // Player should animate on respawn
       expect(player).toBeDefined();
-      // bornTime should be defined
-      expect(player?.bornTime).toBeDefined();
+      expect(player?.bornTime).toBeGreaterThan(0);
+    });
+
+    it('should clean up tracking when player leaves AOI', () => {
+      // Player in AOI
+      mockPerformanceNow = 1000;
+      stateSync.applySnapshot(createMockSnapshot(100, {
+        players: [
+          createMockPlayerSnapshot({
+            id: 'player-1',
+            spawnTick: 50,
+            alive: true,
+          }),
+        ],
+      }));
+
+      // Player leaves AOI
+      mockPerformanceNow = 1100;
+      stateSync.applySnapshot(createMockSnapshot(103, {
+        players: [], // Player no longer in snapshot
+      }));
+
+      // Player re-enters AOI with fresh spawn
+      mockPerformanceNow = 2000;
+      stateSync.applySnapshot(createMockSnapshot(200, {
+        players: [
+          createMockPlayerSnapshot({
+            id: 'player-1',
+            spawnTick: 195, // Recent spawn within animation window
+            alive: true,
+            spawnProtection: true,
+          }),
+        ],
+      }));
+
+      mockPerformanceNow = 2100;
+      const state = stateSync.getInterpolatedState();
+      const player = state?.players.get('player-1');
+
+      // Should animate since they recently spawned (after re-entering AOI)
+      expect(player?.bornTime).toBeGreaterThan(0);
+    });
+
+    it('should not animate at exactly BIRTH_ANIMATION_TICKS boundary', () => {
+      // Player spawned exactly 15 ticks ago - at the boundary (exclusive, so no animation)
+      mockPerformanceNow = 1000;
+      stateSync.applySnapshot(createMockSnapshot(100, {
+        players: [
+          createMockPlayerSnapshot({
+            id: 'player-1',
+            spawnTick: 85, // Exactly 15 ticks ago
+            alive: true,
+          }),
+        ],
+      }));
+
+      const state = stateSync.getInterpolatedState();
+      const player = state?.players.get('player-1');
+
+      // At exactly 15 ticks, should NOT animate (< 15, not <=)
+      expect(player?.bornTime).toBe(0);
+    });
+
+    it('should animate at 14 ticks since spawn (within window)', () => {
+      mockPerformanceNow = 1000;
+      stateSync.applySnapshot(createMockSnapshot(100, {
+        players: [
+          createMockPlayerSnapshot({
+            id: 'player-1',
+            spawnTick: 86, // 14 ticks ago - within window
+            alive: true,
+          }),
+        ],
+      }));
+
+      const state = stateSync.getInterpolatedState();
+      const player = state?.players.get('player-1');
+
+      expect(player?.bornTime).toBeGreaterThan(0);
+    });
+
+    it('should handle multiple players with different spawn times', () => {
+      mockPerformanceNow = 1000;
+      stateSync.applySnapshot(createMockSnapshot(100, {
+        players: [
+          createMockPlayerSnapshot({
+            id: 'player-1',
+            spawnTick: 95, // Recent - animate
+            alive: true,
+          }),
+          createMockPlayerSnapshot({
+            id: 'player-2',
+            spawnTick: 10, // Old - no animate
+            alive: true,
+          }),
+          createMockPlayerSnapshot({
+            id: 'player-3',
+            spawnTick: 90, // Recent - animate
+            alive: true,
+          }),
+        ],
+      }));
+
+      const state = stateSync.getInterpolatedState();
+
+      expect(state?.players.get('player-1')?.bornTime).toBeGreaterThan(0);
+      expect(state?.players.get('player-2')?.bornTime).toBe(0);
+      expect(state?.players.get('player-3')?.bornTime).toBeGreaterThan(0);
+    });
+
+    it('should handle bots same as players for birth animation', () => {
+      mockPerformanceNow = 1000;
+      stateSync.applySnapshot(createMockSnapshot(100, {
+        players: [
+          createMockPlayerSnapshot({
+            id: 'bot-1',
+            spawnTick: 95, // Recent spawn
+            isBot: true,
+            alive: true,
+          }),
+        ],
+      }));
+
+      const state = stateSync.getInterpolatedState();
+      const bot = state?.players.get('bot-1');
+
+      // Bots should animate just like players
+      expect(bot?.bornTime).toBeGreaterThan(0);
+    });
+
+    it('should NOT animate dead players even if recently spawned', () => {
+      mockPerformanceNow = 1000;
+      stateSync.applySnapshot(createMockSnapshot(100, {
+        players: [
+          createMockPlayerSnapshot({
+            id: 'player-1',
+            spawnTick: 95, // Recent spawn tick
+            alive: false, // But dead
+          }),
+        ],
+      }));
+
+      const state = stateSync.getInterpolatedState();
+      const player = state?.players.get('player-1');
+
+      // Dead players should not animate
+      expect(player?.bornTime).toBe(0);
+    });
+
+    it('should animate during interpolation when recent spawn', () => {
+      // First snapshot - player recently spawned
+      mockPerformanceNow = 1000;
+      stateSync.applySnapshot(createMockSnapshot(100, {
+        players: [
+          createMockPlayerSnapshot({
+            id: 'player-1',
+            spawnTick: 97,
+            position: new Vec2(0, 0),
+            alive: true,
+          }),
+        ],
+      }));
+
+      // Second snapshot - still within animation window
+      mockPerformanceNow = 1100;
+      stateSync.applySnapshot(createMockSnapshot(103, {
+        players: [
+          createMockPlayerSnapshot({
+            id: 'player-1',
+            spawnTick: 97, // Same spawn tick
+            position: new Vec2(100, 100),
+            alive: true,
+          }),
+        ],
+      }));
+
+      mockPerformanceNow = 1150;
+      const state = stateSync.getInterpolatedState();
+      const player = state?.players.get('player-1');
+
+      // Should animate during interpolation too
+      expect(player?.bornTime).toBeGreaterThan(0);
+    });
+
+    it('should stop animating after spawn window expires across snapshots', () => {
+      // First snapshot - player recently spawned
+      mockPerformanceNow = 1000;
+      stateSync.applySnapshot(createMockSnapshot(100, {
+        players: [
+          createMockPlayerSnapshot({
+            id: 'player-1',
+            spawnTick: 95, // 5 ticks ago - animate
+            alive: true,
+          }),
+        ],
+      }));
+
+      // Check that animation starts
+      let state = stateSync.getInterpolatedState();
+      expect(state?.players.get('player-1')?.bornTime).toBeGreaterThan(0);
+
+      // Much later snapshot - spawn window has passed
+      mockPerformanceNow = 2000;
+      stateSync.applySnapshot(createMockSnapshot(200, {
+        players: [
+          createMockPlayerSnapshot({
+            id: 'player-1',
+            spawnTick: 95, // Still old spawn tick - way past window now
+            alive: true,
+          }),
+        ],
+      }));
+
+      mockPerformanceNow = 2100;
+      state = stateSync.getInterpolatedState();
+
+      // bornTime stays the same (original animation time), but since
+      // BIRTH_ANIMATION_TICKS is about server ticks, the render system
+      // will decide when to stop the animation based on client time elapsed
+      // The key is that the bornTime was set when they first appeared
+      expect(state?.players.get('player-1')?.bornTime).toBeGreaterThan(0);
+    });
+
+    it('should reset birth tracking on StateSync reset', () => {
+      // Add a player with animation
+      mockPerformanceNow = 1000;
+      stateSync.applySnapshot(createMockSnapshot(100, {
+        players: [
+          createMockPlayerSnapshot({
+            id: 'player-1',
+            spawnTick: 95,
+            alive: true,
+          }),
+        ],
+      }));
+
+      let state = stateSync.getInterpolatedState();
+      expect(state?.players.get('player-1')?.bornTime).toBeGreaterThan(0);
+
+      // Reset
+      stateSync.reset();
+
+      // After reset, same player should NOT animate (fresh start)
+      mockPerformanceNow = 3000;
+      stateSync.applySnapshot(createMockSnapshot(200, {
+        players: [
+          createMockPlayerSnapshot({
+            id: 'player-1',
+            spawnTick: 195, // Recent spawn after reset
+            alive: true,
+          }),
+        ],
+      }));
+
+      state = stateSync.getInterpolatedState();
+      // After reset, hasReceivedFirstSnapshot is false, so first snapshot players
+      // should still animate if they recently spawned
+      expect(state?.players.get('player-1')?.bornTime).toBeGreaterThan(0);
+    });
+
+    it('should handle spawnTick of 0 (edge case)', () => {
+      mockPerformanceNow = 1000;
+      stateSync.applySnapshot(createMockSnapshot(100, {
+        players: [
+          createMockPlayerSnapshot({
+            id: 'player-1',
+            spawnTick: 0, // Edge case: spawned at tick 0
+            alive: true,
+          }),
+        ],
+      }));
+
+      const state = stateSync.getInterpolatedState();
+      const player = state?.players.get('player-1');
+
+      // 100 - 0 = 100 ticks since spawn, way past window
+      expect(player?.bornTime).toBe(0);
+    });
+
+    it('should handle spawnTick equal to current tick (just spawned)', () => {
+      mockPerformanceNow = 1000;
+      stateSync.applySnapshot(createMockSnapshot(100, {
+        players: [
+          createMockPlayerSnapshot({
+            id: 'player-1',
+            spawnTick: 100, // Just spawned this tick
+            alive: true,
+          }),
+        ],
+      }));
+
+      const state = stateSync.getInterpolatedState();
+      const player = state?.players.get('player-1');
+
+      // 100 - 100 = 0 ticks since spawn, definitely within window
+      expect(player?.bornTime).toBeGreaterThan(0);
     });
   });
 

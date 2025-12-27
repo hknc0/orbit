@@ -116,20 +116,16 @@ export class StateSync {
   private wellBornTimes: Map<number, number> = new Map();
 
   // Track when players spawned (for birth animation)
-  // bornTime = 0 means skip animation (entered AOI, already alive)
-  // bornTime > 0 means show birth animation (actually spawned/respawned)
+  // bornTime = 0 means skip animation (entered AOI, spawned a while ago)
+  // bornTime > 0 means show birth animation (actually just spawned/respawned)
   private playerBornTimes: Map<PlayerId, number> = new Map();
 
-  // Track if we've received the first snapshot (entities in first snapshot skip birth animation)
+  // Track if we've received the first snapshot (entities in first snapshot may skip animation)
   private hasReceivedFirstSnapshot: boolean = false;
 
-  // Time when first snapshot was received (for AOI stabilization detection)
-  // After joining, there's a brief period where AOI "fills in" - don't animate during this
-  private firstSnapshotTime: number = 0;
-
-  // AOI stabilization period: after joining, wait this long before animating new players
-  // This prevents false positives when players enter our AOI as it expands
-  private static readonly AOI_STABILIZATION_MS = 2000;
+  // Birth animation window: animate players who spawned within this many ticks
+  // At 30 TPS, 15 ticks = 0.5 seconds
+  private static readonly BIRTH_ANIMATION_TICKS = 15;
 
   setLocalPlayerId(id: PlayerId): void {
     this.localPlayerId = id;
@@ -149,13 +145,6 @@ export class StateSync {
   // Apply a full snapshot from server
   applySnapshot(snapshot: GameSnapshot): void {
     const now = performance.now();
-
-    // Track first snapshot time for AOI stabilization detection
-    // Note: firstSnapshotTime is used for stabilization, hasReceivedFirstSnapshot is used
-    // to decide if entities should animate (set later, after first snapshot is processed)
-    if (this.firstSnapshotTime === 0) {
-      this.firstSnapshotTime = now;
-    }
 
     // Track snapshot arrival rate for adaptive interpolation
     if (this.lastSnapshotTime > 0) {
@@ -402,15 +391,21 @@ export class StateSync {
     const { snapshot, wellMap } = entry;
     const now = performance.now();
 
-    // Track player birth times before building player map
-    // Players appearing for the first time = 0 (no animation - they're entering AOI, not spawning)
-    // Only animate actual respawns (detected via alive state change in interpolateSnapshots)
+    // Track player birth times using spawnTick from server
+    // If player spawned recently (within BIRTH_ANIMATION_TICKS), animate birth
+    // Otherwise, no animation (they spawned a while ago - entering our AOI)
     for (const player of snapshot.players) {
+      const ticksSinceSpawn = snapshot.tick - player.spawnTick;
+      const recentlySpawned = ticksSinceSpawn < StateSync.BIRTH_ANIMATION_TICKS;
+
       if (!this.playerBornTimes.has(player.id)) {
-        // First time seeing this player - no animation (they're entering our AOI, not spawning)
-        this.playerBornTimes.set(player.id, 0);
+        // First time seeing this player
+        // Animate only if they recently spawned (not if they spawned long ago and entered our AOI)
+        this.playerBornTimes.set(player.id, recentlySpawned && player.alive ? now : 0);
+      } else if (recentlySpawned && player.alive && this.playerBornTimes.get(player.id) === 0) {
+        // Player respawned - update birth time to animate
+        this.playerBornTimes.set(player.id, now);
       }
-      // Note: don't delete on death - need to track to distinguish respawn from AOI entry
     }
 
     // Cleanup: remove tracking for players who left our AOI (prevents memory leak)
@@ -515,23 +510,18 @@ export class StateSync {
     const beforeProjMap = new Map(before.projectiles.map(p => [p.id, p]));
     const beforeDebrisMap = new Map(before.debris.map(d => [d.id, d]));
 
-    // Track player birth times before building player map
-    // Animate: respawns (alive state change) and new spawns (after AOI stabilization)
-    const aoiStabilized = (now - this.firstSnapshotTime) >= StateSync.AOI_STABILIZATION_MS;
-
+    // Track player birth times using spawnTick from server
+    // Animate players who spawned recently (within BIRTH_ANIMATION_TICKS)
     for (const afterPlayer of after.players) {
-      const beforePlayer = beforePlayerMap.get(afterPlayer.id);
-      const wasTrackedAndDead = this.playerBornTimes.has(afterPlayer.id) && beforePlayer && !beforePlayer.alive;
-      const justRespawned = wasTrackedAndDead && afterPlayer.alive;
+      const ticksSinceSpawn = after.tick - afterPlayer.spawnTick;
+      const recentlySpawned = ticksSinceSpawn < StateSync.BIRTH_ANIMATION_TICKS;
 
       if (!this.playerBornTimes.has(afterPlayer.id)) {
         // First time seeing this player
-        // Animate if: AOI is stable AND they have spawn protection (likely just spawned)
-        // Don't animate if: still in stabilization period (could be AOI filling in)
-        const shouldAnimate = aoiStabilized && afterPlayer.spawnProtection && afterPlayer.alive;
-        this.playerBornTimes.set(afterPlayer.id, shouldAnimate ? now : 0);
-      } else if (justRespawned && afterPlayer.spawnProtection) {
-        // Actual respawn detected - animate birth effect
+        // Animate only if they recently spawned (not if they spawned long ago and entered our AOI)
+        this.playerBornTimes.set(afterPlayer.id, recentlySpawned && afterPlayer.alive ? now : 0);
+      } else if (recentlySpawned && afterPlayer.alive && this.playerBornTimes.get(afterPlayer.id) === 0) {
+        // Player respawned - update birth time to animate
         this.playerBornTimes.set(afterPlayer.id, now);
       }
     }

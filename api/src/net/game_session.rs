@@ -1267,6 +1267,7 @@ impl GameSession {
                     .map(|p| p.position)
                     .collect();
                 let wells: Vec<_> = self.game_loop.state().arena.gravity_wells.values().cloned().collect();
+                let current_tick = self.game_loop.state().tick;
 
                 if let Some(player) = self.game_loop.state_mut().get_player_mut(player_id) {
                     // Find safe spawn position near a gravity well, away from other players
@@ -1279,6 +1280,7 @@ impl GameSession {
                     player.mass = mass::STARTING;
                     player.spawn_protection = crate::game::constants::spawn::PROTECTION_DURATION;
                     player.respawn_timer = 0.0;
+                    player.spawn_tick = current_tick;
 
                     respawned += 1;
                     debug!("Respawned player {}", player_id);

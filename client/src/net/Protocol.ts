@@ -108,6 +108,8 @@ export interface PlayerSnapshot {
   spawnProtection: boolean;
   isBot: boolean;
   colorIndex: number;
+  /** Tick when player spawned/respawned (for birth animation detection) */
+  spawnTick: number;
 }
 
 // Projectile state in snapshot
