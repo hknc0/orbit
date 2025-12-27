@@ -16,7 +16,6 @@ import type {
   ProjectileDelta,
   MatchPhase,
   GravityWellSnapshot,
-  NotablePlayer,
 } from './Protocol';
 
 // Binary writer for encoding messages
@@ -354,18 +353,6 @@ function readGameSnapshot(reader: BinaryReader): GameSnapshot {
     densityGrid.push(reader.readU8());
   }
 
-  // Read notable players for minimap radar
-  const notableCount = reader.readU64();
-  const notablePlayers: NotablePlayer[] = [];
-  for (let i = 0; i < notableCount; i++) {
-    notablePlayers.push({
-      id: reader.readUuid(),
-      position: reader.readVec2(),
-      mass: reader.readF32(),
-      colorIndex: reader.readU8(),
-    });
-  }
-
   // Read echo_client_time for RTT measurement
   const echoClientTime = reader.readU64();
 
@@ -384,7 +371,6 @@ function readGameSnapshot(reader: BinaryReader): GameSnapshot {
     totalPlayers,
     totalAlive,
     densityGrid,
-    notablePlayers,
     echoClientTime,
   };
 }

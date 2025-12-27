@@ -1,7 +1,7 @@
 import { describe, it, expect, beforeEach, vi, afterEach } from 'vitest';
 import { World } from './World';
 import { ARENA, MASS, PLAYER_COLORS } from '@/utils/Constants';
-import type { InterpolatedState, InterpolatedPlayer, InterpolatedGravityWell, InterpolatedNotablePlayer } from '@/net/StateSync';
+import type { InterpolatedState, InterpolatedPlayer, InterpolatedGravityWell } from '@/net/StateSync';
 import { Vec2 } from '@/utils/Vec2';
 
 // Helper to create a mock player
@@ -40,7 +40,6 @@ function createMockState(overrides: Partial<InterpolatedState> = {}): Interpolat
     totalPlayers: overrides.totalPlayers ?? 10,
     totalAlive: overrides.totalAlive ?? 8,
     densityGrid: overrides.densityGrid ?? [],
-    notablePlayers: overrides.notablePlayers ?? [],
   };
 }
 
@@ -691,7 +690,7 @@ describe('World', () => {
     });
   });
 
-  describe('getDensityGrid and getNotablePlayers', () => {
+  describe('getDensityGrid', () => {
     it('should return density grid from state', () => {
       const densityGrid = [1, 2, 3, 4, 5];
       world.updateFromState(createMockState({ densityGrid }));
@@ -701,15 +700,6 @@ describe('World', () => {
 
     it('should return empty array when no state', () => {
       expect(world.getDensityGrid()).toEqual([]);
-    });
-
-    it('should return notable players from state', () => {
-      const notablePlayers: InterpolatedNotablePlayer[] = [
-        { id: 'player-1', position: new Vec2(100, 100), mass: 500, colorIndex: 5 },
-      ];
-      world.updateFromState(createMockState({ notablePlayers }));
-
-      expect(world.getNotablePlayers()).toHaveLength(1);
     });
   });
 

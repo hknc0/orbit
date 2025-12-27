@@ -71,7 +71,6 @@ export interface GameSnapshot {
   totalPlayers: number;  // Total players in match (before AOI filtering)
   totalAlive: number;    // Total alive players (before AOI filtering)
   densityGrid: number[]; // 16x16 grid of player counts for minimap heatmap
-  notablePlayers: NotablePlayer[]; // High-mass players for minimap radar
   echoClientTime: number; // Echo of client's last input timestamp for RTT
   aiStatus?: AIStatusSnapshot; // AI Manager status (if enabled)
 }
@@ -84,14 +83,6 @@ export interface AIStatusSnapshot {
   successRate: number; // 0-100
   decisionsTotal: number;
   decisionsSuccessful: number;
-}
-
-// Notable player for minimap radar (high-mass players visible everywhere)
-export interface NotablePlayer {
-  id: PlayerId;
-  position: Vec2;
-  mass: number;
-  colorIndex: number;
 }
 
 // Player state in snapshot

@@ -342,8 +342,6 @@ impl AOIManager {
             total_alive: full_snapshot.total_alive,
             // Preserve density grid for minimap heatmap
             density_grid: full_snapshot.density_grid.clone(),
-            // Preserve notable players for minimap radar
-            notable_players: full_snapshot.notable_players.clone(),
             // Set per-player in broadcast
             echo_client_time: 0,
             // Preserve AI status from full snapshot
@@ -447,7 +445,6 @@ mod tests {
             total_players: player_len,
             total_alive: player_len,
             density_grid: vec![],
-            notable_players: vec![],
             echo_client_time: 0,
             ai_status: None,
         }
@@ -539,7 +536,6 @@ mod tests {
             total_players: 4,
             total_alive: 4,
             density_grid: vec![],
-            notable_players: vec![],
             echo_client_time: 0,
             ai_status: None,
         };
@@ -664,7 +660,6 @@ mod tests {
             total_players: 3,
             total_alive: 3,
             density_grid: vec![],
-            notable_players: vec![],
             echo_client_time: 0,
             ai_status: None,
         };
@@ -702,7 +697,6 @@ mod tests {
             total_players: 3,
             total_alive: 3,
             density_grid: vec![],
-            notable_players: vec![],
             echo_client_time: 0,
             ai_status: None,
         };
@@ -768,7 +762,6 @@ mod tests {
             total_players: 2,
             total_alive: 2,
             density_grid: vec![],
-            notable_players: vec![],
             echo_client_time: 0,
             ai_status: None,
         };

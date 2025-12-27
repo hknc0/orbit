@@ -2602,20 +2602,23 @@ export class RenderSystem {
     this.ctx.arc(centerX, centerY, safeRadius * scale, 0, Math.PI * 2);
     this.ctx.stroke();
 
-    // 1. Density heatmap (16x16 grid showing player concentrations)
+    // 1. Enhanced density heatmap (16x16 grid showing gravity + player concentrations)
     const densityGrid = world.getDensityGrid();
-    // Support both 8x8 (64) and 16x16 (256) grids
     const gridLength = densityGrid.length;
     if (gridLength === 64 || gridLength === 256) {
       const GRID_SIZE = Math.sqrt(gridLength);
       const gridPixelSize = minimapSize - 8;
       const cellPixelSize = gridPixelSize / GRID_SIZE;
 
-      // Find max density for normalization (use percentile to avoid single hotspots dominating)
-      const sortedDensities = densityGrid.filter(d => d > 0).sort((a, b) => b - a);
+      // Find max density for normalization (use 90th percentile for better dynamic range)
+      const sortedDensities = [...densityGrid].filter(d => d > 0).sort((a, b) => a - b);
+      const p90Index = Math.floor(sortedDensities.length * 0.9);
       const maxDensity = sortedDensities.length > 0
-        ? Math.max(sortedDensities[Math.floor(sortedDensities.length * 0.1)] || sortedDensities[0], 1)
+        ? Math.max(sortedDensities[p90Index] || sortedDensities[sortedDensities.length - 1], 1)
         : 1;
+
+      // Track hotspot for indicator
+      let hotspotX = 0, hotspotY = 0, hotspotDensity = 0;
 
       // Save context for clipping
       this.ctx.save();
@@ -2623,65 +2626,78 @@ export class RenderSystem {
       this.ctx.arc(centerX, centerY, minimapSize / 2 - 2, 0, Math.PI * 2);
       this.ctx.clip();
 
-      // Subtle density colormap: muted blue → teal → warm glow
+      // Vibrant heatmap colormap: deep blue → cyan → yellow → orange → red
       const getDensityColor = (t: number): [number, number, number] => {
-        // Muted 3-stop gradient for subtle background appearance
-        if (t < 0.4) {
-          // Dark blue-teal (low density - barely visible)
-          const s = t / 0.4;
+        if (t < 0.25) {
+          // Deep blue → cyan (low density)
+          const s = t / 0.25;
           return [
-            Math.floor(20 + 20 * s),      // 20 → 40
-            Math.floor(50 + 60 * s),      // 50 → 110
-            Math.floor(80 + 40 * s)       // 80 → 120
+            Math.floor(20 + 10 * s),       // 20 → 30
+            Math.floor(60 + 140 * s),      // 60 → 200
+            Math.floor(120 + 55 * s)       // 120 → 175
           ];
-        } else if (t < 0.7) {
-          // Teal to muted amber (medium density)
-          const s = (t - 0.4) / 0.3;
+        } else if (t < 0.5) {
+          // Cyan → green-yellow (medium-low)
+          const s = (t - 0.25) / 0.25;
           return [
-            Math.floor(40 + 80 * s),      // 40 → 120
-            Math.floor(110 + 30 * s),     // 110 → 140
-            Math.floor(120 - 60 * s)      // 120 → 60
+            Math.floor(30 + 170 * s),      // 30 → 200
+            Math.floor(200 + 30 * s),      // 200 → 230
+            Math.floor(175 - 145 * s)      // 175 → 30
+          ];
+        } else if (t < 0.75) {
+          // Yellow → orange (medium-high)
+          const s = (t - 0.5) / 0.25;
+          return [
+            Math.floor(200 + 55 * s),      // 200 → 255
+            Math.floor(230 - 100 * s),     // 230 → 130
+            Math.floor(30)                 // 30
           ];
         } else {
-          // Muted amber to warm orange (high density)
-          const s = (t - 0.7) / 0.3;
+          // Orange → bright red (high density)
+          const s = (t - 0.75) / 0.25;
           return [
-            Math.floor(120 + 60 * s),     // 120 → 180
-            Math.floor(140 - 20 * s),     // 140 → 120
-            Math.floor(60 - 20 * s)       // 60 → 40
+            255,                           // 255
+            Math.floor(130 - 80 * s),      // 130 → 50
+            Math.floor(30 + 20 * s)        // 30 → 50
           ];
         }
       };
 
-      // Render with soft gradients as subtle background
+      // First pass: render heatmap blobs
       for (let gy = 0; gy < GRID_SIZE; gy++) {
         for (let gx = 0; gx < GRID_SIZE; gx++) {
           const idx = gy * GRID_SIZE + gx;
           const density = densityGrid[idx];
 
           if (density > 0) {
-            // Cell center position on minimap
             const cellCenterX = centerX - gridPixelSize / 2 + (gx + 0.5) * cellPixelSize;
             const cellCenterY = centerY - gridPixelSize / 2 + (gy + 0.5) * cellPixelSize;
 
-            // Intensity with strong gamma for subtle low-end
+            // Track hotspot
+            if (density > hotspotDensity) {
+              hotspotDensity = density;
+              hotspotX = cellCenterX;
+              hotspotY = cellCenterY;
+            }
+
+            // Apply gamma for better visual distribution
             const rawIntensity = Math.min(density / maxDensity, 1);
-            const intensity = Math.pow(rawIntensity, 0.7); // Gentler curve
+            const intensity = Math.pow(rawIntensity, 0.6);
 
             const [r, g, b] = getDensityColor(intensity);
 
-            // Soft blob with gentle overlap
-            const blobRadius = cellPixelSize * 1.1;
+            // Larger, softer blobs for smoother heatmap
+            const blobRadius = cellPixelSize * 1.4;
             const gradient = this.ctx.createRadialGradient(
               cellCenterX, cellCenterY, 0,
               cellCenterX, cellCenterY, blobRadius
             );
 
-            // Very subtle alpha - background hint only
-            const baseAlpha = 0.08 + intensity * 0.17; // 0.08-0.25 range
+            // More visible alpha range (0.15 to 0.5)
+            const baseAlpha = 0.15 + intensity * 0.35;
             gradient.addColorStop(0, `rgba(${r}, ${g}, ${b}, ${baseAlpha})`);
-            gradient.addColorStop(0.4, `rgba(${r}, ${g}, ${b}, ${baseAlpha * 0.6})`);
-            gradient.addColorStop(0.7, `rgba(${r}, ${g}, ${b}, ${baseAlpha * 0.25})`);
+            gradient.addColorStop(0.3, `rgba(${r}, ${g}, ${b}, ${baseAlpha * 0.7})`);
+            gradient.addColorStop(0.6, `rgba(${r}, ${g}, ${b}, ${baseAlpha * 0.3})`);
             gradient.addColorStop(1, `rgba(${r}, ${g}, ${b}, 0)`);
 
             this.ctx.fillStyle = gradient;
@@ -2690,6 +2706,18 @@ export class RenderSystem {
             this.ctx.fill();
           }
         }
+      }
+
+      // Hotspot indicator - pulsing ring on highest density area
+      if (hotspotDensity > maxDensity * 0.7) {
+        const pulse = 0.5 + 0.5 * Math.sin(Date.now() / 300);
+        const ringRadius = 6 + 2 * pulse;
+
+        this.ctx.strokeStyle = `rgba(255, 100, 50, ${0.4 + 0.3 * pulse})`;
+        this.ctx.lineWidth = 1.5;
+        this.ctx.beginPath();
+        this.ctx.arc(hotspotX, hotspotY, ringRadius, 0, Math.PI * 2);
+        this.ctx.stroke();
       }
 
       this.ctx.restore();
@@ -2796,62 +2824,6 @@ export class RenderSystem {
       }
       return { x, y };
     };
-
-    // 2. Notable players (high mass) - thin red circle indicators
-    const notablePlayers = world.getNotablePlayers();
-    const visiblePlayerIds = new Set(world.getPlayers().keys());
-
-    for (const notable of notablePlayers) {
-      // Skip if already visible as regular player or is local player
-      if (visiblePlayerIds.has(notable.id) || notable.id === world.localPlayerId) continue;
-
-      const pos = clampToMinimap(
-        centerX + notable.position.x * scale,
-        centerY + notable.position.y * scale
-      );
-
-      // Thin red circle outline
-      this.ctx.strokeStyle = '#ef4444';
-      this.ctx.lineWidth = 1;
-      this.ctx.beginPath();
-      this.ctx.arc(pos.x, pos.y, 4, 0, Math.PI * 2);
-      this.ctx.stroke();
-    }
-
-    // 3. Other players (nearby/visible) - dynamic filtering based on player count
-    const totalAlive = world.getAlivePlayerCount();
-    // Smooth scaling: 100 at 0 players → ~250 at 200+ players
-    // Formula: base + (playerCount / scale)^curve
-    const massThreshold = Math.min(100 + Math.pow(totalAlive / 1.5, 0.8), 300);
-
-    for (const [playerId, player] of world.getPlayers()) {
-      if (!player.alive) continue;
-      if (playerId === world.localPlayerId) continue;
-      if (player.mass < massThreshold) continue;
-
-      const pos = clampToMinimap(
-        centerX + player.position.x * scale,
-        centerY + player.position.y * scale
-      );
-
-      // Smaller dots to reduce overlap
-      const dotSize = Math.min(1.5 + (player.mass - massThreshold) / 150, 3);
-      const color = world.getPlayerColor(player.colorIndex);
-
-      // Opacity based on mass - lower mass = more transparent
-      const opacity = Math.min(0.5 + (player.mass - massThreshold) / (massThreshold * 2), 1);
-
-      // Parse hex color to RGB for opacity
-      const r = parseInt(color.slice(1, 3), 16);
-      const g = parseInt(color.slice(3, 5), 16);
-      const b = parseInt(color.slice(5, 7), 16);
-
-      // No outline - just colored fill with opacity
-      this.ctx.fillStyle = `rgba(${r}, ${g}, ${b}, ${opacity})`;
-      this.ctx.beginPath();
-      this.ctx.arc(pos.x, pos.y, dotSize, 0, Math.PI * 2);
-      this.ctx.fill();
-    }
 
     // 2. Local player - VERY prominent, always on top (show even when dead)
     const localPlayer = world.getLocalPlayer();

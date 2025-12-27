@@ -10,8 +10,6 @@ thread_local! {
     static DENSITY_GRID_BUFFER: RefCell<Vec<f32>> = RefCell::new(Vec::with_capacity(DENSITY_GRID_SIZE * DENSITY_GRID_SIZE));
     /// Reusable u8 buffer for final density grid output
     static DENSITY_GRID_OUTPUT: RefCell<Vec<u8>> = RefCell::new(Vec::with_capacity(DENSITY_GRID_SIZE * DENSITY_GRID_SIZE));
-    /// Reusable buffer for notable players sorting (avoids per-snapshot allocation)
-    static NOTABLE_PLAYERS_BUFFER: RefCell<Vec<NotablePlayer>> = RefCell::new(Vec::with_capacity(MAX_NOTABLE_PLAYERS * 2));
 }
 
 /// Messages from client to server
@@ -161,9 +159,6 @@ pub struct GameSnapshot {
     /// Player density grid for minimap (16x16, each cell = player count)
     #[serde(default)]
     pub density_grid: Vec<u8>,
-    /// Notable players (high mass) for minimap radar - shown regardless of AOI
-    #[serde(default)]
-    pub notable_players: Vec<NotablePlayer>,
     /// Echo of client's last input timestamp for RTT measurement
     #[serde(default)]
     pub echo_client_time: u64,
@@ -189,20 +184,6 @@ pub struct AIStatusSnapshot {
     pub decisions_successful: u32,
 }
 
-/// Minimum mass to appear on minimap radar
-pub const NOTABLE_MASS_THRESHOLD: f32 = 80.0;
-/// Maximum notable players to send
-pub const MAX_NOTABLE_PLAYERS: usize = 15;
-
-/// Compact player info for minimap radar (high-mass players visible everywhere)
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct NotablePlayer {
-    pub id: PlayerId,
-    pub position: Vec2,
-    pub mass: f32,
-    pub color_index: u8,
-}
-
 fn default_scale() -> f32 { 1.0 }
 
 impl GameSnapshot {
@@ -210,11 +191,8 @@ impl GameSnapshot {
         let total_players = state.players.len() as u32;
         let total_alive = state.players.values().filter(|p| p.alive).count() as u32;
 
-        // Calculate density grid for minimap
+        // Calculate density grid for minimap heatmap
         let density_grid = Self::calculate_density_grid(state);
-
-        // Calculate notable players (high mass) for minimap radar
-        let notable_players = Self::calculate_notable_players(state);
 
         Self {
             tick: state.tick,
@@ -248,7 +226,6 @@ impl GameSnapshot {
             total_players,
             total_alive,
             density_grid,
-            notable_players,
             echo_client_time: 0, // Set per-player in broadcast
             ai_status: None, // Set by game_session when AI manager is active
         }
@@ -324,41 +301,6 @@ impl GameSnapshot {
                 // Clone the output (required since we return from thread-local borrow)
                 output.clone()
             })
-        })
-    }
-
-    /// Calculate notable players (high mass) for minimap radar
-    ///
-    /// OPTIMIZATION: Uses thread-local buffer to avoid per-snapshot allocations
-    fn calculate_notable_players(state: &GameState) -> Vec<NotablePlayer> {
-        NOTABLE_PLAYERS_BUFFER.with(|buffer_cell| {
-            let mut notable = buffer_cell.borrow_mut();
-            notable.clear();
-
-            // Collect eligible players into reusable buffer
-            notable.extend(
-                state
-                    .players
-                    .values()
-                    .filter(|p| p.alive && p.mass >= NOTABLE_MASS_THRESHOLD)
-                    .map(|p| NotablePlayer {
-                        id: p.id,
-                        position: p.position,
-                        mass: p.mass,
-                        color_index: p.color_index,
-                    }),
-            );
-
-            // Sort by mass descending and take top N
-            notable.sort_by(|a, b| {
-                b.mass
-                    .partial_cmp(&a.mass)
-                    .unwrap_or(std::cmp::Ordering::Equal)
-            });
-            notable.truncate(MAX_NOTABLE_PLAYERS);
-
-            // Clone the result (required since we return from thread-local borrow)
-            notable.clone()
         })
     }
 }
@@ -748,7 +690,6 @@ mod tests {
             total_players: 1,
             total_alive: 1,
             density_grid: vec![0; 64],
-            notable_players: vec![],
             echo_client_time: 0,
             ai_status: None,
         };
@@ -885,78 +826,6 @@ mod tests {
         }
     }
 
-    #[test]
-    fn test_notable_players_pooling() {
-        // Test that notable players calculation works correctly with pooled buffers
-        use crate::game::state::GameState;
-
-        let mut state = GameState::new();
-
-        // Add some players with varying mass
-        for i in 0..20 {
-            let player_id = Uuid::new_v4();
-            let mut player =
-                crate::game::state::Player::new(player_id, format!("Player{}", i), false, i as u8);
-            player.mass = 50.0 + (i as f32 * 10.0); // Mass ranges from 50 to 240
-            player.alive = true;
-            state.players.insert(player_id, player);
-        }
-
-        // First calculation
-        let notable1 = GameSnapshot::calculate_notable_players(&state);
-
-        // Should have at most MAX_NOTABLE_PLAYERS
-        assert!(notable1.len() <= MAX_NOTABLE_PLAYERS);
-
-        // Should be sorted by mass descending
-        for i in 1..notable1.len() {
-            assert!(
-                notable1[i - 1].mass >= notable1[i].mass,
-                "Notable players should be sorted by mass descending"
-            );
-        }
-
-        // Second calculation should produce same result (buffer reuse)
-        let notable2 = GameSnapshot::calculate_notable_players(&state);
-        assert_eq!(notable1.len(), notable2.len());
-
-        // Only players above threshold should be included
-        for player in &notable1 {
-            assert!(
-                player.mass >= NOTABLE_MASS_THRESHOLD,
-                "Player mass {} should be >= threshold {}",
-                player.mass,
-                NOTABLE_MASS_THRESHOLD
-            );
-        }
-    }
-
-    #[test]
-    fn test_notable_players_pooling_multiple_calls() {
-        // Stress test: verify pooling works correctly across many calls
-        use crate::game::state::GameState;
-
-        let mut state = GameState::new();
-
-        // Add a high-mass player
-        let player_id = Uuid::new_v4();
-        let mut player =
-            crate::game::state::Player::new(player_id, "HighMass".to_string(), false, 0);
-        player.mass = 200.0;
-        player.alive = true;
-        state.players.insert(player_id, player);
-
-        // Call many times to ensure buffer reuse works correctly
-        for i in 0..100 {
-            let notable = GameSnapshot::calculate_notable_players(&state);
-            assert_eq!(
-                notable.len(),
-                1,
-                "Should have exactly 1 notable player on iteration {}",
-                i
-            );
-        }
-    }
 }
 
 #[cfg(test)]
@@ -1187,7 +1056,6 @@ mod encoding_tests {
             total_players: 1,
             total_alive: 1,
             density_grid: vec![],
-            notable_players: vec![],
             echo_client_time: 0,
             ai_status: None,
         };

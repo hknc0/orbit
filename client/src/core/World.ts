@@ -3,7 +3,7 @@
 
 import { ARENA, MASS, PLAYER_COLORS } from '@/utils/Constants';
 import type { PlayerId, MatchPhase, AIStatusSnapshot } from '@/net/Protocol';
-import type { InterpolatedState, InterpolatedPlayer, InterpolatedProjectile, InterpolatedDebris, InterpolatedGravityWell, InterpolatedNotablePlayer } from '@/net/StateSync';
+import type { InterpolatedState, InterpolatedPlayer, InterpolatedProjectile, InterpolatedDebris, InterpolatedGravityWell } from '@/net/StateSync';
 
 // Arena state
 export interface ArenaState {
@@ -399,11 +399,6 @@ export class World {
   // Get density grid for minimap heatmap (16x16 grid of player counts)
   getDensityGrid(): number[] {
     return this.state?.densityGrid ?? [];
-  }
-
-  // Get notable players for minimap radar (high-mass players visible everywhere)
-  getNotablePlayers(): InterpolatedNotablePlayer[] {
-    return this.state?.notablePlayers ?? [];
   }
 
   // Get player placement (rank by mass)

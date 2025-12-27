@@ -356,7 +356,6 @@ mod tests {
             total_players: player_count,
             total_alive: player_count,
             density_grid: vec![],
-            notable_players: vec![],
             echo_client_time: 0,
             ai_status: None,
         }

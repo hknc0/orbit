@@ -1810,7 +1810,6 @@ fn create_spectator_snapshot(full: &GameSnapshot, zoom: f32) -> GameSnapshot {
         total_players: full.total_players,
         total_alive: full.total_alive,
         density_grid: full.density_grid.clone(),
-        notable_players: full.notable_players.clone(),
         echo_client_time: 0, // Spectators don't need RTT measurement
         ai_status: full.ai_status.clone(),
     }
@@ -1981,7 +1980,6 @@ mod spectator_tests {
             total_players: 0,
             total_alive: 0,
             density_grid: vec![],
-            notable_players: vec![],
             echo_client_time: 12345,
             ai_status: None,
         };
@@ -2042,7 +2040,6 @@ mod spectator_tests {
             total_players: 0,
             total_alive: 0,
             density_grid: vec![],
-            notable_players: vec![],
             echo_client_time: 0,
             ai_status: None,
         };
@@ -2092,7 +2089,6 @@ mod spectator_tests {
             total_players: 0,
             total_alive: 0,
             density_grid: vec![],
-            notable_players: vec![],
             echo_client_time: 0,
             ai_status: None,
         };
@@ -2675,7 +2671,6 @@ mod client_net_state_tests {
             total_players: 0,
             total_alive: 0,
             density_grid: Vec::new(),
-            notable_players: Vec::new(),
             echo_client_time: 0,
             ai_status: None,
         }

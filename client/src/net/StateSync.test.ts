@@ -43,7 +43,6 @@ function createMockSnapshot(tick: number, overrides: Partial<GameSnapshot> = {})
     totalPlayers: overrides.totalPlayers ?? 10,
     totalAlive: overrides.totalAlive ?? 8,
     densityGrid: overrides.densityGrid ?? [],
-    notablePlayers: overrides.notablePlayers ?? [],
     echoClientTime: overrides.echoClientTime ?? 0,
   };
 }
@@ -65,7 +64,6 @@ function createSnapshot(tick: number, overrides: Partial<GameSnapshot> = {}): Ga
     totalPlayers: 0,
     totalAlive: 0,
     densityGrid: [],
-    notablePlayers: [],
     echoClientTime: 0,
     ...overrides,
   };
@@ -1449,28 +1447,6 @@ describe('StateSync', () => {
     });
   });
 
-  describe('notable players interpolation', () => {
-    it('should interpolate notable player positions', () => {
-      mockPerformanceNow = 1000;
-      stateSync.applySnapshot(createMockSnapshot(1, {
-        notablePlayers: [
-          { id: 'player-1', position: new Vec2(0, 0), mass: 500, colorIndex: 5 },
-        ],
-      }));
-
-      mockPerformanceNow = 1100;
-      stateSync.applySnapshot(createMockSnapshot(2, {
-        notablePlayers: [
-          { id: 'player-1', position: new Vec2(100, 100), mass: 600, colorIndex: 5 },
-        ],
-      }));
-
-      mockPerformanceNow = 1200;
-      const state = stateSync.getInterpolatedState();
-
-      expect(state?.notablePlayers).toHaveLength(1);
-    });
-  });
 });
 
 // Tests for StateSync adaptive interpolation (from main branch)
