@@ -398,17 +398,17 @@ impl GameSession {
             );
         }
 
-        // Create AOI manager with dynamic viewport-based radius
+        // Create AOI manager with fully dynamic viewport-based filtering
         // Radius is calculated at runtime from player's viewport_zoom:
         //   radius = (1200 * 1.3) / viewport_zoom
         // At zoom=1.0: ~1560 units, at zoom=0.45: ~3467 units
+        // NO HARDCODED CAPS - the dynamic radius is the ONLY filter
         let aoi_config = AOIConfig {
-            max_entities: 100,            // Cap per client for performance
-            always_include_top_n: 10,     // Always show top 10 players
+            always_include_top_n: 10,     // Always show top 10 players for leaderboard
         };
         info!(
-            "AOI configured: dynamic radius from viewport_zoom, max_entities={}, always_top={}",
-            aoi_config.max_entities, aoi_config.always_include_top_n
+            "AOI configured: fully dynamic radius from viewport_zoom, always_top={}",
+            aoi_config.always_include_top_n
         );
 
         // Initialize metrics with current state
