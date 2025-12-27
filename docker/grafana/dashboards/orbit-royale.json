@@ -1442,13 +1442,13 @@
     },
     {
       "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
-      "description": "Efficiency score: available headroom per player. Higher = more efficient. Dropping values indicate scaling issues.",
-      "fieldConfig": { "defaults": { "color": { "mode": "thresholds" }, "decimals": 2, "thresholds": { "mode": "absolute", "steps": [{ "color": "red", "value": null }, { "color": "yellow", "value": 1 }, { "color": "green", "value": 2 }] } } },
+      "description": "Scalability factor: how many times current load you can handle. 5x means you're at 20% capacity. <1.5x = near limit, >3x = healthy headroom.",
+      "fieldConfig": { "defaults": { "color": { "mode": "thresholds" }, "decimals": 1, "unit": "x", "thresholds": { "mode": "absolute", "steps": [{ "color": "red", "value": null }, { "color": "yellow", "value": 1.5 }, { "color": "green", "value": 3 }] } } },
       "gridPos": { "h": 4, "w": 4, "x": 20, "y": 77 },
       "id": 125,
       "options": { "colorMode": "value", "graphMode": "area", "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false } },
-      "targets": [{ "expr": "(100 - orbit_royale_budget_usage_percent{job=\"orbit-royale-api\"}) / (orbit_royale_players_total{job=\"orbit-royale-api\"} + 1)", "legendFormat": "Efficiency", "refId": "A" }],
-      "title": "Efficiency Score",
+      "targets": [{ "expr": "100 / clamp_min(orbit_royale_budget_usage_percent{job=\"orbit-royale-api\"}, 1)", "legendFormat": "Scalability", "refId": "A" }],
+      "title": "Scalability",
       "type": "stat"
     },
 
